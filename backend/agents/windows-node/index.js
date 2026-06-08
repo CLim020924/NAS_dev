@@ -17,6 +17,9 @@ const STATE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'NAS-Sync-A
 const CONFIG_FILE = path.join(STATE_DIR, 'agent-config.json');
 const DEVICE_KEY_FILE = path.join(STATE_DIR, 'device-key.txt');
 const INSTALLED_EXE = path.join(STATE_DIR, 'NAS-Sync-Agent.exe');
+const PID_FILE = path.join(STATE_DIR, 'agent.pid');
+const EXIT_FILE = path.join(STATE_DIR, 'agent.exit');
+const TRAY_SCRIPT_FILE = path.join(STATE_DIR, 'tray.ps1');
 const STATE_PREFIX = 'state_';
 
 let applyingRemoteChange = false;
@@ -51,6 +54,16 @@ function installSelf() {
     return current;
   }
   return fs.existsSync(target) ? target : current;
+}
+
+function isProcessAlive(pid) {
+  if (!pid || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function log(...args) {
@@ -301,7 +314,121 @@ function registerStartup() {
 
 function startBackground() {
   const exe = installSelf();
+  const previousPid = Number(fs.existsSync(PID_FILE) ? fs.readFileSync(PID_FILE, 'utf8') : 0);
+  if (isProcessAlive(previousPid)) return;
   spawn(exe, ['--background'], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+}
+
+function writeTrayScript(config) {
+  const configPath = CONFIG_FILE.replace(/'/g, "''");
+  const exitPath = EXIT_FILE.replace(/'/g, "''");
+  const serverBase = SERVER_BASE.replace(/'/g, "''");
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$configPath = '${configPath}'
+$exitPath = '${exitPath}'
+$serverBase = '${serverBase}'
+
+function Read-AgentConfig {
+  try {
+    if (Test-Path $configPath) {
+      return Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+  } catch {}
+  return $null
+}
+
+function Get-StatusText {
+  $config = Read-AgentConfig
+  if ($null -eq $config) { return "NAS Sync Agent is not linked yet." }
+  $roots = @($config.syncRoots)
+  $lines = New-Object System.Collections.Generic.List[string]
+  $lines.Add("Status: running")
+  $lines.Add("PC folder: " + $config.deviceName)
+  $lines.Add("Server: " + $config.serverBase)
+  $lines.Add("")
+  $lines.Add("Linked folders:")
+  if ($roots.Count -eq 0) {
+    $lines.Add("- none")
+  } else {
+    foreach ($root in $roots) {
+      $lines.Add("- " + $root.name + "  ->  " + $root.localPath)
+    }
+  }
+  return ($lines -join [Environment]::NewLine)
+}
+
+function Show-AgentWindow {
+  $form = New-Object System.Windows.Forms.Form
+  $form.Text = "NAS Sync Agent"
+  $form.Size = New-Object System.Drawing.Size(520, 360)
+  $form.StartPosition = "CenterScreen"
+  $form.MaximizeBox = $false
+  $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+
+  $label = New-Object System.Windows.Forms.Label
+  $label.Text = Get-StatusText
+  $label.AutoSize = $false
+  $label.Location = New-Object System.Drawing.Point(18, 18)
+  $label.Size = New-Object System.Drawing.Size(470, 230)
+  $label.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+
+  $openButton = New-Object System.Windows.Forms.Button
+  $openButton.Text = "Open NAS Web"
+  $openButton.Location = New-Object System.Drawing.Point(18, 270)
+  $openButton.Size = New-Object System.Drawing.Size(130, 34)
+  $openButton.Add_Click({ Start-Process $serverBase })
+
+  $closeButton = New-Object System.Windows.Forms.Button
+  $closeButton.Text = "Hide"
+  $closeButton.Location = New-Object System.Drawing.Point(362, 270)
+  $closeButton.Size = New-Object System.Drawing.Size(126, 34)
+  $closeButton.Add_Click({ $form.Close() })
+
+  $form.Controls.Add($label)
+  $form.Controls.Add($openButton)
+  $form.Controls.Add($closeButton)
+  $form.ShowDialog() | Out-Null
+}
+
+$notify = New-Object System.Windows.Forms.NotifyIcon
+$notify.Icon = [System.Drawing.SystemIcons]::Application
+$notify.Text = "NAS Sync Agent"
+$notify.Visible = $true
+
+$menu = New-Object System.Windows.Forms.ContextMenuStrip
+$openItem = $menu.Items.Add("Open Agent Window")
+$webItem = $menu.Items.Add("Open NAS Web")
+$menu.Items.Add("-") | Out-Null
+$exitItem = $menu.Items.Add("Exit")
+
+$openItem.Add_Click({ Show-AgentWindow })
+$webItem.Add_Click({ Start-Process $serverBase })
+$exitItem.Add_Click({
+  try { New-Item -Path $exitPath -ItemType File -Force | Out-Null } catch {}
+  $notify.Visible = $false
+  $notify.Dispose()
+  [System.Windows.Forms.Application]::Exit()
+})
+$notify.Add_DoubleClick({ Show-AgentWindow })
+$notify.ContextMenuStrip = $menu
+
+[System.Windows.Forms.Application]::Run()
+`;
+  fs.writeFileSync(TRAY_SCRIPT_FILE, script.trimStart(), 'utf8');
+  return TRAY_SCRIPT_FILE;
+}
+
+function startTray(config) {
+  const script = writeTrayScript(config);
+  spawn('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script], {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore'
+  }).unref();
 }
 
 async function lookup(pairingToken, clientDeviceKey) {
@@ -446,14 +573,24 @@ function watchRoot(root, config) {
 }
 
 async function runBackground() {
+  ensureStateDir();
+  const previousPid = Number(fs.existsSync(PID_FILE) ? fs.readFileSync(PID_FILE, 'utf8') : 0);
+  if (isProcessAlive(previousPid)) return;
+  fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
+  try { fs.unlinkSync(EXIT_FILE); } catch {}
   const config = loadConfig();
   if (!config || !config.deviceId || !config.agentToken) return;
+  startTray(config);
   const roots = getRoots(config).filter(root => root.localPath && fs.existsSync(root.localPath));
   for (const root of roots) {
     await pullNasChanges(root, config).catch(err => log('[pull failed]', err.message));
     watchRoot(root, config);
   }
   setInterval(() => {
+    if (fs.existsSync(EXIT_FILE)) {
+      try { fs.unlinkSync(PID_FILE); } catch {}
+      process.exit(0);
+    }
     for (const root of roots) pullNasChanges(root, config).catch(err => log('[pull failed]', err.message));
   }, PULL_INTERVAL_MS);
 }
