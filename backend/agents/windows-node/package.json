@@ -1,0 +1,17 @@
+{
+  "name": "nas-sync-agent",
+  "version": "1.0.0",
+  "description": "Windows NAS Sync Agent",
+  "main": "index.js",
+  "scripts": {
+    "build": "pkg index.js --targets node18-win-x64 --output dist/NAS-Sync-Agent.exe"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bin": "index.js",
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}
