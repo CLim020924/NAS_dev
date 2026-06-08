@@ -512,7 +512,7 @@ const NAS = () => {
     console.log('[NAS PC LINK] handler fired', { targetPath });
 
     const ok = window.confirm(
-      '내 PC 바탕화면을 NAS와 연동하려면 NAS Sync Agent 설치가 필요합니다.\n\n설치하시겠습니까?'
+      '내 PC의 원하는 폴더를 NAS와 연동하려면 NAS Sync Agent가 필요합니다.\n\nAgent를 다운로드하시겠습니까?'
     );
 
     if (!ok) return;
@@ -533,7 +533,7 @@ const NAS = () => {
       setSnackbar({
         open: true,
         message: agentKind === 'powershell'
-          ? 'NAS Sync Agent PowerShell 파일을 다운로드했습니다. 우클릭 후 PowerShell로 실행하면 연동이 감지됩니다.'
+          ? 'NAS Sync Agent PowerShell 파일을 다운로드했습니다. 실행 후 연동할 폴더를 선택하면 NAS에 동기화됩니다.'
           : 'NAS Sync Agent 실행 파일을 다운로드했습니다. 실행하면 연동이 감지됩니다.',
         severity: 'info'
       });
@@ -559,7 +559,7 @@ const NAS = () => {
           if (statusRes.data?.status === 'connected') {
             setSnackbar({
               open: true,
-              message: `연동 감지! '${statusRes.data.device?.name || statusRes.data.device?.deviceName || '내 PC'}' 폴더가 준비되었습니다.`,
+              message: `연동 감지! '${statusRes.data.device?.name || statusRes.data.device?.deviceName || '내 PC 폴더'}'가 NAS에 준비되었습니다.`,
               severity: 'success'
             });
 
@@ -575,7 +575,7 @@ const NAS = () => {
       setSnackbar({
         open: true,
         message: agentKind === 'powershell'
-          ? '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.ps1을 PowerShell로 실행해 주세요.'
+          ? '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.ps1을 PowerShell로 실행한 뒤 폴더를 선택해 주세요.'
           : '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.exe를 실행해 주세요.',
         severity: 'info'
       });

@@ -1251,7 +1251,7 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
 const buildWindowsPowerShellAgent = (token) => {
   const safeToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
 
-  return `# NAS Sync Agent - Windows Desktop Sync
+  return `# NAS Sync Agent - Windows Folder Sync
 # Pairing token: ${safeToken}
 #
 # Run in PowerShell:
@@ -1262,29 +1262,94 @@ $ErrorActionPreference = "Stop"
 $ServerBase = "https://filemanager-nas.com"
 $PairingToken = "${safeToken}"
 $MaxBytes = 90MB
+$MaxTotalBytes = 50GB
 
-function Find-DesktopPath {
-  $candidates = @()
-  if ($env:OneDrive) {
-    $candidates += Join-Path $env:OneDrive "Desktop"
-    $candidates += Join-Path $env:OneDrive "바탕 화면"
-  }
-  if ($env:OneDriveConsumer) {
-    $candidates += Join-Path $env:OneDriveConsumer "Desktop"
-    $candidates += Join-Path $env:OneDriveConsumer "바탕 화면"
-  }
-  if ($env:USERPROFILE) {
-    $candidates += Join-Path $env:USERPROFILE "Desktop"
-    $candidates += Join-Path $env:USERPROFILE "바탕 화면"
+function Select-SyncFolder {
+  try {
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = "NAS와 연동할 폴더를 선택하세요."
+    $dialog.ShowNewFolderButton = $false
+
+    if ($env:USERPROFILE) {
+      $desktop = Join-Path $env:USERPROFILE "Desktop"
+      if (Test-Path -LiteralPath $desktop -PathType Container) {
+        $dialog.SelectedPath = $desktop
+      }
+    }
+
+    $result = $dialog.ShowDialog()
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {
+      return $dialog.SelectedPath
+    }
+  } catch {
+    Write-Host "폴더 선택 창을 열 수 없어 경로 직접 입력으로 전환합니다."
   }
 
-  foreach ($path in $candidates) {
-    if ($path -and (Test-Path -LiteralPath $path -PathType Container)) {
-      return $path
+  $manualPath = Read-Host "NAS와 연동할 폴더 전체 경로를 입력하세요"
+  if ($manualPath -and (Test-Path -LiteralPath $manualPath -PathType Container)) {
+    return $manualPath
+  }
+
+  throw "연동할 폴더가 선택되지 않았거나 존재하지 않습니다."
+}
+
+function Get-FolderSummary($root) {
+  $totalBytes = 0
+  $fileCount = 0
+  $failedCount = 0
+
+  Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable scanErrors | ForEach-Object {
+    $totalBytes += $_.Length
+    $fileCount += 1
+  }
+
+  if ($scanErrors) {
+    $failedCount = $scanErrors.Count
+  }
+
+  return @{
+    totalBytes = $totalBytes
+    fileCount = $fileCount
+    failedCount = $failedCount
+  }
+}
+
+function Format-Bytes($bytes) {
+  if ($bytes -ge 1TB) { return "{0:N2} TB" -f ($bytes / 1TB) }
+  if ($bytes -ge 1GB) { return "{0:N2} GB" -f ($bytes / 1GB) }
+  if ($bytes -ge 1MB) { return "{0:N2} MB" -f ($bytes / 1MB) }
+  if ($bytes -ge 1KB) { return "{0:N2} KB" -f ($bytes / 1KB) }
+  return "$bytes B"
+}
+
+function Get-SafeDeviceName($baseName) {
+  $name = $baseName
+  if (-not $name) {
+    $name = $env:COMPUTERNAME
+  }
+  if (-not $name) {
+    $name = "Windows-PC"
+  }
+
+  $folderName = Split-Path -Path $Script:SyncFolder -Leaf
+  if ($folderName) {
+    return "$name - $folderName"
+  }
+
+  return $name
+}
+
+function Get-UploadFiles($root) {
+  $items = @()
+
+  Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.Length -le $MaxBytes) {
+      $items += $_
     }
   }
 
-  throw "Desktop folder was not found."
+  return $items
 }
 
 function Convert-ToRelPath($root, $fullPath) {
@@ -1326,25 +1391,45 @@ function Invoke-CurlUpload($deviceId, $agentToken, $relPath, $fullPath) {
 
 Write-Host ""
 Write-Host "============================================="
-Write-Host " NAS Sync Agent - Windows Desktop Sync"
+Write-Host " NAS Sync Agent - Windows Folder Sync"
 Write-Host "============================================="
 Write-Host ""
 
-$DeviceName = $env:COMPUTERNAME
-if (-not $DeviceName) { $DeviceName = "Windows-PC" }
+$Script:SyncFolder = Select-SyncFolder
+$DeviceName = Get-SafeDeviceName $env:COMPUTERNAME
 
-$DesktopPath = Find-DesktopPath
+$Summary = Get-FolderSummary $Script:SyncFolder
+$TotalText = Format-Bytes $Summary.totalBytes
+$LimitText = Format-Bytes $MaxTotalBytes
+
+if ($Summary.totalBytes -gt $MaxTotalBytes) {
+  Write-Host ""
+  Write-Host "선택한 폴더 용량이 너무 큽니다."
+  Write-Host "선택 폴더: $Script:SyncFolder"
+  Write-Host "현재 용량: $TotalText"
+  Write-Host "허용 용량: $LimitText"
+  Write-Host ""
+  throw "폴더 용량이 제한을 초과하여 연동을 중단합니다."
+}
 
 Write-Host "Server: $ServerBase"
-Write-Host "PC name: $DeviceName"
-Write-Host "Desktop: $DesktopPath"
+Write-Host "Device name: $DeviceName"
+Write-Host "Folder: $Script:SyncFolder"
+Write-Host "Files: $($Summary.fileCount)"
+Write-Host "Size: $TotalText / $LimitText"
+if ($Summary.failedCount -gt 0) {
+  Write-Host "Scan warnings: $($Summary.failedCount) item(s) could not be scanned."
+}
 Write-Host ""
 
 $RegisterBody = @{
   pairingToken = $PairingToken
   deviceName = $DeviceName
   osType = "windows"
-  desktopPath = $DesktopPath
+  desktopPath = $Script:SyncFolder
+  syncRootPath = $Script:SyncFolder
+  syncRootSizeBytes = $Summary.totalBytes
+  syncRootFileCount = $Summary.fileCount
 } | ConvertTo-Json -Compress
 
 $Register = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/register" -ContentType "application/json" -Body $RegisterBody
@@ -1364,15 +1449,12 @@ $Uploaded = 0
 $Skipped = 0
 $Failed = 0
 
-Get-ChildItem -LiteralPath $DesktopPath -Recurse -File -Force | ForEach-Object {
-  $file = $_
-  $relPath = Convert-ToRelPath $DesktopPath $file.FullName
+$UploadFiles = Get-UploadFiles $Script:SyncFolder
+$Skipped = [Math]::Max(0, $Summary.fileCount - $UploadFiles.Count)
 
-  if ($file.Length -gt $MaxBytes) {
-    $Skipped += 1
-    Write-Host "[skip >90MB] $relPath"
-    return
-  }
+$UploadFiles | ForEach-Object {
+  $file = $_
+  $relPath = Convert-ToRelPath $Script:SyncFolder $file.FullName
 
   try {
     Write-Host "[upload] $relPath"
