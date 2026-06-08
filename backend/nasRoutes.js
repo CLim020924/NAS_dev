@@ -1435,7 +1435,7 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
     pairings.push(pairing);
     writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
 
-    const agentDownloadName = `NAS-Sync-Agent_${token.replace(/[^a-zA-Z0-9_-]/g, '')}.cmd`;
+    const agentDownloadName = `NAS-Sync-Agent_${token.replace(/[^a-zA-Z0-9_-]/g, '')}.exe`;
 
     return res.json({
       success: true,
@@ -1444,7 +1444,7 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
       status: 'pending',
       agentDownloadUrl: `/api/devices/agent/windows?token=${encodeURIComponent(token)}`,
       agentDownloadName,
-      agentKind: 'windows-cmd',
+      agentKind: fs.existsSync(path.join(__dirname, 'agents', 'dist', 'NAS-Sync-Agent.exe')) ? 'windows-exe' : 'windows-cmd',
       mode: pairingMode
     });
   } catch (err) {

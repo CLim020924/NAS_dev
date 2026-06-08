@@ -313,6 +313,18 @@ function tokenFromUrl(urlText) {
   }
 }
 
+function getProtocolAction() {
+  const protocolArg = process.argv.slice(2).find(arg => String(arg || '').startsWith('nas-sync://'));
+  if (!protocolArg) return '';
+  try {
+    const url = new URL(protocolArg);
+    return String(url.hostname || '').toLowerCase();
+  } catch {
+    const match = String(protocolArg).match(/^nas-sync:\/\/([^?]+)/i);
+    return match ? match[1].toLowerCase() : '';
+  }
+}
+
 function getDeviceKey() {
   ensureStateDir();
   const reg = spawnSync('reg.exe', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid'], { encoding: 'utf8', windowsHide: true });
@@ -696,6 +708,15 @@ async function runBackground() {
 }
 
 async function runForeground() {
+  const protocolAction = getProtocolAction();
+  if (protocolAction === 'open') {
+    registerProtocol();
+    registerStartup();
+    startBackground();
+    showMessage('NAS Sync Agent', 'NAS Sync Agent is running in the system tray.');
+    return;
+  }
+
   if (isDownloadedInstaller()) {
     const action = promptInstalledAction();
     if (action === 'open') {

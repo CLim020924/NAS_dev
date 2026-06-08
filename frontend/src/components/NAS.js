@@ -385,7 +385,46 @@ const NAS = () => {
   const getSelectedItemsData = useCallback(() => { let currentFiles = focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || []); const activeWin = openWindows.find(w => w.id === focusedContext); if (activeWin && activeWin.winType === 'folder') { currentFiles = [...currentFiles, { fullPath: activeWin.currentPath, name: activeWin.currentPath === '/' ? activeWin.name : activeWin.currentPath.split('/').pop(), type: 'folder' }]; } return selectedItems.map(path => { const found = currentFiles.find(f => ensureSlash(f.fullPath) === path); if (found) return found; const name = path === '/' ? 'Root' : path.split('/').pop(); return { fullPath: path, name, type: name.includes('.') ? 'file' : 'folder' }; }); }, [selectedItems, focusedContext, desktopItems, openWindows]);
   const getItemsToProcess = (clickedItem) => selectedItems.includes(ensureSlash(clickedItem.fullPath)) && selectedItems.length > 1 ? getSelectedItemsData() : [clickedItem];
 
+  const downloadAgentInstaller = (agentDownloadUrl, agentDownloadName) => {
+    if (!agentDownloadUrl) return;
+    const a = document.createElement('a');
+    a.href = agentDownloadUrl;
+    a.download = agentDownloadName || 'NAS-Sync-Agent.exe';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const requestLinkedDeviceAgentOpen = async (item) => {
+    const targetPath = ensureSlash(item.path || item.fullPath || '/');
+    try {
+      const startRes = await axios.post('/api/devices/pair/start', { path: targetPath }, { withCredentials: true });
+      const { pairingToken, agentDownloadUrl, agentDownloadName } = startRes.data || {};
+      if (!pairingToken) return;
+
+      setSnackbar({
+        open: true,
+        message: 'NAS Sync Agent를 호출했습니다. 브라우저의 외부 앱 열기 확인창이 뜨면 열기를 선택하세요.',
+        severity: 'info'
+      });
+
+      window.location.href = `nas-sync://open?token=${encodeURIComponent(pairingToken)}&path=${encodeURIComponent(targetPath)}`;
+
+      window.setTimeout(() => {
+        const needsInstall = window.confirm(
+          'NAS Sync Agent 실행 확인창이 뜨지 않았거나 에이전트가 설치되어 있지 않다면 설치 파일을 받으세요.\n\n설치 파일을 다운로드하시겠습니까?'
+        );
+        if (needsInstall) downloadAgentInstaller(agentDownloadUrl, agentDownloadName);
+      }, 2200);
+    } catch (err) {
+      console.warn('[NAS PC LINK] agent open failed', err);
+    }
+  };
+
   const openFolderWindow = (item) => {
+    if (item.type === 'linked-device') {
+      requestLinkedDeviceAgentOpen(item);
+    }
     const winId = `desk_${item.name}`; const targetPath = ensureSlash(item.path || item.fullPath);
     if (!openWindows.find(w => w.id === winId && w.id !== 'system_root')) {
       const newWinId = item.id === 'system_root' ? 'system_root' : winId; if(openWindows.find(w => w.id === newWinId)) return focusWindow(newWinId);
@@ -540,13 +579,14 @@ const NAS = () => {
 
       if (mode === 'add-folder') {
         window.location.href = `nas-sync://add-folder?token=${encodeURIComponent(pairingToken)}`;
+        window.setTimeout(() => {
+          const needsInstall = window.confirm(
+            'NAS Sync Agent 실행 확인창이 뜨지 않았거나 에이전트가 설치되어 있지 않다면 설치 파일을 받으세요.\n\n설치 파일을 다운로드하시겠습니까?'
+          );
+          if (needsInstall) downloadAgentInstaller(agentDownloadUrl, agentDownloadName);
+        }, 2200);
       } else if (agentDownloadUrl) {
-        const a = document.createElement('a');
-        a.href = agentDownloadUrl;
-        a.download = agentDownloadName || 'NAS-Sync-Agent.cmd';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        downloadAgentInstaller(agentDownloadUrl, agentDownloadName);
       }
 
       // Agent 실행 대기: 최대 약 5분
@@ -1818,7 +1858,7 @@ const NAS = () => {
   const handleContextMenu = (e, type, ctxData) => { e.preventDefault(); e.stopPropagation(); setFocusedContext(ctxData.windowId || 'desktop'); setContextMenu({ mouseX: e.clientX, mouseY: e.clientY, type, ...ctxData }); const safePath = ctxData.item ? ensureSlash(ctxData.item.fullPath) : null; if (safePath && !selectedItems.includes(safePath)) setSelectedItems([safePath]); };
   const handleItemClick = (e, safePath, item) => { e.stopPropagation(); if (isLongPressTriggered.current) return; if (e.ctrlKey || e.metaKey) setSelectedItems(prev => prev.includes(safePath) ? prev.filter(p => p !== safePath) : [...prev, safePath]); else setSelectedItems([safePath]); if (isMobile && !inlineEdit) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false); };
 
-  useShortcuts({ selectedItems, onRename: () => { const items = getSelectedItemsData(); if (items.length === 1) handleRenameStart(items[0], items[0].fullPath.substring(0, items[0].fullPath.lastIndexOf('/')) || '/'); }, onDelete: () => { const items = getSelectedItemsData(); if (items.length > 0) handleDelete(items, getActiveTargetPath()); }, onOpen: () => { const items = getSelectedItemsData(); if (items.length === 1) items[0].type === 'folder' ? openFolderWindow(items[0]) : openFileWindow(items[0], false); }, onSelectAll: () => setSelectedItems((focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || [])).map(f => ensureSlash(f.fullPath))), onDeselectAll: () => { setSelectedItems([]); setInlineEdit(null); setContextMenu(null); }, onNewFolder: () => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null) });
+  useShortcuts({ selectedItems, onRename: () => { const items = getSelectedItemsData(); if (items.length === 1) handleRenameStart(items[0], items[0].fullPath.substring(0, items[0].fullPath.lastIndexOf('/')) || '/'); }, onDelete: () => { const items = getSelectedItemsData(); if (items.length > 0) handleDelete(items, getActiveTargetPath()); }, onOpen: () => { const items = getSelectedItemsData(); if (items.length === 1) (items[0].type === 'folder' || items[0].type === 'linked-device') ? openFolderWindow(items[0]) : openFileWindow(items[0], false); }, onSelectAll: () => setSelectedItems((focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || [])).map(f => ensureSlash(f.fullPath))), onDeselectAll: () => { setSelectedItems([]); setInlineEdit(null); setContextMenu(null); }, onNewFolder: () => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null) });
 
   return (
     <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%', userSelect: 'none', '& .react-resizable-handle:hover': { backgroundColor: theme.palette.primary.main, opacity: 0.5 }}}>
