@@ -201,7 +201,7 @@ const isSameOrChildPath = (parent, child) => {
 
 const normalizeDeviceSyncRoots = (device = {}) => {
   const roots = Array.isArray(device.syncRoots) ? device.syncRoots.filter(Boolean) : [];
-  if (roots.length > 0) return roots;
+  if (Array.isArray(device.syncRoots)) return roots;
   if (!device.absolutePath) return [];
 
   return [{
@@ -225,6 +225,107 @@ const findLinkedDeviceByAbsolutePath = (ownerKey, absolutePath) => {
     device.absolutePath &&
     path.resolve(device.absolutePath) === target
   ));
+};
+
+const getLiveSyncRoots = (device = {}) => {
+  return normalizeDeviceSyncRoots(device).filter(root => (
+    root?.absolutePath &&
+    fs.existsSync(root.absolutePath) &&
+    fs.statSync(root.absolutePath).isDirectory()
+  ));
+};
+
+const persistLinkedDevice = (device) => {
+  writeLinkedDeviceMeta(device);
+  updateLinkedDeviceRecord(device);
+  return device;
+};
+
+const pruneMissingSyncRoots = (device = {}) => {
+  if (!device?.absolutePath || !fs.existsSync(device.absolutePath)) {
+    return { device, deviceMissing: true, removedRoots: normalizeDeviceSyncRoots(device).length };
+  }
+
+  const roots = normalizeDeviceSyncRoots(device);
+  const liveRoots = roots.filter(root => (
+    root?.absolutePath &&
+    fs.existsSync(root.absolutePath) &&
+    fs.statSync(root.absolutePath).isDirectory()
+  ));
+
+  if (liveRoots.length !== roots.length || !Array.isArray(device.syncRoots)) {
+    const updated = {
+      ...device,
+      syncRoots: liveRoots,
+      status: liveRoots.length > 0 ? (device.status || 'connected') : 'needs-setup',
+      lastSeenAt: new Date().toISOString()
+    };
+    persistLinkedDevice(updated);
+    return { device: updated, deviceMissing: false, removedRoots: roots.length - liveRoots.length };
+  }
+
+  return { device, deviceMissing: false, removedRoots: 0 };
+};
+
+const migrateLegacyDeviceContentsToSyncRoot = (device = {}) => {
+  if (!device?.absolutePath || !fs.existsSync(device.absolutePath) || Array.isArray(device.syncRoots)) {
+    return device;
+  }
+
+  const deviceRoot = path.resolve(device.absolutePath);
+  const existingNames = fs.readdirSync(deviceRoot).filter(name => name !== LINKED_DEVICE_META);
+  if (existingNames.length === 0) {
+    const updated = { ...device, syncRoots: [] };
+    persistLinkedDevice(updated);
+    return updated;
+  }
+
+  const rootName = sanitizeDeviceFolderName(
+    path.basename(String(device.syncRootPath || device.desktopPath || '').replace(/[\\\/]+$/, '')) ||
+    'Synced Folder'
+  );
+  const { finalName, finalPath } = makeUniqueFolderPath(deviceRoot, rootName);
+  fs.mkdirSync(finalPath, { recursive: true });
+
+  for (const name of existingNames) {
+    const from = path.join(deviceRoot, name);
+    if (path.resolve(from) === path.resolve(finalPath)) continue;
+    fs.renameSync(from, path.join(finalPath, name));
+  }
+
+  const linkedDevicePath = String(device.linkedNasPath || path.basename(deviceRoot)).replace(/^\/+|\/+$/g, '');
+  const now = new Date().toISOString();
+  const stat = fs.statSync(finalPath);
+  const syncRoot = {
+    syncRootId: device.syncRootId || 'root_default',
+    name: finalName,
+    localPath: device.syncRootPath || device.desktopPath || '',
+    linkedNasPath: [linkedDevicePath, finalName].filter(Boolean).join('/'),
+    absolutePath: finalPath,
+    createdAt: device.createdAt || now,
+    lastSeenAt: now,
+    fileCount: Number(device.syncRootFileCount || 0),
+    folderCount: Number(device.syncRootFolderCount || 0),
+    sizeBytes: Number(device.syncRootSizeBytes || stat.size || 0)
+  };
+
+  const updated = {
+    ...device,
+    syncRoots: [syncRoot],
+    lastSeenAt: now,
+    status: 'connected'
+  };
+  persistLinkedDevice(updated);
+  return updated;
+};
+
+const getActiveLinkedDevice = (device = {}) => {
+  if (!device) return null;
+  let current = migrateLegacyDeviceContentsToSyncRoot(device);
+  const pruned = pruneMissingSyncRoots(current);
+  if (pruned.deviceMissing) return null;
+  current = pruned.device;
+  return { ...current, syncRoots: getLiveSyncRoots(current) };
 };
 
 const addSyncRootToDevice = (device, user, localPath, summary = {}) => {
@@ -617,6 +718,8 @@ router.get('/files', verifyToken, (req, res) => {
     ensureFixedSystemFolders(req.user);
     const { basePath, targetPath } = getValidatedPath(req.user, req.query.path, req.headers['x-nas-password']);
     if (!fs.existsSync(targetPath)) return res.json([]); 
+    const currentLinkedMeta = readLinkedDeviceMeta(targetPath);
+    if (currentLinkedMeta) migrateLegacyDeviceContentsToSyncRoot(currentLinkedMeta);
     const items = fs.readdirSync(targetPath).map(item => {
       if (item === LINKED_DEVICE_META) return null;
 
@@ -1412,6 +1515,46 @@ function Add-OrUpdateConfigRoot($config, $root) {
   return @($roots + $root)
 }
 
+function Get-RootStateFile($root) {
+  Ensure-StateDir
+  $safeRootId = ($root.syncRootId -replace '[^a-zA-Z0-9_-]', '_')
+  return Join-Path $StateDir "state_$safeRootId.json"
+}
+
+function Load-RootState($root) {
+  try {
+    $file = Get-RootStateFile $root
+    if (Test-Path -LiteralPath $file -PathType Leaf) {
+      return Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+    }
+  } catch {}
+  return $null
+}
+
+function Save-RootState($root, $remotePaths) {
+  $file = Get-RootStateFile $root
+  @{
+    syncRootId = $root.syncRootId
+    remotePaths = @($remotePaths)
+    savedAt = (Get-Date).ToUniversalTime().ToString("o")
+  } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $file -Encoding UTF8
+}
+
+function Move-ToLocalTrash($root, $target) {
+  if (-not (Test-Path -LiteralPath $target)) { return }
+  $safeRootId = ($root.syncRootId -replace '[^a-zA-Z0-9_-]', '_')
+  $trashRoot = Join-Path $StateDir ("trash\\" + $safeRootId + "\\" + (Get-Date -Format "yyyyMMdd_HHmmss"))
+  $rel = Convert-ToRelPath $root.localPath $target
+  if (-not $rel) { return }
+  $trashPath = Join-Path $trashRoot ($rel -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+  $trashParent = Split-Path -Parent $trashPath
+  if ($trashParent -and -not (Test-Path -LiteralPath $trashParent -PathType Container)) {
+    New-Item -ItemType Directory -Path $trashParent -Force | Out-Null
+  }
+  Move-Item -LiteralPath $target -Destination $trashPath -Force
+  Write-Host "[nas deleted -> local trash] $rel"
+}
+
 function Start-BackgroundAgent {
   if (-not $PSCommandPath) { return }
   $command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$PSCommandPath\`" -Background"
@@ -1586,6 +1729,17 @@ function Pull-NasChanges($root) {
     $rootIdEncoded = [System.Uri]::EscapeDataString($root.syncRootId)
     $manifest = Invoke-AgentGet "/api/devices/agent/manifest?deviceId=$deviceIdEncoded&syncRootId=$rootIdEncoded"
     if (-not $manifest.entries) { return }
+    $state = Load-RootState $root
+    $previousPaths = @{}
+    if ($state -and $state.remotePaths) {
+      foreach ($p in @($state.remotePaths)) {
+        if ($p) { $previousPaths[$p] = $true }
+      }
+    }
+    $remotePaths = @{}
+    foreach ($entry in @($manifest.entries)) {
+      if ($entry.relPath) { $remotePaths[$entry.relPath] = $entry.type }
+    }
 
     $Script:ApplyingRemoteChange = $true
 
@@ -1623,6 +1777,16 @@ function Pull-NasChanges($root) {
         Write-Host "[nas file] $($_.relPath)"
       }
     }
+
+    if ($state -and $state.remotePaths) {
+      $deletedPaths = @($previousPaths.Keys | Where-Object { -not $remotePaths.ContainsKey($_) } | Sort-Object { $_.Length } -Descending)
+      foreach ($rel in $deletedPaths) {
+        $target = Join-Path $root.localPath ($rel -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        Move-ToLocalTrash $root $target
+      }
+    }
+
+    Save-RootState $root @($remotePaths.Keys)
   } catch {
     Write-Host "[nas pull failed] $($_.Exception.Message)"
   } finally {
@@ -1962,10 +2126,11 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
       return res.json({ success: true, exists: false, device: null });
     }
 
-    const device = readJsonArrayFile(LINKED_DEVICES_FILE).find(d =>
+    const rawDevice = readJsonArrayFile(LINKED_DEVICES_FILE).find(d =>
       d.ownerKey === pairing.ownerKey &&
       d.clientDeviceKey === clientDeviceKey
     );
+    const device = getActiveLinkedDevice(rawDevice);
     const canAddFolder = !!(
       device &&
       pairing.mode === 'add-folder' &&
@@ -1975,7 +2140,7 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
 
     return res.json({
       success: true,
-      exists: !!device,
+      exists: !!device && getLiveSyncRoots(device).length > 0,
       mode: pairing.mode || 'install-device',
       canAddFolder,
       device: device ? {
@@ -1983,7 +2148,7 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
         deviceName: device.deviceName || device.name || '',
         name: device.name || device.deviceName || '',
         linkedNasPath: device.linkedNasPath || '',
-        syncRoots: normalizeDeviceSyncRoots(device).map(root => ({
+        syncRoots: getLiveSyncRoots(device).map(root => ({
           syncRootId: root.syncRootId,
           name: root.name,
           localPath: root.localPath || '',
@@ -2022,14 +2187,16 @@ router.post('/devices/agent/register', (req, res) => {
 
     const clientDeviceKey = String(req.body?.clientDeviceKey || '').trim();
     const syncRootPath = String(req.body?.syncRootPath || req.body?.desktopPath || '').trim();
-    const existingDevice = clientDeviceKey
+    const rawExistingDevice = clientDeviceKey
       ? readJsonArrayFile(LINKED_DEVICES_FILE).find(d =>
         d.ownerKey === pairing.ownerKey &&
         d.clientDeviceKey === clientDeviceKey
       )
       : null;
+    const existingDevice = getActiveLinkedDevice(rawExistingDevice);
+    const hasLiveSyncRoots = existingDevice && getLiveSyncRoots(existingDevice).length > 0;
 
-    if (existingDevice && pairing.mode !== 'add-folder') {
+    if (existingDevice && hasLiveSyncRoots && pairing.mode !== 'add-folder') {
       return res.status(409).json({
         code: 'DEVICE_ALREADY_REGISTERED',
         error: 'This PC is already linked. Open the linked PC folder in NAS and use Add sync folder.',
@@ -2037,7 +2204,7 @@ router.post('/devices/agent/register', (req, res) => {
           deviceId: existingDevice.deviceId,
           deviceName: existingDevice.deviceName || existingDevice.name || '',
           linkedNasPath: existingDevice.linkedNasPath || '',
-          syncRoots: normalizeDeviceSyncRoots(existingDevice).map(root => ({
+          syncRoots: getLiveSyncRoots(existingDevice).map(root => ({
             syncRootId: root.syncRootId,
             name: root.name,
             localPath: root.localPath || '',
@@ -2054,7 +2221,7 @@ router.post('/devices/agent/register', (req, res) => {
       });
     }
 
-    let device = pairing.device || existingDevice;
+    let device = pairing.device || existingDevice || rawExistingDevice;
 
     if (!device || !device.absolutePath || !fs.existsSync(device.absolutePath)) {
       device = createLinkedDeviceFolder(userSnapshot, '/', {

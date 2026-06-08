@@ -1883,6 +1883,14 @@ const NAS = () => {
                           <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', ml: 1 }} onMouseDown={(e) => e.stopPropagation()}>
                             <Typography onClick={() => fetchFiles(win.id, win.basePath)} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800, whiteSpace: 'nowrap' }}>{win.name}</Typography>
                             {getRelativeSegments(win.currentPath, win.basePath).map((seg, idx, arr) => (<React.Fragment key={idx}><Typography sx={{ mx: 0.5, color: 'text.secondary' }}>/</Typography><Typography onClick={() => fetchFiles(win.id, (win.basePath === '/' ? '' : win.basePath.replace(/\/$/, '')) + '/' + arr.slice(0, idx + 1).join('/'))} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800, whiteSpace: 'nowrap' }}>{seg}</Typography></React.Fragment>))}
+                            {win.type === 'linked-device' && (
+                              <Chip
+                                size="small"
+                                color={win.deviceStatus === 'connected' ? 'success' : 'warning'}
+                                label={win.deviceStatus === 'connected' ? '연동 연결됨' : '연동 확인 필요'}
+                                sx={{ ml: 1, height: 22, flexShrink: 0 }}
+                              />
+                            )}
                           
 </Box>
 
