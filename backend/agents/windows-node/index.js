@@ -223,6 +223,17 @@ function selectFolder() {
   return (ps.stdout || '').trim();
 }
 
+function promptText(title, message, defaultValue) {
+  const script = [
+    'Add-Type -AssemblyName Microsoft.VisualBasic',
+    '[Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8',
+    `$value = [Microsoft.VisualBasic.Interaction]::InputBox(${JSON.stringify(message)}, ${JSON.stringify(title)}, ${JSON.stringify(defaultValue || '')})`,
+    'Write-Output $value'
+  ].join('; ');
+  const ps = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { encoding: 'utf8', windowsHide: false });
+  return (ps.stdout || '').trim();
+}
+
 function getFolderSummary(root) {
   let totalBytes = 0;
   let fileCount = 0;
@@ -463,6 +474,17 @@ async function runForeground() {
     showMessage('NAS Sync Agent', `This PC is already linked as ${lookupResult.device.deviceName}.\nOpen the linked PC folder in NAS to add another sync folder.`);
     return;
   }
+  const isAddingFolder = !!(lookupResult && lookupResult.exists && lookupResult.canAddFolder);
+  let deviceName = lookupResult && lookupResult.device && lookupResult.device.deviceName;
+  if (!deviceName) {
+    deviceName = promptText(
+      'NAS Sync Agent',
+      'Enter the NAS root folder name for this PC.',
+      os.hostname() || 'Windows-PC'
+    );
+    if (!deviceName) return;
+  }
+
   const selectedFolder = selectFolder();
   if (!selectedFolder) return;
   const summary = getFolderSummary(selectedFolder);
@@ -470,7 +492,6 @@ async function runForeground() {
     showMessage('NAS Sync Agent', 'The selected folder exceeds the 50GB sync limit.');
     return;
   }
-  const deviceName = (lookupResult && lookupResult.device && lookupResult.device.deviceName) || os.hostname() || 'Windows-PC';
   const reg = await register(pairingToken, clientDeviceKey, deviceName, selectedFolder, summary);
   const root = {
     syncRootId: reg.syncRoot.syncRootId,
@@ -489,7 +510,7 @@ async function runForeground() {
   saveConfig(nextConfig);
   await initialSync(root, nextConfig);
   startBackground();
-  showMessage('NAS Sync Agent', `Sync folder connected:\n${root.linkedNasPath}`);
+  showMessage('NAS Sync Agent', `${isAddingFolder ? 'Sync folder added' : 'PC linked'}:\n${root.linkedNasPath}`);
 }
 
 (async () => {
