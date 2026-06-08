@@ -47,6 +47,35 @@ function sleepMs(ms) {
   } catch {}
 }
 
+function stopInstalledAgentProcesses() {
+  const target = path.resolve(INSTALLED_EXE);
+  const currentPid = process.pid;
+  const psScript = `
+$target = ${JSON.stringify(target)}
+$currentPid = ${currentPid}
+Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.ProcessId -ne $currentPid -and (
+      ($_.ExecutablePath -and [String]::Equals($_.ExecutablePath, $target, [System.StringComparison]::OrdinalIgnoreCase)) -or
+      ($_.CommandLine -and $_.CommandLine.IndexOf($target, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+    )
+  } |
+  ForEach-Object {
+    try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  }
+`;
+  spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+    windowsHide: true,
+    stdio: 'ignore'
+  });
+}
+
+function requestInstalledAgentStop({ force = false } = {}) {
+  try { fs.writeFileSync(EXIT_FILE, String(Date.now()), 'utf8'); } catch {}
+  sleepMs(700);
+  if (force) stopInstalledAgentProcesses();
+}
+
 function installSelf() {
   ensureStateDir();
   const current = path.resolve(process.execPath);
@@ -59,7 +88,7 @@ function installSelf() {
       return target;
     } catch (err) {
       if (err && (err.code === 'EBUSY' || err.code === 'EPERM') && fs.existsSync(target)) {
-        try { fs.writeFileSync(EXIT_FILE, String(Date.now()), 'utf8'); } catch {}
+        requestInstalledAgentStop({ force: attempt >= 2 });
         sleepMs(1000);
         continue;
       }
@@ -160,8 +189,8 @@ if ($form.Tag) { Write-Output $form.Tag } else { Write-Output "cancel" }
 }
 
 function signalExitAndWait() {
-  try { fs.writeFileSync(EXIT_FILE, String(Date.now()), 'utf8'); } catch {}
-  for (let i = 0; i < 12; i += 1) sleepMs(500);
+  requestInstalledAgentStop({ force: true });
+  for (let i = 0; i < 6; i += 1) sleepMs(500);
 }
 
 function unregisterProtocol() {
@@ -730,6 +759,7 @@ async function runForeground() {
     }
     if (action !== 'repair') return;
     signalExitAndWait();
+    showMessage('NAS Sync Agent', 'Repair started. The old background agent will be replaced.');
   }
   registerProtocol();
   registerStartup();
