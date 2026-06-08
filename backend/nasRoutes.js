@@ -1461,7 +1461,7 @@ const buildWindowsPowerShellAgent = (token) => {
 # Run in PowerShell:
 #   powershell -ExecutionPolicy Bypass -File .\\NAS-Sync-Agent_${safeToken}.ps1
 
-param([switch]$Background)
+param([switch]$Background, [string]$PairingUrl)
 
 $ErrorActionPreference = "Stop"
 
@@ -1474,6 +1474,20 @@ $DeviceKeyFile = Join-Path $StateDir "device-key.txt"
 $ConfigFile = Join-Path $StateDir "agent-config.json"
 $PullIntervalSeconds = 10
 $Script:ApplyingRemoteChange = $false
+
+function Set-PairingTokenFromUrl($url) {
+  if (-not $url) { return }
+  try {
+    $match = [regex]::Match($url, '[?&]token=([^&]+)')
+    if ($match.Success) {
+      $script:PairingToken = [System.Uri]::UnescapeDataString($match.Groups[1].Value)
+    }
+  } catch {
+    Write-Host "Could not parse pairing URL: $($_.Exception.Message)"
+  }
+}
+
+Set-PairingTokenFromUrl $PairingUrl
 
 function Ensure-StateDir {
   if (-not (Test-Path -LiteralPath $StateDir -PathType Container)) {
@@ -1564,6 +1578,22 @@ function Start-BackgroundAgent {
     Write-Host "Startup registration failed: $($_.Exception.Message)"
   }
   Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath, "-Background")
+}
+
+function Register-UrlProtocol {
+  if (-not $PSCommandPath) { return }
+  try {
+    $base = "HKCU:\\Software\\Classes\\nas-sync"
+    New-Item -Path $base -Force | Out-Null
+    Set-Item -Path $base -Value "URL:NAS Sync Agent" -Force
+    New-ItemProperty -Path $base -Name "URL Protocol" -Value "" -Force | Out-Null
+    $commandKey = "$base\\shell\\open\\command"
+    New-Item -Path $commandKey -Force | Out-Null
+    $command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \`"$PSCommandPath\`" -PairingUrl \`"%1\`""
+    Set-Item -Path $commandKey -Value $command -Force
+  } catch {
+    Write-Host "Protocol registration failed: $($_.Exception.Message)"
+  }
 }
 
 function Select-SyncFolder {
@@ -1826,6 +1856,7 @@ Write-Host ""
 $StoredConfig = Load-AgentConfig
 $DeviceKey = Get-OrCreateDeviceKey
 $Lookup = Get-DeviceLookup $DeviceKey
+Register-UrlProtocol
 
 if (-not $Background -and $Lookup -and $Lookup.exists -and -not $Lookup.canAddFolder) {
   Write-Host ""

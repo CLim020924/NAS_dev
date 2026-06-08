@@ -533,12 +533,14 @@ const NAS = () => {
       setSnackbar({
         open: true,
         message: mode === 'add-folder'
-          ? '추가 연동용 NAS Sync Agent를 다운로드했습니다. 실행해서 새 PC 폴더를 선택하세요.'
+          ? '설치된 NAS Sync Agent를 호출했습니다. Windows 확인창이 뜨면 열기를 선택하고 PC 폴더를 고르세요.'
           : 'NAS Sync Agent 실행 파일을 다운로드했습니다. 실행하면 PC 등록과 폴더 연동이 진행됩니다.',
         severity: 'info'
       });
 
-      if (agentDownloadUrl) {
+      if (mode === 'add-folder') {
+        window.location.href = `nas-sync://add-folder?token=${encodeURIComponent(pairingToken)}`;
+      } else if (agentDownloadUrl) {
         const a = document.createElement('a');
         a.href = agentDownloadUrl;
         a.download = agentDownloadName || 'NAS-Sync-Agent.cmd';
@@ -574,7 +576,9 @@ const NAS = () => {
 
       setSnackbar({
         open: true,
-        message: '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.cmd를 실행해 주세요.',
+        message: mode === 'add-folder'
+          ? '아직 Agent 실행이 감지되지 않았습니다. 최초 설치가 안 된 PC라면 먼저 루트에서 PC 연동 설치를 진행해 주세요.'
+          : '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.cmd를 실행해 주세요.',
         severity: 'info'
       });
     } catch (err) {
