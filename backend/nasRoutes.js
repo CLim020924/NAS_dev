@@ -1232,7 +1232,7 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
     pairings.push(pairing);
     writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
 
-    const agentDownloadName = `NAS-Sync-Agent_${token.replace(/[^a-zA-Z0-9_-]/g, '')}.ps1`;
+    const agentDownloadName = `NAS-Sync-Agent_${token.replace(/[^a-zA-Z0-9_-]/g, '')}.cmd`;
 
     return res.json({
       success: true,
@@ -1241,7 +1241,7 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
       status: 'pending',
       agentDownloadUrl: `/api/devices/agent/windows?token=${encodeURIComponent(token)}`,
       agentDownloadName,
-      agentKind: 'powershell'
+      agentKind: 'windows-cmd'
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || '연동 시작 실패' });
@@ -1532,8 +1532,44 @@ try {
 `;
 };
 
+const buildWindowsCmdAgentLauncher = (token) => {
+  const safeToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
+  const script = buildWindowsPowerShellAgent(safeToken);
+  const encoded = Buffer.from(script, 'utf8').toString('base64');
+  const chunks = encoded.match(/.{1,76}/g) || [];
+
+  return `@echo off
+setlocal
+set "AGENT_DIR=%LOCALAPPDATA%\\NAS-Sync-Agent"
+set "B64_FILE=%AGENT_DIR%\\NAS-Sync-Agent_${safeToken}.b64"
+set "PS1_FILE=%AGENT_DIR%\\NAS-Sync-Agent_${safeToken}.ps1"
+
+if not exist "%AGENT_DIR%" mkdir "%AGENT_DIR%"
+
+> "%B64_FILE%" (
+${chunks.map(chunk => `  echo ${chunk}`).join('\r\n')}
+)
+
+certutil -f -decode "%B64_FILE%" "%PS1_FILE%" >nul
+if errorlevel 1 (
+  echo Failed to prepare NAS Sync Agent.
+  pause
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1_FILE%"
+set "EXIT_CODE=%ERRORLEVEL%"
+echo.
+if not "%EXIT_CODE%"=="0" (
+  echo NAS Sync Agent stopped with error code %EXIT_CODE%.
+  pause
+)
+exit /b %EXIT_CODE%
+`;
+};
+
 // Windows Agent download. If a compiled exe is available, serve it; otherwise
-// generate a PowerShell agent that uses the same register/sync endpoints.
+// generate a double-clickable cmd launcher for the PowerShell agent.
 router.get('/devices/agent/windows', verifyToken, (req, res) => {
   try {
     const token = String(req.query.token || '');
@@ -1550,10 +1586,10 @@ router.get('/devices/agent/windows', verifyToken, (req, res) => {
       return res.download(exePath, downloadName);
     }
 
-    const script = buildWindowsPowerShellAgent(safeToken);
-    const downloadName = `NAS-Sync-Agent_${safeToken}.ps1`;
+    const script = buildWindowsCmdAgentLauncher(safeToken);
+    const downloadName = `NAS-Sync-Agent_${safeToken}.cmd`;
 
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Type', 'application/x-msdownload; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
     return res.send(script);
   } catch (err) {
