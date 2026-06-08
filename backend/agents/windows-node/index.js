@@ -796,8 +796,23 @@ async function runBackground() {
   fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
   try { fs.unlinkSync(EXIT_FILE); } catch {}
   const config = loadConfig();
-  if (!config || !config.deviceId || !config.agentToken) return;
-  startTray(config);
+  const trayConfig = config || {
+    serverBase: SERVER_BASE,
+    deviceName: os.hostname() || 'This PC',
+    syncRoots: []
+  };
+  startTray(trayConfig);
+
+  if (!config || !config.deviceId || !config.agentToken) {
+    setInterval(() => {
+      if (fs.existsSync(EXIT_FILE)) {
+        try { fs.unlinkSync(PID_FILE); } catch {}
+        process.exit(0);
+      }
+    }, PULL_INTERVAL_MS);
+    return;
+  }
+
   const roots = getRoots(config).filter(root => root.localPath && fs.existsSync(root.localPath));
   for (const root of roots) {
     await pullNasChanges(root, config).catch(err => log('[pull failed]', err.message));
@@ -832,7 +847,8 @@ async function runForeground() {
   registerStartup();
   const pairingToken = getPairingToken();
   if (!pairingToken) {
-    showMessage('NAS Sync Agent', 'Pairing token was not found.');
+    startBackground();
+    showMessage('NAS Sync Agent', 'NAS Sync Agent is running in the system tray.');
     return;
   }
   const config = loadConfig();
