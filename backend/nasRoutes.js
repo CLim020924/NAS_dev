@@ -42,6 +42,7 @@ const LINKED_DEVICE_META = '.msp-linked-device.json';
 const DEVICE_DATA_DIR = path.join(__dirname, 'data');
 const DEVICE_PAIRINGS_FILE = path.join(DEVICE_DATA_DIR, 'device_pairings.json');
 const LINKED_DEVICES_FILE = path.join(DEVICE_DATA_DIR, 'linked_devices.json');
+const UNLINKED_SYNC_ROOTS_FILE = path.join(DEVICE_DATA_DIR, 'unlinked_sync_roots.json');
 const AGENT_INCOMING_ROOT = path.join(nasPath, '.agent_incoming');
 
 const createAgentToken = () => {
@@ -115,7 +116,7 @@ const agentUpload = multer({
 
 const ensureDeviceDataFiles = () => {
   if (!fs.existsSync(DEVICE_DATA_DIR)) fs.mkdirSync(DEVICE_DATA_DIR, { recursive: true });
-  for (const f of [DEVICE_PAIRINGS_FILE, LINKED_DEVICES_FILE]) {
+  for (const f of [DEVICE_PAIRINGS_FILE, LINKED_DEVICES_FILE, UNLINKED_SYNC_ROOTS_FILE]) {
     if (!fs.existsSync(f)) fs.writeFileSync(f, '[]');
   }
 };
@@ -247,6 +248,53 @@ const persistLinkedDevice = (device) => {
   return device;
 };
 
+const rememberUnlinkedSyncRoot = (device, root, reason = 'deleted-from-nas') => {
+  if (!device || !root) return;
+  const tombstones = readJsonArrayFile(UNLINKED_SYNC_ROOTS_FILE);
+  const next = tombstones.filter(row => !(
+    row.deviceId === device.deviceId &&
+    row.syncRootId === root.syncRootId
+  ));
+
+  next.push({
+    deviceId: device.deviceId,
+    syncRootId: root.syncRootId || '',
+    ownerKey: device.ownerKey || '',
+    clientDeviceKey: device.clientDeviceKey || '',
+    linkedNasPath: root.linkedNasPath || '',
+    absolutePath: root.absolutePath || '',
+    localPath: root.localPath || '',
+    reason,
+    deletedAt: new Date().toISOString()
+  });
+
+  writeJsonArrayFile(UNLINKED_SYNC_ROOTS_FILE, next);
+};
+
+const isUnlinkedSyncRoot = (device, syncRootIdValue, absolutePathValue) => {
+  const syncRootId = String(syncRootIdValue || '').trim();
+  const absolutePath = absolutePathValue ? path.resolve(absolutePathValue) : '';
+  return readJsonArrayFile(UNLINKED_SYNC_ROOTS_FILE).some(row => {
+    if (row.deviceId !== device.deviceId) return false;
+    if (syncRootId && row.syncRootId && row.syncRootId === syncRootId) return true;
+    if (absolutePath && row.absolutePath && path.resolve(row.absolutePath) === absolutePath) return true;
+    return false;
+  });
+};
+
+const forgetUnlinkedSyncRoot = (device, root) => {
+  if (!device || !root) return;
+  const absolutePath = root.absolutePath ? path.resolve(root.absolutePath) : '';
+  const next = readJsonArrayFile(UNLINKED_SYNC_ROOTS_FILE).filter(row => {
+    if (row.deviceId !== device.deviceId) return true;
+    if (root.syncRootId && row.syncRootId === root.syncRootId) return false;
+    if (absolutePath && row.absolutePath && path.resolve(row.absolutePath) === absolutePath) return false;
+    if (root.localPath && row.localPath && String(row.localPath).toLowerCase() === String(root.localPath).toLowerCase()) return false;
+    return true;
+  });
+  writeJsonArrayFile(UNLINKED_SYNC_ROOTS_FILE, next);
+};
+
 const cleanupLinkedDeviceDeletion = (targetPath) => {
   const target = path.resolve(targetPath);
   const devices = readJsonArrayFile(LINKED_DEVICES_FILE);
@@ -256,6 +304,9 @@ const cleanupLinkedDeviceDeletion = (targetPath) => {
   for (const device of devices) {
     const deviceRoot = device.absolutePath ? path.resolve(device.absolutePath) : '';
     if (deviceRoot && target === deviceRoot) {
+      for (const root of normalizeDeviceSyncRoots(device)) {
+        rememberUnlinkedSyncRoot(device, root, 'deleted-device-root-from-nas');
+      }
       changed = true;
       continue;
     }
@@ -263,7 +314,9 @@ const cleanupLinkedDeviceDeletion = (targetPath) => {
     const roots = normalizeDeviceSyncRoots(device);
     const nextRoots = roots.filter(root => {
       const rootPath = root.absolutePath ? path.resolve(root.absolutePath) : '';
-      return rootPath && target !== rootPath && !rootPath.startsWith(target + path.sep);
+      const deleted = rootPath && (target === rootPath || rootPath.startsWith(target + path.sep));
+      if (deleted) rememberUnlinkedSyncRoot(device, root, 'deleted-sync-root-from-nas');
+      return rootPath && !deleted;
     });
 
     if (nextRoots.length !== roots.length) {
@@ -419,6 +472,7 @@ const addSyncRootToDevice = (device, user, localPath, summary = {}) => {
 
   writeLinkedDeviceMeta(updated);
   updateLinkedDeviceRecord(updated);
+  forgetUnlinkedSyncRoot(updated, syncRoot);
   return { device: updated, syncRoot, alreadyLinked: false };
 };
 
@@ -2394,6 +2448,12 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdV
   const syncRoot = syncRootId
     ? syncRoots.find(root => root.syncRootId === syncRootId)
     : syncRoots[0];
+
+  if (isUnlinkedSyncRoot(device, syncRootId, syncRoot?.absolutePath)) {
+    const err = new Error('This sync folder was unlinked from NAS. Add it again from the NAS web app to resume syncing.');
+    err.status = 410;
+    throw err;
+  }
 
   if (!syncRoot || !syncRoot.absolutePath) {
     const err = new Error('연동 루트를 찾을 수 없습니다.');
