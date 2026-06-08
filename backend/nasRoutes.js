@@ -1232,21 +1232,173 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
     pairings.push(pairing);
     writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
 
+    const agentDownloadName = `NAS-Sync-Agent_${token.replace(/[^a-zA-Z0-9_-]/g, '')}.ps1`;
+
     return res.json({
       success: true,
       pairingToken: token,
       expiresAt,
       status: 'pending',
-      // 실제 Agent 제작 전에는 설치 안내 파일을 내려준다.
-      agentDownloadUrl: `/api/devices/agent/windows?token=${encodeURIComponent(token)}`
+      agentDownloadUrl: `/api/devices/agent/windows?token=${encodeURIComponent(token)}`,
+      agentDownloadName,
+      agentKind: 'powershell'
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || '연동 시작 실패' });
   }
 });
 
-// 설치 안내 파일 다운로드.
-// 실제 Windows/Mac/Linux Agent가 준비되면 이 endpoint를 설치 파일 다운로드로 교체하면 됨.
+const buildWindowsPowerShellAgent = (token) => {
+  const safeToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
+
+  return `# NAS Sync Agent - Windows Desktop Sync
+# Pairing token: ${safeToken}
+#
+# Run in PowerShell:
+#   powershell -ExecutionPolicy Bypass -File .\\NAS-Sync-Agent_${safeToken}.ps1
+
+$ErrorActionPreference = "Stop"
+
+$ServerBase = "https://filemanager-nas.com"
+$PairingToken = "${safeToken}"
+$MaxBytes = 90MB
+
+function Find-DesktopPath {
+  $candidates = @()
+  if ($env:OneDrive) {
+    $candidates += Join-Path $env:OneDrive "Desktop"
+    $candidates += Join-Path $env:OneDrive "바탕 화면"
+  }
+  if ($env:OneDriveConsumer) {
+    $candidates += Join-Path $env:OneDriveConsumer "Desktop"
+    $candidates += Join-Path $env:OneDriveConsumer "바탕 화면"
+  }
+  if ($env:USERPROFILE) {
+    $candidates += Join-Path $env:USERPROFILE "Desktop"
+    $candidates += Join-Path $env:USERPROFILE "바탕 화면"
+  }
+
+  foreach ($path in $candidates) {
+    if ($path -and (Test-Path -LiteralPath $path -PathType Container)) {
+      return $path
+    }
+  }
+
+  throw "Desktop folder was not found."
+}
+
+function Convert-ToRelPath($root, $fullPath) {
+  $rootFull = [System.IO.Path]::GetFullPath($root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+  $fileFull = [System.IO.Path]::GetFullPath($fullPath)
+
+  if ($fileFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $rel = $fileFull.Substring($rootFull.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    return $rel.Replace("\\", "/")
+  }
+
+  return [System.IO.Path]::GetFileName($fullPath)
+}
+
+function Invoke-CurlUpload($deviceId, $agentToken, $relPath, $fullPath) {
+  $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+  if (-not $curl) {
+    throw "curl.exe was not found. Windows 10/11 includes curl.exe by default."
+  }
+
+  $args = @(
+    "-sS",
+    "-X", "POST",
+    "$ServerBase/api/devices/agent/sync-file",
+    "-H", "x-agent-token: $agentToken",
+    "-F", "deviceId=$deviceId",
+    "-F", "relPath=$relPath",
+    "-F", "file=@$fullPath"
+  )
+
+  $response = & $curl.Source @args
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "curl upload failed with exit code $LASTEXITCODE"
+  }
+
+  return $response
+}
+
+Write-Host ""
+Write-Host "============================================="
+Write-Host " NAS Sync Agent - Windows Desktop Sync"
+Write-Host "============================================="
+Write-Host ""
+
+$DeviceName = $env:COMPUTERNAME
+if (-not $DeviceName) { $DeviceName = "Windows-PC" }
+
+$DesktopPath = Find-DesktopPath
+
+Write-Host "Server: $ServerBase"
+Write-Host "PC name: $DeviceName"
+Write-Host "Desktop: $DesktopPath"
+Write-Host ""
+
+$RegisterBody = @{
+  pairingToken = $PairingToken
+  deviceName = $DeviceName
+  osType = "windows"
+  desktopPath = $DesktopPath
+} | ConvertTo-Json -Compress
+
+$Register = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/register" -ContentType "application/json" -Body $RegisterBody
+
+if (-not $Register.agentToken -or -not $Register.device.deviceId) {
+  throw "Registration response was invalid."
+}
+
+$DeviceId = $Register.device.deviceId
+$AgentToken = $Register.agentToken
+
+Write-Host "Connected."
+Write-Host "NAS folder: $($Register.device.linkedNasPath)"
+Write-Host ""
+
+$Uploaded = 0
+$Skipped = 0
+$Failed = 0
+
+Get-ChildItem -LiteralPath $DesktopPath -Recurse -File -Force | ForEach-Object {
+  $file = $_
+  $relPath = Convert-ToRelPath $DesktopPath $file.FullName
+
+  if ($file.Length -gt $MaxBytes) {
+    $Skipped += 1
+    Write-Host "[skip >90MB] $relPath"
+    return
+  }
+
+  try {
+    Write-Host "[upload] $relPath"
+    Invoke-CurlUpload $DeviceId $AgentToken $relPath $file.FullName | Out-Null
+    $Uploaded += 1
+  } catch {
+    $Failed += 1
+    Write-Host "[failed] $relPath"
+    Write-Host "         $($_.Exception.Message)"
+  }
+}
+
+Write-Host ""
+Write-Host "============================================="
+Write-Host "Sync complete"
+Write-Host "Uploaded: $Uploaded"
+Write-Host "Skipped:  $Skipped"
+Write-Host "Failed:   $Failed"
+Write-Host "============================================="
+Write-Host ""
+Read-Host "Press Enter to exit"
+`;
+};
+
+// Windows Agent download. If a compiled exe is available, serve it; otherwise
+// generate a PowerShell agent that uses the same register/sync endpoints.
 router.get('/devices/agent/windows', verifyToken, (req, res) => {
   try {
     const token = String(req.query.token || '');
@@ -1256,15 +1408,19 @@ router.get('/devices/agent/windows', verifyToken, (req, res) => {
     }
 
     const exePath = path.join(__dirname, 'agents', 'dist', 'NAS-Sync-Agent.exe');
+    const safeToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
 
-    if (!fs.existsSync(exePath)) {
-      return res.status(503).send('NAS Sync Agent exe is not built yet.');
+    if (fs.existsSync(exePath)) {
+      const downloadName = `NAS-Sync-Agent_${safeToken}.exe`;
+      return res.download(exePath, downloadName);
     }
 
-    const safeToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
-    const downloadName = `NAS-Sync-Agent_${safeToken}.exe`;
+    const script = buildWindowsPowerShellAgent(safeToken);
+    const downloadName = `NAS-Sync-Agent_${safeToken}.ps1`;
 
-    res.download(exePath, downloadName);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+    return res.send(script);
   } catch (err) {
     if (!res.headersSent) {
       res.status(500).send(err.message || 'Agent download failed');

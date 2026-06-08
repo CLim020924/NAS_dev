@@ -524,7 +524,7 @@ const NAS = () => {
         path: safeTargetPath
       }, { withCredentials: true });
 
-      const { pairingToken, agentDownloadUrl } = startRes.data || {};
+      const { pairingToken, agentDownloadUrl, agentDownloadName, agentKind } = startRes.data || {};
 
       if (!pairingToken) {
         throw new Error('연동 토큰을 받지 못했습니다.');
@@ -532,14 +532,16 @@ const NAS = () => {
 
       setSnackbar({
         open: true,
-        message: 'NAS Sync Agent 실행 파일을 다운로드했습니다. 실행하면 연동이 감지됩니다.',
+        message: agentKind === 'powershell'
+          ? 'NAS Sync Agent PowerShell 파일을 다운로드했습니다. 우클릭 후 PowerShell로 실행하면 연동이 감지됩니다.'
+          : 'NAS Sync Agent 실행 파일을 다운로드했습니다. 실행하면 연동이 감지됩니다.',
         severity: 'info'
       });
 
       if (agentDownloadUrl) {
         const a = document.createElement('a');
         a.href = agentDownloadUrl;
-        a.download = 'NAS-Sync-Agent.exe';
+        a.download = agentDownloadName || (agentKind === 'powershell' ? 'NAS-Sync-Agent.ps1' : 'NAS-Sync-Agent.exe');
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -572,7 +574,9 @@ const NAS = () => {
 
       setSnackbar({
         open: true,
-        message: '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.exe를 실행해 주세요.',
+        message: agentKind === 'powershell'
+          ? '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.ps1을 PowerShell로 실행해 주세요.'
+          : '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.exe를 실행해 주세요.',
         severity: 'info'
       });
     } catch (err) {
