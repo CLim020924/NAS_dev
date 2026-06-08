@@ -1257,6 +1257,8 @@ const buildWindowsPowerShellAgent = (token) => {
 # Run in PowerShell:
 #   powershell -ExecutionPolicy Bypass -File .\\NAS-Sync-Agent_${safeToken}.ps1
 
+param([switch]$Background)
+
 $ErrorActionPreference = "Stop"
 
 $ServerBase = "https://filemanager-nas.com"
@@ -1265,6 +1267,40 @@ $MaxFileBytes = 90MB
 $MaxTotalBytes = 50GB
 $StateDir = Join-Path $env:LOCALAPPDATA "NAS-Sync-Agent"
 $DeviceKeyFile = Join-Path $StateDir "device-key.txt"
+$ConfigFile = Join-Path $StateDir "agent-config.json"
+$PullIntervalSeconds = 10
+$Script:ApplyingRemoteChange = $false
+
+function Ensure-StateDir {
+  if (-not (Test-Path -LiteralPath $StateDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+  }
+}
+
+function Save-AgentConfig($config) {
+  Ensure-StateDir
+  $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ConfigFile -Encoding UTF8
+}
+
+function Load-AgentConfig {
+  try {
+    if (Test-Path -LiteralPath $ConfigFile -PathType Leaf) {
+      return Get-Content -LiteralPath $ConfigFile -Raw | ConvertFrom-Json
+    }
+  } catch {}
+  return $null
+}
+
+function Start-BackgroundAgent {
+  if (-not $PSCommandPath) { return }
+  $command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$PSCommandPath\`" -Background"
+  try {
+    Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "NAS Sync Agent" -Value $command -Force | Out-Null
+  } catch {
+    Write-Host "Startup registration failed: $($_.Exception.Message)"
+  }
+  Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath, "-Background")
+}
 
 function Select-SyncFolder {
   try {
@@ -1296,7 +1332,7 @@ function Get-OrCreateDeviceKey {
   } catch {}
 
   if (-not (Test-Path -LiteralPath $StateDir -PathType Container)) {
-    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+    Ensure-StateDir
   }
   if (Test-Path -LiteralPath $DeviceKeyFile -PathType Leaf) {
     $existing = (Get-Content -LiteralPath $DeviceKeyFile -Raw).Trim()
@@ -1379,6 +1415,10 @@ function Invoke-AgentJson($endpoint, $body) {
   return Invoke-RestMethod -Method Post -Uri "$ServerBase$endpoint" -ContentType "application/json" -Headers @{ "x-agent-token" = $Script:AgentToken } -Body $json
 }
 
+function Invoke-AgentGet($endpoint) {
+  return Invoke-RestMethod -Method Get -Uri "$ServerBase$endpoint" -Headers @{ "x-agent-token" = $Script:AgentToken }
+}
+
 function Sync-Folder($fullPath) {
   if (-not (Test-Path -LiteralPath $fullPath -PathType Container)) { return }
   $relPath = Convert-ToRelPath $Script:SyncFolder $fullPath
@@ -1422,7 +1462,58 @@ function Initial-Sync {
   Write-Host "Initial sync complete."
 }
 
+function Pull-NasChanges {
+  try {
+    if (-not $Script:DeviceId -or -not $Script:AgentToken -or -not $Script:SyncFolder) { return }
+    $deviceIdEncoded = [System.Uri]::EscapeDataString($Script:DeviceId)
+    $manifest = Invoke-AgentGet "/api/devices/agent/manifest?deviceId=$deviceIdEncoded"
+    if (-not $manifest.entries) { return }
+
+    $Script:ApplyingRemoteChange = $true
+
+    $manifest.entries | Where-Object { $_.type -eq "folder" } | ForEach-Object {
+      $target = Join-Path $Script:SyncFolder ($_.relPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+      if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        Write-Host "[nas folder] $($_.relPath)"
+      }
+    }
+
+    $manifest.entries | Where-Object { $_.type -eq "file" } | ForEach-Object {
+      $target = Join-Path $Script:SyncFolder ($_.relPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+      $parent = Split-Path -Parent $target
+      if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+      }
+
+      $needsDownload = $true
+      if (Test-Path -LiteralPath $target -PathType Leaf) {
+        $local = Get-Item -LiteralPath $target -Force
+        $remoteTime = [DateTimeOffset]::FromUnixTimeMilliseconds([Int64]$_.mtimeMs).UtcDateTime
+        $timeDiff = [Math]::Abs(($local.LastWriteTimeUtc - $remoteTime).TotalSeconds)
+        $needsDownload = ($local.Length -ne [Int64]$_.size) -or ($timeDiff -gt 2)
+      }
+
+      if ($needsDownload) {
+        $relEncoded = [System.Uri]::EscapeDataString($_.relPath)
+        $tmp = "$target.nasdownload"
+        Invoke-WebRequest -Method Get -Uri "$ServerBase/api/devices/agent/file?deviceId=$deviceIdEncoded&relPath=$relEncoded" -Headers @{ "x-agent-token" = $Script:AgentToken } -OutFile $tmp
+        Move-Item -LiteralPath $tmp -Destination $target -Force
+        try {
+          (Get-Item -LiteralPath $target -Force).LastWriteTimeUtc = [DateTimeOffset]::FromUnixTimeMilliseconds([Int64]$_.mtimeMs).UtcDateTime
+        } catch {}
+        Write-Host "[nas file] $($_.relPath)"
+      }
+    }
+  } catch {
+    Write-Host "[nas pull failed] $($_.Exception.Message)"
+  } finally {
+    $Script:ApplyingRemoteChange = $false
+  }
+}
+
 function Handle-PathEvent($changeType, $fullPath, $oldFullPath) {
+  if ($Script:ApplyingRemoteChange) { return }
   Start-Sleep -Milliseconds 500
   try {
     if ($changeType -eq "Deleted") {
@@ -1450,59 +1541,91 @@ Write-Host " NAS Sync Agent - Realtime Folder Sync"
 Write-Host "============================================="
 Write-Host ""
 
-$Script:SyncFolder = Select-SyncFolder
-$DeviceKey = Get-OrCreateDeviceKey
-$DefaultDeviceName = Get-SafeDeviceName $env:COMPUTERNAME
-$ExistingDeviceName = Get-ExistingDeviceName $DeviceKey
-if ($ExistingDeviceName) {
-  $DeviceName = $ExistingDeviceName
+$StoredConfig = Load-AgentConfig
+if ($StoredConfig -and $StoredConfig.deviceId -and $StoredConfig.agentToken -and $StoredConfig.syncFolder) {
+  $Script:SyncFolder = $StoredConfig.syncFolder
+  $Script:DeviceId = $StoredConfig.deviceId
+  $Script:AgentToken = $StoredConfig.agentToken
+  $DeviceName = $StoredConfig.deviceName
+
+  if (-not $Background) {
+    Start-BackgroundAgent
+    Write-Host "NAS Sync Agent is running in the background."
+    Write-Host "Startup sync is enabled for this Windows account."
+    exit 0
+  }
 } else {
-  $DeviceName = Get-DeviceDisplayName $DefaultDeviceName
-}
-$Summary = Get-FolderSummary $Script:SyncFolder
-$TotalText = Format-Bytes $Summary.totalBytes
-$LimitText = Format-Bytes $MaxTotalBytes
+  $Script:SyncFolder = Select-SyncFolder
+  $DeviceKey = Get-OrCreateDeviceKey
+  $DefaultDeviceName = Get-SafeDeviceName $env:COMPUTERNAME
+  $ExistingDeviceName = Get-ExistingDeviceName $DeviceKey
+  if ($ExistingDeviceName) {
+    $DeviceName = $ExistingDeviceName
+  } else {
+    $DeviceName = Get-DeviceDisplayName $DefaultDeviceName
+  }
+  $Summary = Get-FolderSummary $Script:SyncFolder
+  $TotalText = Format-Bytes $Summary.totalBytes
+  $LimitText = Format-Bytes $MaxTotalBytes
 
-if ($Summary.totalBytes -gt $MaxTotalBytes) {
+  if ($Summary.totalBytes -gt $MaxTotalBytes) {
+    Write-Host ""
+    Write-Host "The selected folder is too large."
+    Write-Host "Selected folder: $Script:SyncFolder"
+    Write-Host "Current size: $TotalText"
+    Write-Host "Allowed size: $LimitText"
+    throw "Folder size exceeds the sync limit."
+  }
+
+  Write-Host "Server: $ServerBase"
+  Write-Host "Device folder name: $DeviceName"
+  Write-Host "Device key: $DeviceKey"
+  Write-Host "Folder: $Script:SyncFolder"
+  Write-Host "Files: $($Summary.fileCount)"
+  Write-Host "Folders: $($Summary.folderCount)"
+  Write-Host "Size: $TotalText / $LimitText"
   Write-Host ""
-  Write-Host "The selected folder is too large."
-  Write-Host "Selected folder: $Script:SyncFolder"
-  Write-Host "Current size: $TotalText"
-  Write-Host "Allowed size: $LimitText"
-  throw "Folder size exceeds the sync limit."
+
+  $RegisterBody = @{
+    pairingToken = $PairingToken
+    clientDeviceKey = $DeviceKey
+    deviceName = $DeviceName
+    osType = "windows"
+    desktopPath = $Script:SyncFolder
+    syncRootPath = $Script:SyncFolder
+    syncRootSizeBytes = $Summary.totalBytes
+    syncRootFileCount = $Summary.fileCount
+    syncRootFolderCount = $Summary.folderCount
+  } | ConvertTo-Json -Compress
+
+  $Register = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/register" -ContentType "application/json" -Body $RegisterBody
+  if (-not $Register.agentToken -or -not $Register.device.deviceId) { throw "Registration response was invalid." }
+
+  $Script:DeviceId = $Register.device.deviceId
+  $Script:AgentToken = $Register.agentToken
+
+  Save-AgentConfig @{
+    serverBase = $ServerBase
+    deviceId = $Script:DeviceId
+    agentToken = $Script:AgentToken
+    deviceName = $DeviceName
+    syncFolder = $Script:SyncFolder
+    linkedNasPath = $Register.device.linkedNasPath
+    savedAt = (Get-Date).ToUniversalTime().ToString("o")
+  }
+
+  Write-Host "Connected."
+  Write-Host "NAS folder: $($Register.device.linkedNasPath)"
+
+  Initial-Sync
+  Start-BackgroundAgent
+  Write-Host ""
+  Write-Host "NAS Sync Agent is now running in the background."
+  Write-Host "Startup sync is enabled for this Windows account."
+  exit 0
 }
 
-Write-Host "Server: $ServerBase"
-Write-Host "Device folder name: $DeviceName"
-Write-Host "Device key: $DeviceKey"
-Write-Host "Folder: $Script:SyncFolder"
-Write-Host "Files: $($Summary.fileCount)"
-Write-Host "Folders: $($Summary.folderCount)"
-Write-Host "Size: $TotalText / $LimitText"
-Write-Host ""
-
-$RegisterBody = @{
-  pairingToken = $PairingToken
-  clientDeviceKey = $DeviceKey
-  deviceName = $DeviceName
-  osType = "windows"
-  desktopPath = $Script:SyncFolder
-  syncRootPath = $Script:SyncFolder
-  syncRootSizeBytes = $Summary.totalBytes
-  syncRootFileCount = $Summary.fileCount
-  syncRootFolderCount = $Summary.folderCount
-} | ConvertTo-Json -Compress
-
-$Register = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/register" -ContentType "application/json" -Body $RegisterBody
-if (-not $Register.agentToken -or -not $Register.device.deviceId) { throw "Registration response was invalid." }
-
-$Script:DeviceId = $Register.device.deviceId
-$Script:AgentToken = $Register.agentToken
-
-Write-Host "Connected."
-Write-Host "NAS folder: $($Register.device.linkedNasPath)"
-
-Initial-Sync
+Pull-NasChanges
 
 $watcher = New-Object System.IO.FileSystemWatcher
 $watcher.Path = $Script:SyncFolder
@@ -1522,7 +1645,14 @@ Write-Host "Press Ctrl+C or close this window to stop."
 Write-Host ""
 
 try {
-  while ($true) { Wait-Event -Timeout 2 | Out-Null }
+  $lastPull = (Get-Date).AddSeconds(-1 * $PullIntervalSeconds)
+  while ($true) {
+    Wait-Event -Timeout 2 | Out-Null
+    if (((Get-Date) - $lastPull).TotalSeconds -ge $PullIntervalSeconds) {
+      Pull-NasChanges
+      $lastPull = Get-Date
+    }
+  }
 } finally {
   foreach ($handler in $handlers) {
     if ($handler) { Unregister-Event -SubscriptionId $handler.Id -ErrorAction SilentlyContinue }
@@ -1917,6 +2047,88 @@ router.post('/devices/agent/sync-file', agentUpload.single('file'), (req, res) =
   } catch (err) {
     if (incomingPath) safeRmSync(incomingPath);
     return res.status(err.status || 500).json({ error: err.message || 'Agent 파일 동기화 실패' });
+  }
+});
+
+const listAgentManifestEntries = (linkedRoot) => {
+  const entries = [];
+  const walk = (currentPath) => {
+    for (const entry of fs.readdirSync(currentPath, { withFileTypes: true })) {
+      const fullPath = path.join(currentPath, entry.name);
+      const relPath = path.relative(linkedRoot, fullPath).replace(/\\/g, '/');
+
+      if (!relPath || relPath === LINKED_DEVICE_META) continue;
+      if (relPath === '.agent_trash' || relPath.startsWith('.agent_trash/')) continue;
+
+      const stat = fs.statSync(fullPath);
+      if (entry.isDirectory()) {
+        entries.push({
+          type: 'folder',
+          relPath,
+          mtimeMs: Math.round(stat.mtimeMs)
+        });
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        entries.push({
+          type: 'file',
+          relPath,
+          size: stat.size,
+          mtimeMs: Math.round(stat.mtimeMs)
+        });
+      }
+    }
+  };
+
+  if (fs.existsSync(linkedRoot)) walk(linkedRoot);
+  return entries.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    return a.relPath.localeCompare(b.relPath);
+  });
+};
+
+// Agent가 NAS 폴더의 현재 상태를 가져와 PC에 없는/변경된 항목을 pull 한다.
+router.get('/devices/agent/manifest', (req, res) => {
+  try {
+    const deviceId = String(req.query.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    if (!device.absolutePath || !fs.existsSync(device.absolutePath)) {
+      return res.status(404).json({ error: '연동 폴더를 찾을 수 없습니다.' });
+    }
+
+    const linkedRoot = path.resolve(device.absolutePath);
+    touchLinkedDevice(device, linkedRoot);
+
+    return res.json({
+      success: true,
+      deviceId,
+      generatedAt: new Date().toISOString(),
+      entries: listAgentManifestEntries(linkedRoot)
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Agent manifest 조회 실패' });
+  }
+});
+
+// Agent가 NAS 파일을 PC로 내려받는다.
+router.get('/devices/agent/file', (req, res) => {
+  try {
+    const deviceId = String(req.query.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.query.relPath);
+
+    if (!fs.existsSync(finalPath) || !fs.statSync(finalPath).isFile()) {
+      return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+    }
+
+    touchLinkedDevice(device, linkedRoot);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(path.basename(relPath))}"`);
+    return res.sendFile(finalPath);
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Agent 파일 다운로드 실패' });
   }
 });
 
