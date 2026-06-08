@@ -41,19 +41,40 @@ function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
 }
 
+function sleepMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {}
+}
+
 function installSelf() {
   ensureStateDir();
   const current = path.resolve(process.execPath);
   const target = path.resolve(INSTALLED_EXE);
-  try {
-    if (current.toLowerCase() !== target.toLowerCase()) {
+  if (current.toLowerCase() === target.toLowerCase()) return target;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
       fs.copyFileSync(current, target);
+      return target;
+    } catch (err) {
+      if (err && (err.code === 'EBUSY' || err.code === 'EPERM') && fs.existsSync(target)) {
+        try { fs.writeFileSync(EXIT_FILE, String(Date.now()), 'utf8'); } catch {}
+        sleepMs(1000);
+        continue;
+      }
+      log('[install self failed]', err.message);
+      return fs.existsSync(target) ? target : current;
     }
-  } catch (err) {
-    log('[install self failed]', err.message);
-    return current;
   }
+
   return fs.existsSync(target) ? target : current;
+}
+
+function isDownloadedInstaller() {
+  const current = path.resolve(process.execPath).toLowerCase();
+  const target = path.resolve(INSTALLED_EXE).toLowerCase();
+  return current !== target && fs.existsSync(INSTALLED_EXE);
 }
 
 function isProcessAlive(pid) {
@@ -79,6 +100,85 @@ function showMessage(title, message) {
     '-Command',
     `Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('${safeMessage}', '${safeTitle}') | Out-Null`
   ], { windowsHide: true, detached: true, stdio: 'ignore' }).unref();
+}
+
+function promptInstalledAction() {
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "NAS Sync Agent"
+$form.Size = New-Object System.Drawing.Size(430, 210)
+$form.StartPosition = "CenterScreen"
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+
+$label = New-Object System.Windows.Forms.Label
+$label.Text = "NAS Sync Agent is already installed. What would you like to do?"
+$label.AutoSize = $false
+$label.Location = New-Object System.Drawing.Point(18, 18)
+$label.Size = New-Object System.Drawing.Size(380, 54)
+$label.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+
+$open = New-Object System.Windows.Forms.Button
+$open.Text = "Run"
+$open.Location = New-Object System.Drawing.Point(18, 95)
+$open.Size = New-Object System.Drawing.Size(86, 34)
+$open.Add_Click({ $form.Tag = "open"; $form.Close() })
+
+$repair = New-Object System.Windows.Forms.Button
+$repair.Text = "Repair"
+$repair.Location = New-Object System.Drawing.Point(114, 95)
+$repair.Size = New-Object System.Drawing.Size(86, 34)
+$repair.Add_Click({ $form.Tag = "repair"; $form.Close() })
+
+$uninstall = New-Object System.Windows.Forms.Button
+$uninstall.Text = "Uninstall"
+$uninstall.Location = New-Object System.Drawing.Point(210, 95)
+$uninstall.Size = New-Object System.Drawing.Size(86, 34)
+$uninstall.Add_Click({ $form.Tag = "uninstall"; $form.Close() })
+
+$cancel = New-Object System.Windows.Forms.Button
+$cancel.Text = "Cancel"
+$cancel.Location = New-Object System.Drawing.Point(306, 95)
+$cancel.Size = New-Object System.Drawing.Size(86, 34)
+$cancel.Add_Click({ $form.Tag = "cancel"; $form.Close() })
+
+$form.Controls.Add($label)
+$form.Controls.Add($open)
+$form.Controls.Add($repair)
+$form.Controls.Add($uninstall)
+$form.Controls.Add($cancel)
+$form.ShowDialog() | Out-Null
+if ($form.Tag) { Write-Output $form.Tag } else { Write-Output "cancel" }
+`;
+  const ps = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { encoding: 'utf8', windowsHide: false });
+  return (ps.stdout || '').trim() || 'cancel';
+}
+
+function signalExitAndWait() {
+  try { fs.writeFileSync(EXIT_FILE, String(Date.now()), 'utf8'); } catch {}
+  for (let i = 0; i < 12; i += 1) sleepMs(500);
+}
+
+function unregisterProtocol() {
+  spawnSync('reg.exe', ['delete', 'HKCU\\Software\\Classes\\nas-sync', '/f'], { windowsHide: true });
+}
+
+function unregisterStartup() {
+  spawnSync('reg.exe', ['delete', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'NAS Sync Agent', '/f'], { windowsHide: true });
+}
+
+function uninstallAgent() {
+  signalExitAndWait();
+  unregisterStartup();
+  unregisterProtocol();
+  for (const file of [PID_FILE, EXIT_FILE, TRAY_SCRIPT_FILE, INSTALLED_EXE]) {
+    try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
+  }
 }
 
 function waitIfConsole() {
@@ -596,6 +696,20 @@ async function runBackground() {
 }
 
 async function runForeground() {
+  if (isDownloadedInstaller()) {
+    const action = promptInstalledAction();
+    if (action === 'open') {
+      spawn(INSTALLED_EXE, ['--background'], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+      return;
+    }
+    if (action === 'uninstall') {
+      uninstallAgent();
+      showMessage('NAS Sync Agent', 'NAS Sync Agent was uninstalled. Synced folders and saved settings were not deleted.');
+      return;
+    }
+    if (action !== 'repair') return;
+    signalExitAndWait();
+  }
   registerProtocol();
   registerStartup();
   const pairingToken = getPairingToken();
