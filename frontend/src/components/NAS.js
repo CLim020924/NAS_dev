@@ -517,7 +517,7 @@ const NAS = () => {
 
     if (!ok) return;
 
-    const safeTargetPath = ensureSlash(targetPath || '/');
+    const safeTargetPath = '/';
 
     try {
       const startRes = await axios.post('/api/devices/pair/start', {

@@ -56,7 +56,7 @@ const NASContextMenu = ({
             handleCreateLinkedDeviceFolder(contextMenu.path || '/');
           }, 10);
         }}>
-          <ListItemIcon><DesktopWindowsIcon fontSize="small" color="info" /></ListItemIcon><ListItemText>내 PC 바탕화면 연동</ListItemText>
+          <ListItemIcon><DesktopWindowsIcon fontSize="small" color="info" /></ListItemIcon><ListItemText>내 PC 폴더 실시간 연동</ListItemText>
         </MenuItem>,
         <Divider key="d_settings" />,
         <MenuItem key="settings" onClick={() => { handleContextMenuClose(); setTimeout(() => window.location.href='/settings', 10); }}>

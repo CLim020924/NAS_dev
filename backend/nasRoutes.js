@@ -1288,6 +1288,13 @@ function Select-SyncFolder {
 }
 
 function Get-OrCreateDeviceKey {
+  try {
+    $machineGuid = (Get-ItemProperty -LiteralPath "HKLM:\\SOFTWARE\\Microsoft\\Cryptography" -Name MachineGuid -ErrorAction Stop).MachineGuid
+    if ($machineGuid) {
+      return "win-machine-" + $machineGuid.ToString().Trim()
+    }
+  } catch {}
+
   if (-not (Test-Path -LiteralPath $StateDir -PathType Container)) {
     New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
   }
@@ -1298,6 +1305,36 @@ function Get-OrCreateDeviceKey {
   $next = [Guid]::NewGuid().ToString("N")
   Set-Content -LiteralPath $DeviceKeyFile -Value $next -Encoding ASCII
   return $next
+}
+
+function Get-DeviceDisplayName($defaultName) {
+  Write-Host ""
+  Write-Host "이 PC를 NAS에 새 장치로 등록합니다."
+  Write-Host "NAS 루트에 생성될 연동 폴더 이름을 입력하세요."
+  $entered = Read-Host "장치/연동 폴더 이름 [$defaultName]"
+  if ($entered -and $entered.Trim()) {
+    return $entered.Trim()
+  }
+  return $defaultName
+}
+
+function Get-ExistingDeviceName($deviceKey) {
+  try {
+    $lookupBody = @{
+      pairingToken = $PairingToken
+      clientDeviceKey = $deviceKey
+    } | ConvertTo-Json -Compress
+
+    $lookup = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/lookup" -ContentType "application/json" -Body $lookupBody
+    if ($lookup.exists -and $lookup.device.deviceName) {
+      Write-Host "기존 등록 PC 감지: $($lookup.device.deviceName)"
+      return $lookup.device.deviceName
+    }
+  } catch {
+    Write-Host "기존 PC 등록 조회 실패. 새 등록 절차로 진행합니다."
+  }
+
+  return ""
 }
 
 function Get-FolderSummary($root) {
@@ -1330,12 +1367,10 @@ function Convert-ToRelPath($root, $fullPath) {
   return [System.IO.Path]::GetFileName($fullPath)
 }
 
-function Get-SafeDeviceName($baseName, $syncFolder) {
+function Get-SafeDeviceName($baseName) {
   $name = $baseName
   if (-not $name) { $name = $env:COMPUTERNAME }
   if (-not $name) { $name = "Windows-PC" }
-  $folderName = Split-Path -Path $syncFolder -Leaf
-  if ($folderName) { return "$name - $folderName" }
   return $name
 }
 
@@ -1417,7 +1452,13 @@ Write-Host ""
 
 $Script:SyncFolder = Select-SyncFolder
 $DeviceKey = Get-OrCreateDeviceKey
-$DeviceName = Get-SafeDeviceName $env:COMPUTERNAME $Script:SyncFolder
+$DefaultDeviceName = Get-SafeDeviceName $env:COMPUTERNAME
+$ExistingDeviceName = Get-ExistingDeviceName $DeviceKey
+if ($ExistingDeviceName) {
+  $DeviceName = $ExistingDeviceName
+} else {
+  $DeviceName = Get-DeviceDisplayName $DefaultDeviceName
+}
 $Summary = Get-FolderSummary $Script:SyncFolder
 $TotalText = Format-Bytes $Summary.totalBytes
 $LimitText = Format-Bytes $MaxTotalBytes
@@ -1432,7 +1473,7 @@ if ($Summary.totalBytes -gt $MaxTotalBytes) {
 }
 
 Write-Host "Server: $ServerBase"
-Write-Host "Device: $DeviceName"
+Write-Host "Device folder name: $DeviceName"
 Write-Host "Device key: $DeviceKey"
 Write-Host "Folder: $Script:SyncFolder"
 Write-Host "Files: $($Summary.fileCount)"
@@ -1585,6 +1626,47 @@ router.post('/devices/pair/mock-detect', verifyToken, (req, res) => {
 
 
 
+// Agent가 pairingToken + PC 고유키로 기존 등록 장치인지 확인
+router.post('/devices/agent/lookup', express.json(), (req, res) => {
+  try {
+    ensureDeviceDataFiles();
+
+    const token = String(req.body?.pairingToken || '');
+    const clientDeviceKey = String(req.body?.clientDeviceKey || '').trim();
+    const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE);
+    const pairing = pairings.find(p => p.token === token);
+
+    if (!pairing) return res.status(404).json({ error: '연동 세션을 찾을 수 없습니다.' });
+    if (new Date(pairing.expiresAt).getTime() <= Date.now()) {
+      return res.status(410).json({ error: '연동 세션이 만료되었습니다.' });
+    }
+
+    if (!clientDeviceKey) {
+      return res.json({ success: true, exists: false, device: null });
+    }
+
+    const device = readJsonArrayFile(LINKED_DEVICES_FILE).find(d =>
+      d.ownerKey === pairing.ownerKey &&
+      d.clientDeviceKey === clientDeviceKey
+    );
+
+    return res.json({
+      success: true,
+      exists: !!device,
+      device: device ? {
+        deviceId: device.deviceId,
+        deviceName: device.deviceName || device.name || '',
+        name: device.name || device.deviceName || '',
+        linkedNasPath: device.linkedNasPath || ''
+      } : null
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Agent 장치 조회 실패' });
+  }
+});
+
+ 
+
 // Agent가 pairingToken으로 실제 PC 등록
 router.post('/devices/agent/register', (req, res) => {
   try {
@@ -1612,26 +1694,30 @@ router.post('/devices/agent/register', (req, res) => {
     const existingDevice = clientDeviceKey
       ? readJsonArrayFile(LINKED_DEVICES_FILE).find(d =>
         d.ownerKey === pairing.ownerKey &&
-        d.clientDeviceKey === clientDeviceKey &&
-        d.syncRootPath === syncRootPath
+        d.clientDeviceKey === clientDeviceKey
       )
       : null;
 
     let device = pairing.device || existingDevice;
 
     if (!device || !device.absolutePath || !fs.existsSync(device.absolutePath)) {
-      device = createLinkedDeviceFolder(userSnapshot, pairing.targetPath || '/', {
+      device = createLinkedDeviceFolder(userSnapshot, '/', {
         deviceId: createDeviceId(),
         deviceName: req.body?.deviceName || '내-PC',
         osType: req.body?.osType || 'unknown'
       });
     }
 
+    const deviceName = device.deviceName || req.body?.deviceName || '내-PC';
+
     const agentToken = createAgentToken();
     const now = new Date().toISOString();
 
     device = {
       ...device,
+      deviceName,
+      name: device.name || deviceName,
+      originalDeviceName: device.originalDeviceName || req.body?.deviceName || deviceName,
       osType: req.body?.osType || device.osType || 'unknown',
       desktopPath: req.body?.desktopPath || device.desktopPath || '',
       syncRootPath,
