@@ -16,13 +16,15 @@ const PULL_INTERVAL_MS = 10_000;
 const STATE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'NAS-Sync-Agent');
 const CONFIG_FILE = path.join(STATE_DIR, 'agent-config.json');
 const DEVICE_KEY_FILE = path.join(STATE_DIR, 'device-key.txt');
-const INSTALLED_EXE = path.join(STATE_DIR, 'NAS-Sync-Agent.exe');
+const INSTALL_DIR_FILE = path.join(STATE_DIR, 'install-dir.txt');
+const DEFAULT_INSTALL_DIR = STATE_DIR;
 const PID_FILE = path.join(STATE_DIR, 'agent.pid');
 const EXIT_FILE = path.join(STATE_DIR, 'agent.exit');
 const TRAY_SCRIPT_FILE = path.join(STATE_DIR, 'tray.ps1');
 const STATE_PREFIX = 'state_';
 
 let applyingRemoteChange = false;
+let INSTALLED_EXE = path.join(DEFAULT_INSTALL_DIR, 'NAS-Sync-Agent.exe');
 
 function ensureStateDir() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -41,6 +43,24 @@ function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
 }
 
+function getSavedInstallDir() {
+  try {
+    const saved = fs.readFileSync(INSTALL_DIR_FILE, 'utf8').trim();
+    if (saved) return saved;
+  } catch {}
+  return DEFAULT_INSTALL_DIR;
+}
+
+function setInstallDir(dir) {
+  const nextDir = path.resolve(dir || DEFAULT_INSTALL_DIR);
+  ensureStateDir();
+  fs.writeFileSync(INSTALL_DIR_FILE, nextDir, 'utf8');
+  INSTALLED_EXE = path.join(nextDir, 'NAS-Sync-Agent.exe');
+  return nextDir;
+}
+
+setInstallDir(getSavedInstallDir());
+
 function sleepMs(ms) {
   try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -49,15 +69,20 @@ function sleepMs(ms) {
 
 function stopInstalledAgentProcesses() {
   const target = path.resolve(INSTALLED_EXE);
+  const defaultTarget = path.resolve(path.join(DEFAULT_INSTALL_DIR, 'NAS-Sync-Agent.exe'));
   const currentPid = process.pid;
   const psScript = `
 $target = ${JSON.stringify(target)}
+$defaultTarget = ${JSON.stringify(defaultTarget)}
 $currentPid = ${currentPid}
 Get-CimInstance Win32_Process |
   Where-Object {
     $_.ProcessId -ne $currentPid -and (
       ($_.ExecutablePath -and [String]::Equals($_.ExecutablePath, $target, [System.StringComparison]::OrdinalIgnoreCase)) -or
-      ($_.CommandLine -and $_.CommandLine.IndexOf($target, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+      ($_.ExecutablePath -and [String]::Equals($_.ExecutablePath, $defaultTarget, [System.StringComparison]::OrdinalIgnoreCase)) -or
+      ($_.CommandLine -and $_.CommandLine.IndexOf($target, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+      ($_.CommandLine -and $_.CommandLine.IndexOf($defaultTarget, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+      ($_.Name -and [String]::Equals($_.Name, "NAS-Sync-Agent.exe", [System.StringComparison]::OrdinalIgnoreCase))
     )
   } |
   ForEach-Object {
@@ -84,7 +109,9 @@ function installSelf() {
 
   for (let attempt = 0; attempt < 12; attempt += 1) {
     try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(current, target);
+      createDesktopShortcut(target);
       return target;
     } catch (err) {
       if (err && (err.code === 'EBUSY' || err.code === 'EPERM') && fs.existsSync(target)) {
@@ -103,7 +130,7 @@ function installSelf() {
 function isDownloadedInstaller() {
   const current = path.resolve(process.execPath).toLowerCase();
   const target = path.resolve(INSTALLED_EXE).toLowerCase();
-  return current !== target && fs.existsSync(INSTALLED_EXE);
+  return current !== target;
 }
 
 function isProcessAlive(pid) {
@@ -129,6 +156,54 @@ function showMessage(title, message) {
     '-Command',
     `Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('${safeMessage}', '${safeTitle}') | Out-Null`
   ], { windowsHide: true, detached: true, stdio: 'ignore' }).unref();
+}
+
+function selectInstallDir() {
+  const currentDir = getSavedInstallDir();
+  const script = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '[System.Windows.Forms.Application]::EnableVisualStyles()',
+    '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
+    '$d.Description = "Choose where to install NAS Sync Agent."',
+    `$d.SelectedPath = ${JSON.stringify(currentDir)}`,
+    '$d.ShowNewFolderButton = $true',
+    'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8; Write-Output $d.SelectedPath }'
+  ].join('; ');
+  const ps = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { encoding: 'utf8', windowsHide: false });
+  const selected = (ps.stdout || '').trim();
+  return selected || currentDir;
+}
+
+function createDesktopShortcut(exePath) {
+  const safeExe = path.resolve(exePath || INSTALLED_EXE);
+  const psScript = `
+$exe = ${JSON.stringify(safeExe)}
+$desktop = [Environment]::GetFolderPath("Desktop")
+$shortcutPath = Join-Path $desktop "NAS Sync Agent.lnk"
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $exe
+$shortcut.WorkingDirectory = Split-Path $exe
+$shortcut.IconLocation = $exe
+$shortcut.Description = "NAS Sync Agent"
+$shortcut.Save()
+`;
+  spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+    windowsHide: true,
+    stdio: 'ignore'
+  });
+}
+
+function removeDesktopShortcut() {
+  const psScript = `
+$desktop = [Environment]::GetFolderPath("Desktop")
+$shortcutPath = Join-Path $desktop "NAS Sync Agent.lnk"
+try { if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force } } catch {}
+`;
+  spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+    windowsHide: true,
+    stdio: 'ignore'
+  });
 }
 
 function promptInstalledAction() {
@@ -205,6 +280,7 @@ function uninstallAgent() {
   signalExitAndWait();
   unregisterStartup();
   unregisterProtocol();
+  removeDesktopShortcut();
   for (const file of [PID_FILE, EXIT_FILE, TRAY_SCRIPT_FILE, INSTALLED_EXE]) {
     try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
   }
@@ -747,19 +823,10 @@ async function runForeground() {
   }
 
   if (isDownloadedInstaller()) {
-    const action = promptInstalledAction();
-    if (action === 'open') {
-      spawn(INSTALLED_EXE, ['--background'], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
-      return;
-    }
-    if (action === 'uninstall') {
-      uninstallAgent();
-      showMessage('NAS Sync Agent', 'NAS Sync Agent was uninstalled. Synced folders and saved settings were not deleted.');
-      return;
-    }
-    if (action !== 'repair') return;
+    const installDir = selectInstallDir();
+    setInstallDir(installDir);
     signalExitAndWait();
-    showMessage('NAS Sync Agent', 'Repair started. The old background agent will be replaced.');
+    showMessage('NAS Sync Agent', `Installing NAS Sync Agent to:\n${installDir}\n\nAny old background agent will be replaced.`);
   }
   registerProtocol();
   registerStartup();
