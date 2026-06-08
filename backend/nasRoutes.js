@@ -1270,7 +1270,7 @@ function Select-SyncFolder {
   try {
     Add-Type -AssemblyName System.Windows.Forms | Out-Null
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = "NAS와 실시간 연동할 폴더를 선택하세요."
+    $dialog.Description = "Select a folder to sync with NAS in realtime."
     $dialog.ShowNewFolderButton = $false
     if ($env:USERPROFILE) {
       $desktop = Join-Path $env:USERPROFILE "Desktop"
@@ -1279,12 +1279,12 @@ function Select-SyncFolder {
     $result = $dialog.ShowDialog()
     if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) { return $dialog.SelectedPath }
   } catch {
-    Write-Host "폴더 선택 창을 열 수 없어 경로 직접 입력으로 전환합니다."
+    Write-Host "Folder picker is unavailable. Switching to manual path input."
   }
 
-  $manualPath = Read-Host "NAS와 실시간 연동할 폴더 전체 경로를 입력하세요"
+  $manualPath = Read-Host "Enter the full folder path to sync with NAS"
   if ($manualPath -and (Test-Path -LiteralPath $manualPath -PathType Container)) { return $manualPath }
-  throw "연동할 폴더가 선택되지 않았거나 존재하지 않습니다."
+  throw "No sync folder was selected, or the selected folder does not exist."
 }
 
 function Get-OrCreateDeviceKey {
@@ -1309,9 +1309,9 @@ function Get-OrCreateDeviceKey {
 
 function Get-DeviceDisplayName($defaultName) {
   Write-Host ""
-  Write-Host "이 PC를 NAS에 새 장치로 등록합니다."
-  Write-Host "NAS 루트에 생성될 연동 폴더 이름을 입력하세요."
-  $entered = Read-Host "장치/연동 폴더 이름 [$defaultName]"
+  Write-Host "Registering this PC as a new NAS sync device."
+  Write-Host "Enter the NAS root folder name for this device."
+  $entered = Read-Host "Device/sync folder name [$defaultName]"
   if ($entered -and $entered.Trim()) {
     return $entered.Trim()
   }
@@ -1327,11 +1327,11 @@ function Get-ExistingDeviceName($deviceKey) {
 
     $lookup = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/lookup" -ContentType "application/json" -Body $lookupBody
     if ($lookup.exists -and $lookup.device.deviceName) {
-      Write-Host "기존 등록 PC 감지: $($lookup.device.deviceName)"
+      Write-Host "Existing registered PC detected: $($lookup.device.deviceName)"
       return $lookup.device.deviceName
     }
   } catch {
-    Write-Host "기존 PC 등록 조회 실패. 새 등록 절차로 진행합니다."
+    Write-Host "Existing PC lookup failed. Continuing as a new registration."
   }
 
   return ""
@@ -1465,11 +1465,11 @@ $LimitText = Format-Bytes $MaxTotalBytes
 
 if ($Summary.totalBytes -gt $MaxTotalBytes) {
   Write-Host ""
-  Write-Host "선택한 폴더 용량이 너무 큽니다."
-  Write-Host "선택 폴더: $Script:SyncFolder"
-  Write-Host "현재 용량: $TotalText"
-  Write-Host "허용 용량: $LimitText"
-  throw "폴더 용량이 제한을 초과하여 연동을 중단합니다."
+  Write-Host "The selected folder is too large."
+  Write-Host "Selected folder: $Script:SyncFolder"
+  Write-Host "Current size: $TotalText"
+  Write-Host "Allowed size: $LimitText"
+  throw "Folder size exceeds the sync limit."
 }
 
 Write-Host "Server: $ServerBase"
