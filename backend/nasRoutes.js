@@ -77,6 +77,12 @@ const updateLinkedDeviceRecord = (device) => {
   writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
 };
 
+const removeLinkedDeviceRecord = (deviceId) => {
+  if (!deviceId) return;
+  const devices = readJsonArrayFile(LINKED_DEVICES_FILE).filter(d => d.deviceId !== deviceId);
+  writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
+};
+
 const getAgentDeviceByToken = (deviceId, agentToken) => {
   const devices = readJsonArrayFile(LINKED_DEVICES_FILE);
   const device = devices.find(d => d.deviceId === deviceId);
@@ -241,6 +247,45 @@ const persistLinkedDevice = (device) => {
   return device;
 };
 
+const cleanupLinkedDeviceDeletion = (targetPath) => {
+  const target = path.resolve(targetPath);
+  const devices = readJsonArrayFile(LINKED_DEVICES_FILE);
+  let changed = false;
+  const nextDevices = [];
+
+  for (const device of devices) {
+    const deviceRoot = device.absolutePath ? path.resolve(device.absolutePath) : '';
+    if (deviceRoot && target === deviceRoot) {
+      changed = true;
+      continue;
+    }
+
+    const roots = normalizeDeviceSyncRoots(device);
+    const nextRoots = roots.filter(root => {
+      const rootPath = root.absolutePath ? path.resolve(root.absolutePath) : '';
+      return rootPath && target !== rootPath && !rootPath.startsWith(target + path.sep);
+    });
+
+    if (nextRoots.length !== roots.length) {
+      changed = true;
+      const updated = {
+        ...device,
+        syncRoots: nextRoots,
+        status: nextRoots.length > 0 ? (device.status || 'connected') : 'needs-setup',
+        lastSeenAt: new Date().toISOString()
+      };
+      nextDevices.push(updated);
+      try {
+        if (updated.absolutePath && fs.existsSync(updated.absolutePath)) writeLinkedDeviceMeta(updated);
+      } catch (err) {}
+    } else {
+      nextDevices.push(device);
+    }
+  }
+
+  if (changed) writeJsonArrayFile(LINKED_DEVICES_FILE, nextDevices);
+};
+
 const pruneMissingSyncRoots = (device = {}) => {
   if (!device?.absolutePath || !fs.existsSync(device.absolutePath)) {
     return { device, deviceMissing: true, removedRoots: normalizeDeviceSyncRoots(device).length };
@@ -323,7 +368,10 @@ const getActiveLinkedDevice = (device = {}) => {
   if (!device) return null;
   let current = migrateLegacyDeviceContentsToSyncRoot(device);
   const pruned = pruneMissingSyncRoots(current);
-  if (pruned.deviceMissing) return null;
+  if (pruned.deviceMissing) {
+    removeLinkedDeviceRecord(device.deviceId);
+    return null;
+  }
   current = pruned.device;
   return { ...current, syncRoots: getLiveSyncRoots(current) };
 };
@@ -720,6 +768,7 @@ router.get('/files', verifyToken, (req, res) => {
     if (!fs.existsSync(targetPath)) return res.json([]); 
     const currentLinkedMeta = readLinkedDeviceMeta(targetPath);
     if (currentLinkedMeta) migrateLegacyDeviceContentsToSyncRoot(currentLinkedMeta);
+    const ownerKey = getDeviceOwnerKey(req.user);
     const items = fs.readdirSync(targetPath).map(item => {
       if (item === LINKED_DEVICE_META) return null;
 
@@ -731,15 +780,18 @@ router.get('/files', verifyToken, (req, res) => {
 
         if (stat.isDirectory()) {
           const linkedMeta = readLinkedDeviceMeta(full);
-          if (linkedMeta) {
+          const activeLinkedDevice = linkedMeta && linkedMeta.ownerKey === ownerKey
+            ? getActiveLinkedDevice(linkedMeta)
+            : null;
+          if (activeLinkedDevice && getLiveSyncRoots(activeLinkedDevice).length > 0) {
             return {
               name: item,
               type: 'linked-device',
               fullPath: rel,
-              deviceId: linkedMeta.deviceId,
-              osType: linkedMeta.osType || 'unknown',
-              syncMode: linkedMeta.syncMode || 'safe-bidirectional',
-              deviceStatus: linkedMeta.status || 'connected'
+              deviceId: activeLinkedDevice.deviceId,
+              osType: activeLinkedDevice.osType || 'unknown',
+              syncMode: activeLinkedDevice.syncMode || 'safe-bidirectional',
+              deviceStatus: activeLinkedDevice.status || 'connected'
             };
           }
         }
@@ -789,6 +841,8 @@ router.delete('/file', verifyToken, (req, res) => {
     if (targetPath.includes(path.join('/mnt/nas', 'backup'))) {
       return res.status(403).json({ error: '시스템 백업 보관소는 앱 내에서 삭제할 수 없습니다.' });
     }
+
+    cleanupLinkedDeviceDeletion(targetPath);
 
     if (fs.existsSync(targetPath)) {
       fs.rmSync(targetPath, { recursive: true, force: true });
@@ -2356,6 +2410,14 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdV
   const linkedRoot = path.resolve(syncRoot.absolutePath);
   const relPath = normalizeAgentRelPath(relPathValue);
   const finalPath = path.resolve(linkedRoot, relPath);
+
+  if (!fs.existsSync(linkedRoot) || !fs.statSync(linkedRoot).isDirectory()) {
+    const pruned = pruneMissingSyncRoots(device);
+    if (pruned.deviceMissing) removeLinkedDeviceRecord(device.deviceId);
+    const err = new Error('NAS linked sync folder was removed. Re-link this folder from the NAS web app.');
+    err.status = 410;
+    throw err;
+  }
 
   if (!finalPath.startsWith(linkedRoot + path.sep) && finalPath !== linkedRoot) {
     const err = new Error('잘못된 파일 경로입니다.');
