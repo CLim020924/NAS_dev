@@ -1,0 +1,644 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Box, Button, Snackbar, Alert, CircularProgress, Menu, MenuItem, Divider, ListItemIcon, ListItemText, useMediaQuery, useTheme, Typography } from '@mui/material';
+import { motion, AnimatePresence } from 'framer-motion';
+import axios from 'axios';
+
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import FolderIcon from '@mui/icons-material/Folder';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import DownloadIcon from '@mui/icons-material/Download';
+
+import { useWindows } from '../../contexts/WindowContext';
+import useShortcuts from '../../hooks/useShortcuts';
+
+import { ensureSlash } from '../../utils/pathUtils';
+import { getAvailableDesktopSlot, getNextSlot } from '../../utils/gridUtils';
+
+import useFileActions from './common/FileActions.hooks';
+import useNASSync from './common/SyncRadar.hooks';
+import DesktopArea from './Desktop/DesktopArea';
+import NASWindow from './Window/NASWindow';
+
+const InlineInput = ({ defaultValue, onSubmit, onCancel, isDesktop }) => {
+  const [val, setVal] = useState(defaultValue);
+  const inputRef = useRef(null);
+  const isSubmitted = useRef(false);
+
+  const handleSubmit = () => {
+    if (isSubmitted.current) return;
+    isSubmitted.current = true;
+    onSubmit(val);
+  };
+
+  const handleCancel = () => {
+    if (isSubmitted.current) return;
+    isSubmitted.current = true;
+    onCancel();
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+    setTimeout(() => {
+      if (isMounted && inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.select();
+      }
+    }, 100);
+    return () => { isMounted = false; };
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      value={val}
+      onChange={e => setVal(e.target.value)}
+      onBlur={handleSubmit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') handleSubmit();
+        if (e.key === 'Escape') handleCancel();
+      }}
+      onClick={e => e.stopPropagation()}
+      onDoubleClick={e => e.stopPropagation()}
+      onContextMenu={e => e.stopPropagation()}
+      onDragStart={e => e.preventDefault()}
+      style={{
+        width: isDesktop ? '100px' : '100%',
+        textAlign: isDesktop ? 'center' : 'left',
+        padding: '2px 4px',
+        border: `2px solid #3b82f6`,
+        outline: 'none',
+        backgroundColor: '#fff',
+        color: '#000',
+        borderRadius: '4px',
+        marginTop: isDesktop ? '4px' : '0',
+        fontSize: '0.85rem',
+        fontWeight: 'bold',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+      }}
+    />
+  );
+};
+
+const NAS = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+
+  const fileInputRef = useRef(null);
+  const uploadTargetRef = useRef('/');
+  const desktopRef = useRef(null);
+
+  const currentUser = JSON.parse(localStorage.getItem('user')) || {};
+  const isAdmin = currentUser.Masters || currentUser.Managers;
+
+  const [desktopItems, setDesktopItems] = useState([]);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  const [contextMenu, setContextMenu] = useState(null);
+  const [inlineEdit, setInlineEdit] = useState(null);
+  const [selectedItems, setSelectedItems] = useState([]);
+  const [dragOverTarget, setDragOverTarget] = useState(null);
+  const [iconPositions, setIconPositions] = useState(() => JSON.parse(localStorage.getItem('msp_icon_positions') || '{}'));
+
+  const {
+    openWindows, setOpenWindows, topZIndex, setTopZIndex,
+    focusedContext, setFocusedContext,
+    focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles
+  } = useWindows();
+
+  const desktopItemsRef = useRef(desktopItems);
+  desktopItemsRef.current = desktopItems;
+
+  const openWindowsRef = useRef(openWindows);
+  openWindowsRef.current = openWindows;
+
+  const inlineEditRef = useRef(inlineEdit);
+  inlineEditRef.current = inlineEdit;
+
+  const contextMenuRef = useRef(contextMenu);
+  contextMenuRef.current = contextMenu;
+
+  useEffect(() => {
+    localStorage.setItem('msp_icon_positions', JSON.stringify(iconPositions));
+  }, [iconPositions]);
+
+  const handleCloseSnackbar = () => setSnackbar(prev => ({ ...prev, open: false }));
+
+  const loadDesktopItems = useCallback(async () => {
+    try {
+      const response = await axios.get(`/api/files?path=/&t=${Date.now()}`, { withCredentials: true });
+      setDesktopItems(response.data || []);
+    } catch (err) {}
+  }, []);
+
+  useEffect(() => {
+    loadDesktopItems();
+  }, [loadDesktopItems]);
+
+  useNASSync({
+    inlineEditRef,
+    contextMenuRef,
+    desktopItemsRef,
+    setDesktopItems,
+    openWindowsRef,
+    setOpenWindows,
+  });
+
+  useEffect(() => {
+    if (desktopItems.length === 0) return;
+
+    setIconPositions(prev => {
+      let hasChanges = false;
+      const newPos = { ...prev };
+      const occupied = new Set();
+
+      desktopItems.forEach(item => {
+        const p = ensureSlash(item.fullPath);
+        if (newPos[p]) occupied.add(`${newPos[p].x},${newPos[p].y}`);
+      });
+
+      const maxCols = typeof window !== 'undefined' ? Math.max(1, Math.floor(window.innerWidth / 120)) : 10;
+
+      desktopItems.forEach(item => {
+        const p = ensureSlash(item.fullPath);
+        if (!newPos[p]) {
+          newPos[p] = getNextSlot(occupied, maxCols);
+          hasChanges = true;
+        }
+      });
+
+      return hasChanges ? newPos : prev;
+    });
+  }, [desktopItems]);
+
+  const {
+    refreshPath,
+    openFolderWindow,
+    openFileWindow,
+    toggleSidebar,
+    toggleEditMode,
+    handleContentChange,
+    saveFile,
+    handleInlineSubmit,
+    handleCreateFolderStart,
+    handleRenameStart,
+    handleUploadClick,
+    handleFileUpload,
+    handleDelete,
+    handleDownload,
+    handleUp,
+  } = useFileActions({
+    isMobile,
+    setSnackbar,
+    setDesktopItems,
+    desktopItems,
+    openWindows,
+    setOpenWindows,
+    topZIndex,
+    setTopZIndex,
+    setFocusedContext,
+    focusWindow,
+    fetchFiles,
+    iconPositions,
+    setIconPositions,
+    fileInputRef,
+    uploadTargetRef,
+    loadDesktopItems,
+    setSelectedItems,
+    setInlineEdit,
+  });
+
+  const getActiveTargetPath = () => {
+    if (!focusedContext || focusedContext === 'desktop') return '/';
+    const activeWin = openWindows.find(w => w.id === focusedContext);
+    if (!activeWin) return '/';
+    if (activeWin.winType === 'folder') return activeWin.currentPath;
+    return ensureSlash(activeWin.fullPath.substring(0, activeWin.fullPath.lastIndexOf('/')));
+  };
+
+  const getSelectedItemsData = useCallback(() => {
+    let currentFiles = [];
+    if (focusedContext === 'desktop' || !focusedContext) {
+      currentFiles = desktopItems;
+    } else {
+      const win = openWindows.find(w => w.id === focusedContext);
+      if (win) currentFiles = win.files;
+    }
+    return currentFiles.filter(f => selectedItems.includes(ensureSlash(f.fullPath)));
+  }, [selectedItems, focusedContext, desktopItems, openWindows]);
+
+  const getItemsToProcess = (clickedItem) => {
+    const safeClickedPath = ensureSlash(clickedItem.fullPath);
+    if (selectedItems.includes(safeClickedPath) && selectedItems.length > 1) {
+      return getSelectedItemsData();
+    }
+    return [clickedItem];
+  };
+
+  useEffect(() => {
+    openWindows.forEach(w => {
+      if (w.winType === 'folder' && !w.isLoaded) {
+        fetchFiles(w.id, w.currentPath);
+      }
+    });
+  }, [openWindows, fetchFiles]);
+
+  const handleDragStart = (e, item, sourceId) => {
+    const rect = e.target.getBoundingClientRect();
+    const offsetX = e.clientX - rect.left;
+    const offsetY = e.clientY - rect.top;
+    const safePath = ensureSlash(item.fullPath);
+
+    let currentSelection = selectedItems;
+    if (!selectedItems.includes(safePath)) {
+      currentSelection = [safePath];
+      setSelectedItems(currentSelection);
+    }
+
+    e.dataTransfer.setData('application/json', JSON.stringify({
+      draggedPaths: currentSelection,
+      anchorPath: safePath,
+      sourceId: sourceId,
+      offsetX,
+      offsetY
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e, itemPath = null) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const safeItemPath = itemPath ? ensureSlash(itemPath) : null;
+    if (safeItemPath && dragOverTarget !== safeItemPath) {
+      setDragOverTarget(safeItemPath);
+    }
+  };
+
+  const handleDragLeave = (e, itemPath = null) => {
+    const safeItemPath = itemPath ? ensureSlash(itemPath) : null;
+    if (safeItemPath && dragOverTarget === safeItemPath) {
+      setDragOverTarget(null);
+    }
+  };
+
+  const handleDrop = async (e, targetPath, targetId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverTarget(null);
+
+    try {
+      const dataString = e.dataTransfer.getData('application/json');
+      if (!dataString) return;
+      const { draggedPaths, anchorPath, sourceId, offsetX, offsetY } = JSON.parse(dataString);
+
+      const safeTargetPath = ensureSlash(targetPath);
+      const cleanTargetPath = safeTargetPath.endsWith('/') && safeTargetPath !== '/' ? safeTargetPath.slice(0, -1) : safeTargetPath;
+
+      if (draggedPaths.some(p => safeTargetPath === p || safeTargetPath.startsWith(p + '/'))) {
+        alert("폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.");
+        return;
+      }
+
+      if (sourceId === 'desktop' && targetId === 'desktop' && safeTargetPath === '/') {
+        if (desktopRef.current && !isMobile) {
+          const deskRect = desktopRef.current.getBoundingClientRect();
+          const dropX = e.clientX - deskRect.left - (offsetX || 40);
+          const dropY = e.clientY - deskRect.top - (offsetY || 40);
+
+          const snappedX = Math.max(0, Math.round((dropX - 20) / 110)) * 110 + 20;
+          const snappedY = Math.max(0, Math.round((dropY - 20) / 105)) * 105 + 20;
+
+          const anchorOldPos = iconPositions[anchorPath] || { x: 0, y: 0 };
+          const deltaX = snappedX - anchorOldPos.x;
+          const deltaY = snappedY - anchorOldPos.y;
+
+          let collision = false;
+          const newPositions = {};
+
+          draggedPaths.forEach(path => {
+            const oldPos = iconPositions[path] || { x: 0, y: 0 };
+            const nx = Math.max(20, oldPos.x + deltaX);
+            const ny = Math.max(20, oldPos.y + deltaY);
+            newPositions[path] = { x: nx, y: ny };
+
+            const isOccupied = desktopItems.some(item => {
+              const p = ensureSlash(item.fullPath);
+              if (draggedPaths.includes(p)) return false;
+              const pos = iconPositions[p];
+              return pos && pos.x === nx && pos.y === ny;
+            });
+
+            if (isOccupied) collision = true;
+          });
+
+          if (collision) return;
+
+          setIconPositions(prev => ({ ...prev, ...newPositions }));
+        }
+        return;
+      }
+
+      let refreshNeeded = new Set();
+      refreshNeeded.add(cleanTargetPath || '/');
+      let movedCount = 0;
+
+      await Promise.all(draggedPaths.map(async (oldPath) => {
+        const safeOldPath = ensureSlash(oldPath);
+        const itemName = safeOldPath.split('/').pop();
+        const newPath = (cleanTargetPath === '/' ? '' : cleanTargetPath) + '/' + itemName;
+
+        if (safeOldPath === newPath) return;
+
+        await axios.put('/api/file', { oldPath: safeOldPath, newPath }, { withCredentials: true });
+
+        if (sourceId === 'desktop' && !isMobile) {
+          setIconPositions(prev => {
+            const n = { ...prev };
+            delete n[safeOldPath];
+            return n;
+          });
+        }
+
+        refreshNeeded.add(ensureSlash(safeOldPath.substring(0, safeOldPath.lastIndexOf('/'))));
+        movedCount++;
+      }));
+
+      if (movedCount > 0) {
+        refreshNeeded.forEach(p => refreshPath(p));
+        setSelectedItems([]);
+        setSnackbar({ open: true, message: `${movedCount}개 항목 이동 완료`, severity: 'success' });
+      }
+    } catch (err) {}
+  };
+
+  const handleContextMenuClose = () => setContextMenu(null);
+
+  const handleContextMenu = (e, type, contextData) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFocusedContext(contextData.windowId || 'desktop');
+    setContextMenu({ mouseX: e.clientX, mouseY: e.clientY, type, ...contextData });
+
+    const safePath = contextData.item ? ensureSlash(contextData.item.fullPath) : null;
+    if (safePath && !selectedItems.includes(safePath)) {
+      setSelectedItems([safePath]);
+    }
+  };
+
+  const handleItemClick = (e, safePath, item) => {
+    e.stopPropagation();
+    const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+    if (isCtrlOrCmd) {
+      setSelectedItems(prev => prev.includes(safePath) ? prev.filter(p => p !== safePath) : [...prev, safePath]);
+    } else {
+      setSelectedItems([safePath]);
+    }
+
+    if (isMobile && !inlineEdit) {
+      if (item.type === 'folder') openFolderWindow(item);
+      else openFileWindow(item, false);
+    }
+  };
+
+  useShortcuts({
+    selectedItems,
+    onRename: () => {
+      const items = getSelectedItemsData();
+      if (items.length === 1) handleRenameStart(items[0], getActiveTargetPath());
+    },
+    onDelete: () => {
+      const items = getSelectedItemsData();
+      if (items.length > 0) handleDelete(items, getActiveTargetPath());
+    },
+    onOpen: () => {
+      const items = getSelectedItemsData();
+      if (items.length === 1) {
+        if (items[0].type === 'folder') openFolderWindow(items[0]);
+        else openFileWindow(items[0], false);
+      }
+    },
+    onSelectAll: () => {
+      let currentFiles = [];
+      if (focusedContext === 'desktop' || !focusedContext) {
+        currentFiles = desktopItems;
+      } else {
+        const win = openWindows.find(w => w.id === focusedContext);
+        if (win) currentFiles = win.files;
+      }
+      setSelectedItems(currentFiles.map(f => ensureSlash(f.fullPath)));
+    },
+    onDeselectAll: () => {
+      setSelectedItems([]);
+      setInlineEdit(null);
+      setContextMenu(null);
+    },
+    onNewFolder: () => {
+      handleCreateFolderStart(
+        getActiveTargetPath(),
+        focusedContext,
+        getActiveTargetPath() === '/' ? getAvailableDesktopSlot({ desktopItems, iconPositions, inlineEdit }) : null
+      );
+    }
+  });
+
+  return (
+    <Box sx={{
+      flex: 1,
+      position: 'relative',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      height: '100%',
+      userSelect: 'none',
+      '& .react-resizable-handle': { transition: 'background-color 0.2s ease', zIndex: 100 },
+      '& .react-resizable-handle:hover': { backgroundColor: theme.palette.primary.main, opacity: 0.5 }
+    }}>
+      <DesktopArea
+        theme={theme}
+        isMobile={isMobile}
+        desktopRef={desktopRef}
+        handleDragOver={handleDragOver}
+        handleDrop={handleDrop}
+        setFocusedContext={setFocusedContext}
+        setSelectedItems={setSelectedItems}
+        setInlineEdit={setInlineEdit}
+        handleContextMenu={handleContextMenu}
+        selectedItems={selectedItems}
+        isAdmin={isAdmin}
+        openFolderWindow={openFolderWindow}
+        desktopItems={desktopItems}
+        inlineEdit={inlineEdit}
+        iconPositions={iconPositions}
+        handleInlineSubmit={handleInlineSubmit}
+        handleDragStart={handleDragStart}
+        handleDragLeave={handleDragLeave}
+        handleItemClick={handleItemClick}
+        openFileWindow={openFileWindow}
+        dragOverTarget={dragOverTarget}
+        InlineInput={InlineInput}
+      />
+
+      <Box sx={{ position: 'absolute', bottom: isMobile ? 15 : 30, right: isMobile ? 15 : 30, display: 'flex', gap: isMobile ? 1 : 2, zIndex: 1200 }}>
+        <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileUpload} />
+
+        <Button
+          variant="contained"
+          color="secondary"
+          size={isMobile ? 'small' : 'medium'}
+          onClick={() => handleUploadClick(getActiveTargetPath(), focusedContext)}
+          sx={{ minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1 }}
+        >
+          <UploadFileIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && '업로드'}
+        </Button>
+
+        <Button
+          variant="contained"
+          color="primary"
+          size={isMobile ? 'small' : 'medium'}
+          onClick={() => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot({ desktopItems, iconPositions, inlineEdit }) : null)}
+          sx={{ minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1 }}
+        >
+          <CreateNewFolderIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && '새 폴더'}
+        </Button>
+      </Box>
+
+      <AnimatePresence>
+        {openWindows.map((win) => (
+          <NASWindow
+            key={win.id}
+            win={win}
+            isMobile={isMobile}
+            theme={theme}
+            focusedContext={focusedContext}
+            focusWindow={focusWindow}
+            setOpenWindows={setOpenWindows}
+            toggleSidebar={toggleSidebar}
+            handleUp={handleUp}
+            fetchFiles={fetchFiles}
+            toggleMinimize={toggleMinimize}
+            toggleMaximize={toggleMaximize}
+            closeWindow={closeWindow}
+            handleDragOver={handleDragOver}
+            handleDrop={handleDrop}
+            handleContextMenu={handleContextMenu}
+            setSelectedItems={setSelectedItems}
+            inlineEdit={inlineEdit}
+            selectedItems={selectedItems}
+            dragOverTarget={dragOverTarget}
+            handleDragStart={handleDragStart}
+            handleDragLeave={handleDragLeave}
+            handleItemClick={handleItemClick}
+            openFileWindow={openFileWindow}
+            handleInlineSubmit={handleInlineSubmit}
+            setInlineEdit={setInlineEdit}
+            InlineInput={InlineInput}
+            toggleEditMode={toggleEditMode}
+            saveFile={saveFile}
+            handleContentChange={handleContentChange}
+          />
+        ))}
+      </AnimatePresence>
+
+      <Menu
+        open={contextMenu !== null}
+        onClose={handleContextMenuClose}
+        anchorReference="anchorPosition"
+        anchorPosition={contextMenu !== null ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
+        PaperProps={{ elevation: 8, sx: { width: 220, borderRadius: 2, p: 0.5 } }}
+        disableRestoreFocus
+      >
+        {contextMenu?.type === 'background' && [
+          <MenuItem key="refresh" onClick={() => { handleContextMenuClose(); setTimeout(() => refreshPath(contextMenu.path), 10); }}>
+            <ListItemIcon><RefreshIcon fontSize="small" /></ListItemIcon><ListItemText>새로고침</ListItemText>
+          </MenuItem>,
+          <Divider key="d1" />,
+          <MenuItem key="newFolder" onClick={() => { handleContextMenuClose(); setTimeout(() => handleCreateFolderStart(contextMenu.path, contextMenu.windowId, { x: contextMenu.mouseX - 40, y: contextMenu.mouseY - 90 }), 10); }}>
+            <ListItemIcon><CreateNewFolderIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>새 폴더</ListItemText>
+          </MenuItem>,
+          <MenuItem key="upload" onClick={() => { handleContextMenuClose(); setTimeout(() => handleUploadClick(contextMenu.path, contextMenu.windowId), 10); }}>
+            <ListItemIcon><UploadFileIcon fontSize="small" color="secondary" /></ListItemIcon><ListItemText>업로드</ListItemText>
+          </MenuItem>
+        ]}
+
+        {contextMenu?.type === 'folder' && [
+          <MenuItem key="open" onClick={() => {
+            handleContextMenuClose();
+            setTimeout(() => {
+              const items = getItemsToProcess(contextMenu.item);
+              items.forEach(it => { if (it.type === 'folder') openFolderWindow(it); else openFileWindow(it, false); });
+            }, 10);
+          }}>
+            <ListItemIcon><FolderIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>열기</ListItemText>
+          </MenuItem>,
+          <Divider key="d2" />,
+          <MenuItem key="rename" onClick={() => { handleContextMenuClose(); setTimeout(() => handleRenameStart(contextMenu.item, contextMenu.path), 10); }}>
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon><ListItemText>이름 바꾸기</ListItemText>
+          </MenuItem>,
+          <MenuItem key="delete" onClick={() => {
+            handleContextMenuClose();
+            setTimeout(() => {
+              const items = getItemsToProcess(contextMenu.item);
+              handleDelete(items, contextMenu.path);
+            }, 10);
+          }}>
+            <ListItemIcon><DeleteIcon fontSize="small" color="error" /></ListItemIcon><Typography color="error">삭제</Typography>
+          </MenuItem>
+        ]}
+
+        {contextMenu?.type === 'file' && [
+          <MenuItem key="view" onClick={() => {
+            handleContextMenuClose();
+            setTimeout(() => {
+              const items = getItemsToProcess(contextMenu.item);
+              items.forEach(it => openFileWindow(it, false));
+            }, 10);
+          }}>
+            <ListItemIcon><VisibilityIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>보기 (뷰어)</ListItemText>
+          </MenuItem>,
+          <MenuItem key="edit" onClick={() => { handleContextMenuClose(); setTimeout(() => openFileWindow(contextMenu.item, true), 10); }}>
+            <ListItemIcon><EditIcon fontSize="small" color="secondary" /></ListItemIcon><ListItemText>편집 (에디터)</ListItemText>
+          </MenuItem>,
+          <MenuItem key="download" onClick={() => {
+            handleContextMenuClose();
+            setTimeout(() => {
+              const items = getItemsToProcess(contextMenu.item);
+              items.forEach((it, i) => setTimeout(() => handleDownload(it), i * 500));
+            }, 10);
+          }}>
+            <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon><ListItemText>다운로드</ListItemText>
+          </MenuItem>,
+          <Divider key="d3" />,
+          <MenuItem key="rename" onClick={() => { handleContextMenuClose(); setTimeout(() => handleRenameStart(contextMenu.item, contextMenu.path), 10); }}>
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon><ListItemText>이름 바꾸기</ListItemText>
+          </MenuItem>,
+          <MenuItem key="delete" onClick={() => {
+            handleContextMenuClose();
+            setTimeout(() => {
+              const items = getItemsToProcess(contextMenu.item);
+              handleDelete(items, contextMenu.path);
+            }, 10);
+          }}>
+            <ListItemIcon><DeleteIcon fontSize="small" color="error" /></ListItemIcon><Typography color="error">삭제</Typography>
+          </MenuItem>
+        ]}
+      </Menu>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={snackbar.severity === 'info' ? null : 3000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', display: 'flex', alignItems: 'center' }}>
+          {snackbar.severity === 'info' && <CircularProgress size={20} sx={{ mr: 2, color: 'inherit' }} />}
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+    </Box>
+  );
+};
+
+export default NAS;

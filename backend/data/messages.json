@@ -1,0 +1,588 @@
+[
+  {
+    "messageId": "msg_4858cf7b470e42228e01df9510fddf14",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "text": "ㅎㅇ",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-10T14:46:42.236Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_3e8734d83b27484493631e2b65a8b6f2",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "text": "아직이냐?",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-10T14:46:46.143Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_9e0e46e76c664014a89cb47835021f7c",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "text": "씹련아",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-11T07:18:45.673Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_9b27be27f5564c3db020cfa1e27c3352",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "text": "너 추방",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-11T07:18:50.753Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_5e723b3f66f2485986123afb0897368e",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "씹련아",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-11T07:19:01.849Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_2ef31c9b342443029be946d403848702",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "너 추방",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-11T07:19:03.799Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_b3d5af198a3447718626f109e16bc10f",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "recipientUid": "usr_3d420711e8af41dc913683563d959849",
+    "text": "개나쁜련이네",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-11T07:19:22.178Z",
+    "readByUids": [
+      "usr_c19f79ecaa7844a3abe41703cadf9e62",
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_f5fa73c828dc468e9240839ba790b330",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "text": "뺘큐",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-11T07:19:49.426Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_c198837bc4534d3e9f96457b408aebae",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "recipientUid": "usr_3d420711e8af41dc913683563d959849",
+    "text": "미친련",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-11T07:19:53.064Z",
+    "readByUids": [
+      "usr_c19f79ecaa7844a3abe41703cadf9e62",
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_c0ab5f17814a4151a4e66cd2a8d2ed60",
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "senderUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "recipientUid": "usr_3d420711e8af41dc913683563d959849",
+    "text": "",
+    "messageType": "file",
+    "attachments": [
+      {
+        "bundleId": "cab_7f7aaf811b784f3785e039c14a1cab47",
+        "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+        "ownerLoginId": "dntdlzz",
+        "sourceType": "nas",
+        "status": "pending",
+        "createdAt": "2026-05-12T00:20:49.511Z",
+        "updatedAt": "2026-05-12T00:20:49.511Z",
+        "expiresAt": "2026-05-13T00:20:49.511Z",
+        "tempRoot": "chat_tmp/cab_7f7aaf811b784f3785e039c14a1cab47",
+        "itemCount": 1,
+        "items": [
+          {
+            "entryId": "entry_0_1778545249511",
+            "sourceType": "nas",
+            "type": "file",
+            "name": "Adobe.Acrobat.Pro.2025.iso",
+            "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+            "size": 2017132544,
+            "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+          }
+        ]
+      }
+    ],
+    "attachmentCount": 1,
+    "createdAt": "2026-05-12T00:20:52.840Z",
+    "readByUids": [
+      "usr_c19f79ecaa7844a3abe41703cadf9e62",
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "savedByUids": [
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "savedAttachmentPathsByUid": {
+      "usr_3d420711e8af41dc913683563d959849": [
+        {
+          "name": "Adobe.Acrobat.Pro.2025.iso",
+          "type": "file",
+          "relativePath": "/받은 파일/Adobe.Acrobat.Pro.2025.iso"
+        }
+      ]
+    },
+    "deleted": false
+  },
+  {
+    "messageId": "msg_60584fc0224a418a9d254fe152944f22",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "recipientUid": "usr_3d420711e8af41dc913683563d959849",
+    "text": "워워워",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T00:31:58.023Z",
+    "readByUids": [
+      "usr_62638eed0a5d4cbca84d56e4e0721524",
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_545314551f714315b441c3c9e07d3b2c",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "recipientUid": "usr_3d420711e8af41dc913683563d959849",
+    "text": "언제보낸거야 이거  ㅋ",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T00:32:02.378Z",
+    "readByUids": [
+      "usr_62638eed0a5d4cbca84d56e4e0721524",
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_33f981947e6d4e8a861d86e935b5661c",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "이거",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:09:15.144Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_85c584f5b428475e8a65a3827c41933b",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "성용련이",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:09:17.400Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_da947f90b2a04df691d0bca5051761ad",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "보냈써",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:09:18.874Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_40213739e2b34138a22f6115fdc0410c",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "억울하다!",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:09:24.213Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_1d9f91fb58e341039fd29c85cbd4c1a3",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "구라야",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:11:12.897Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_61fe9c3b5ff742d092ac1b7e74349bfe",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "씹련아",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:11:16.218Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_5ab0c4d5655d4252be1506375d5f0097",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "씹련아",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:11:17.952Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_5a3ed65a4c9147938e8833ddbd205a63",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "대답 안하지",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T01:35:39.789Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_b028ce78703d44928b625c1252524e1b",
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "senderUid": "usr_3d420711e8af41dc913683563d959849",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "",
+    "messageType": "folder",
+    "attachments": [
+      {
+        "bundleId": "cab_df525642d65f470d895d5f2bf58b28a3",
+        "ownerUid": "usr_3d420711e8af41dc913683563d959849",
+        "ownerLoginId": "admin",
+        "sourceType": "nas",
+        "status": "pending",
+        "createdAt": "2026-05-12T01:35:58.761Z",
+        "updatedAt": "2026-05-12T01:35:58.761Z",
+        "expiresAt": "2026-05-13T01:35:58.761Z",
+        "tempRoot": "chat_tmp/cab_df525642d65f470d895d5f2bf58b28a3",
+        "itemCount": 1,
+        "items": [
+          {
+            "entryId": "entry_0_1778549758760",
+            "sourceType": "nas",
+            "type": "folder",
+            "name": "ㅗ",
+            "relativePath": "ㅗ",
+            "size": 0,
+            "sourcePath": "/ㅗ"
+          }
+        ]
+      }
+    ],
+    "attachmentCount": 1,
+    "createdAt": "2026-05-12T01:36:00.815Z",
+    "readByUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedAttachmentPathsByUid": {
+      "usr_62638eed0a5d4cbca84d56e4e0721524": [
+        {
+          "name": "ㅗ",
+          "type": "folder",
+          "relativePath": "/받은 파일/ㅗ"
+        }
+      ]
+    },
+    "deleted": false
+  },
+  {
+    "messageId": "msg_ecdcf4bb2b1248dfac61243b7ce685ae",
+    "conversationId": "cv_34db27c403374795b007965e0cd107ab",
+    "senderUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "이거임",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T05:46:52.501Z",
+    "readByUids": [
+      "usr_c19f79ecaa7844a3abe41703cadf9e62",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_89d07b1947bd4fc9b7e75f2b635cf71b",
+    "conversationId": "cv_34db27c403374795b007965e0cd107ab",
+    "senderUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "recipientUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "text": "",
+    "messageType": "file",
+    "attachments": [
+      {
+        "bundleId": "cab_43479baa68334204ac400f7bb4f8ec3b",
+        "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+        "ownerLoginId": "dntdlzz",
+        "sourceType": "nas",
+        "status": "pending",
+        "createdAt": "2026-05-12T05:47:05.806Z",
+        "updatedAt": "2026-05-12T05:47:05.806Z",
+        "expiresAt": "2026-05-13T05:47:05.806Z",
+        "tempRoot": "chat_tmp/cab_43479baa68334204ac400f7bb4f8ec3b",
+        "itemCount": 1,
+        "items": [
+          {
+            "entryId": "entry_0_1778564825805",
+            "sourceType": "nas",
+            "type": "file",
+            "name": "Adobe.Acrobat.Pro.2025.iso",
+            "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+            "size": 2017132544,
+            "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+          }
+        ]
+      }
+    ],
+    "attachmentCount": 1,
+    "createdAt": "2026-05-12T05:47:18.979Z",
+    "readByUids": [
+      "usr_c19f79ecaa7844a3abe41703cadf9e62",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedByUids": [
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "savedAttachmentPathsByUid": {
+      "usr_62638eed0a5d4cbca84d56e4e0721524": [
+        {
+          "name": "Adobe.Acrobat.Pro.2025.iso",
+          "type": "file",
+          "relativePath": "/받은 파일/Adobe.Acrobat.Pro.2025.iso"
+        }
+      ]
+    },
+    "deleted": false
+  },
+  {
+    "messageId": "msg_529edde680e748c486b4d096187a34c5",
+    "conversationId": "cv_40a5f82f08fb4a4a80a51c2b7a2b6f8b",
+    "senderUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "recipientUid": "usr_b462e5bf016347cd8ea700bea8469525",
+    "text": "ㅎㅇ",
+    "messageType": "text",
+    "attachments": [],
+    "attachmentCount": 0,
+    "createdAt": "2026-05-12T05:49:36.552Z",
+    "readByUids": [
+      "usr_c19f79ecaa7844a3abe41703cadf9e62",
+      "usr_b462e5bf016347cd8ea700bea8469525"
+    ],
+    "savedByUids": [],
+    "savedAttachmentPathsByUid": {},
+    "deleted": false
+  },
+  {
+    "messageId": "msg_6d580ec2de8143d382c48fa48b7ef62b",
+    "conversationId": "cv_40a5f82f08fb4a4a80a51c2b7a2b6f8b",
+    "senderUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "recipientUid": "usr_b462e5bf016347cd8ea700bea8469525",
+    "text": "",
+    "messageType": "file",
+    "attachments": [
+      {
+        "bundleId": "cab_fd940470dcf946e0a3f73768a819d5d6",
+        "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+        "ownerLoginId": "dntdlzz",
+        "sourceType": "nas",
+        "status": "pending",
+        "createdAt": "2026-05-12T05:49:57.267Z",
+        "updatedAt": "2026-05-12T05:49:57.267Z",
+        "expiresAt": "2026-05-13T05:49:57.267Z",
+        "tempRoot": "chat_tmp/cab_fd940470dcf946e0a3f73768a819d5d6",
+        "itemCount": 1,
+        "items": [
+          {
+            "entryId": "entry_0_1778564997266",
+            "sourceType": "nas",
+            "type": "file",
+            "name": "Adobe.Acrobat.Pro.2025.iso",
+            "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+            "size": 2017132544,
+            "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+          }
+        ]
+      }
+    ],
+    "attachmentCount": 1,
+    "createdAt": "2026-05-12T05:50:13.226Z",
+    "readByUids": [
+      "usr_c19f79ecaa7844a3abe41703cadf9e62",
+      "usr_b462e5bf016347cd8ea700bea8469525"
+    ],
+    "savedByUids": [
+      "usr_b462e5bf016347cd8ea700bea8469525"
+    ],
+    "savedAttachmentPathsByUid": {
+      "usr_b462e5bf016347cd8ea700bea8469525": [
+        {
+          "name": "Adobe.Acrobat.Pro.2025.iso",
+          "type": "file",
+          "relativePath": "/받은 파일/Adobe.Acrobat.Pro.2025.iso"
+        }
+      ]
+    },
+    "deleted": false
+  }
+]

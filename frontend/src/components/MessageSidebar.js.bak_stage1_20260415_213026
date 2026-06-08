@@ -1,0 +1,413 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Drawer,
+  Box,
+  Typography,
+  List,
+  ListItemAvatar,
+  ListItemText,
+  Avatar,
+  Badge,
+  TextField,
+  InputAdornment,
+  IconButton,
+  Divider,
+  useTheme,
+  Button,
+  Chip,
+  Stack,
+  CircularProgress,
+  ListItemButton,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import SearchIcon from '@mui/icons-material/Search';
+import CircleIcon from '@mui/icons-material/Circle';
+import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
+import DoneIcon from '@mui/icons-material/Done';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import PersonRemoveIcon from '@mui/icons-material/PersonRemove';
+import axios from 'axios';
+
+const MessageSidebar = ({ open, onClose }) => {
+  const theme = useTheme();
+
+  const [loading, setLoading] = useState(false);
+  const [searching, setSearching] = useState(false);
+
+  const [friends, setFriends] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [outgoingRequests, setOutgoingRequests] = useState([]);
+  const [canViewAllUsers, setCanViewAllUsers] = useState(false);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+
+  const loadSidebar = async () => {
+    try {
+      setLoading(true);
+      const res = await axios.get('/api/friends/sidebar', { withCredentials: true });
+      setFriends(res.data.friends || []);
+      setIncomingRequests(res.data.incomingRequests || []);
+      setOutgoingRequests(res.data.outgoingRequests || []);
+      setCanViewAllUsers(!!res.data.canViewAllUsers);
+    } catch (err) {
+      console.error('친구 목록 로드 실패', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    loadSidebar();
+    const interval = setInterval(loadSidebar, 5000);
+    return () => clearInterval(interval);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        setSearching(true);
+        const res = await axios.get('/api/friends/search', {
+          params: { q },
+          withCredentials: true,
+        });
+        setSearchResults(res.data.results || []);
+      } catch (err) {
+        console.error('친구 검색 실패', err);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [open, searchQuery]);
+
+  const handleRequestFriend = async (targetUserUid) => {
+    try {
+      await axios.post('/api/friends/request', { targetUserUid }, { withCredentials: true });
+      await loadSidebar();
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 요청에 실패했습니다.');
+    }
+  };
+
+  const handleAccept = async (relationId) => {
+    try {
+      await axios.post('/api/friends/accept', { relationId }, { withCredentials: true });
+      await loadSidebar();
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 요청 수락에 실패했습니다.');
+    }
+  };
+
+  const handleReject = async (relationId) => {
+    try {
+      await axios.post('/api/friends/reject', { relationId }, { withCredentials: true });
+      await loadSidebar();
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 요청 거절에 실패했습니다.');
+    }
+  };
+
+  const handleRemove = async (targetUserUid) => {
+    if (!window.confirm('이 친구를 친구 목록에서 제거할까요?')) return;
+    try {
+      await axios.post('/api/friends/remove', { targetUserUid }, { withCredentials: true });
+      await loadSidebar();
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 제거에 실패했습니다.');
+    }
+  };
+
+  const sectionTitle = useMemo(
+    () => (canViewAllUsers ? '전체 사용자' : '친구 목록'),
+    [canViewAllUsers]
+  );
+
+  const renderActions = (u) => {
+    switch (u.relationStatus) {
+      case 'ACCEPTED':
+        return (
+          <Stack direction="row" spacing={0.5}>
+            <Chip size="small" label="친구" color="success" variant="outlined" />
+            <Button
+              size="small"
+              color="inherit"
+              variant="text"
+              startIcon={<PersonRemoveIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRemove(u.userUid);
+              }}
+            >
+              제거
+            </Button>
+          </Stack>
+        );
+      case 'OUTGOING':
+        return <Chip size="small" label="요청중" color="warning" variant="outlined" />;
+      case 'INCOMING':
+        return (
+          <Stack direction="row" spacing={0.5}>
+            <Button
+              size="small"
+              variant="contained"
+              color="primary"
+              startIcon={<DoneIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleAccept(u.relationId);
+              }}
+            >
+              수락
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="inherit"
+              startIcon={<CloseRoundedIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleReject(u.relationId);
+              }}
+            >
+              거절
+            </Button>
+          </Stack>
+        );
+      default:
+        return (
+          <Button
+            size="small"
+            variant="contained"
+            color="primary"
+            startIcon={<PersonAddAlt1Icon />}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleRequestFriend(u.userUid);
+            }}
+          >
+            친구추가
+          </Button>
+        );
+    }
+  };
+
+  const UserRow = ({ user }) => (
+    <ListItemButton
+      sx={{
+        borderRadius: 2,
+        mb: 0.5,
+        alignItems: 'flex-start',
+      }}
+    >
+      <ListItemAvatar>
+        <Badge
+          overlap="circular"
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          badgeContent={
+            <CircleIcon
+              sx={{
+                fontSize: 14,
+                color: user.isOnline ? 'success.main' : 'text.disabled',
+                border: `2px solid ${theme.palette.background.paper}`,
+                borderRadius: '50%',
+              }}
+            />
+          }
+        >
+          <Avatar
+            sx={{
+              width: 40,
+              height: 40,
+              bgcolor:
+                user.role === 'MASTER'
+                  ? 'error.main'
+                  : user.role === 'MANAGER'
+                  ? 'warning.main'
+                  : 'primary.main',
+              fontWeight: 'bold',
+            }}
+          >
+            {(user.displayName || user.username)?.[0]?.toUpperCase()}
+          </Avatar>
+        </Badge>
+      </ListItemAvatar>
+
+      <ListItemText
+        primary={user.displayName || user.username}
+        secondary={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+            {user.displayName && user.displayName !== user.username && (
+              <>
+                <Typography variant="caption" color="text.secondary">
+                  @{user.username}
+                </Typography>
+                <Divider orientation="vertical" flexItem sx={{ height: 10, my: 'auto' }} />
+              </>
+            )}
+            <Typography
+              variant="caption"
+              sx={{
+                color: user.role === 'MASTER' ? 'error.main' : 'text.secondary',
+                fontWeight: 'bold',
+              }}
+            >
+              {user.role}
+            </Typography>
+            <Divider orientation="vertical" flexItem sx={{ height: 10, my: 'auto' }} />
+            <Typography variant="caption" sx={{ color: user.isOnline ? 'success.main' : 'text.secondary' }}>
+              {user.isOnline ? '온라인' : '오프라인'}
+            </Typography>
+          </Box>
+        }
+        sx={{ mr: 1 }}
+      />
+
+      <Box sx={{ ml: 1, display: 'flex', alignItems: 'center' }}>{renderActions(user)}</Box>
+    </ListItemButton>
+  );
+
+  return (
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      sx={{ zIndex: (muiTheme) => muiTheme.zIndex.drawer + 2 }}
+      PaperProps={{ sx: { backgroundColor: 'background.paper', color: 'text.primary' } }}
+    >
+      <Box sx={{ width: { xs: '88vw', sm: 360 }, height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <Box
+          sx={{
+            p: 2,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            backgroundColor: theme.palette.background.default,
+            borderBottom: `1px solid ${theme.palette.divider}`,
+          }}
+        >
+          <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1.1rem' }}>
+            메세지 & 친구
+          </Typography>
+          <IconButton onClick={onClose} size="small">
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+
+        <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}` }}>
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="아이디/닉네임 검색"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+        </Box>
+
+        <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 1.25 }}>
+          {loading ? (
+            <Box sx={{ py: 6, display: 'flex', justifyContent: 'center' }}>
+              <CircularProgress size={28} />
+            </Box>
+          ) : (
+            <>
+              {searchQuery.trim() && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" sx={{ px: 1, pb: 1, fontWeight: 800 }}>
+                    검색 결과
+                  </Typography>
+                  {searching ? (
+                    <Box sx={{ py: 2, display: 'flex', justifyContent: 'center' }}>
+                      <CircularProgress size={22} />
+                    </Box>
+                  ) : searchResults.length === 0 ? (
+                    <Typography variant="body2" sx={{ px: 1, py: 1, color: 'text.secondary' }}>
+                      검색 결과가 없습니다.
+                    </Typography>
+                  ) : (
+                    <List disablePadding>
+                      {searchResults.map((u) => (
+                        <UserRow key={`search-${u.userUid}`} user={u} />
+                      ))}
+                    </List>
+                  )}
+                </Box>
+              )}
+
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ px: 1, pb: 1, fontWeight: 800 }}>
+                  {sectionTitle}
+                </Typography>
+                {friends.length === 0 ? (
+                  <Typography variant="body2" sx={{ px: 1, py: 1, color: 'text.secondary' }}>
+                    {canViewAllUsers ? '표시할 사용자가 없습니다.' : '아직 친구가 없습니다.'}
+                  </Typography>
+                ) : (
+                  <List disablePadding>
+                    {friends.map((u) => (
+                      <UserRow key={`friend-${u.userUid}`} user={u} />
+                    ))}
+                  </List>
+                )}
+              </Box>
+
+              <Divider sx={{ my: 1 }} />
+
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" sx={{ px: 1, pb: 1, fontWeight: 800 }}>
+                  받은 친구 요청
+                </Typography>
+                {incomingRequests.length === 0 ? (
+                  <Typography variant="body2" sx={{ px: 1, py: 1, color: 'text.secondary' }}>
+                    받은 친구 요청이 없습니다.
+                  </Typography>
+                ) : (
+                  <List disablePadding>
+                    {incomingRequests.map((u) => (
+                      <UserRow key={`incoming-${u.userUid}`} user={u} />
+                    ))}
+                  </List>
+                )}
+              </Box>
+
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" sx={{ px: 1, pb: 1, fontWeight: 800 }}>
+                  보낸 친구 요청
+                </Typography>
+                {outgoingRequests.length === 0 ? (
+                  <Typography variant="body2" sx={{ px: 1, py: 1, color: 'text.secondary' }}>
+                    보낸 친구 요청이 없습니다.
+                  </Typography>
+                ) : (
+                  <List disablePadding>
+                    {outgoingRequests.map((u) => (
+                      <UserRow key={`outgoing-${u.userUid}`} user={u} />
+                    ))}
+                  </List>
+                )}
+              </Box>
+            </>
+          )}
+        </Box>
+      </Box>
+    </Drawer>
+  );
+};
+
+export default MessageSidebar;

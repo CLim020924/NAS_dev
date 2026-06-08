@@ -1,0 +1,152 @@
+[
+  {
+    "bundleId": "cab_51e6cd44e52c4debabe60285daa544ab",
+    "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "ownerLoginId": "dntdlzz",
+    "sourceType": "nas",
+    "status": "canceled",
+    "createdAt": "2026-05-12T00:20:44.032Z",
+    "updatedAt": "2026-05-12T00:20:49.920Z",
+    "expiresAt": "2026-05-13T00:20:44.032Z",
+    "tempRoot": "chat_tmp/cab_51e6cd44e52c4debabe60285daa544ab",
+    "itemCount": 1,
+    "items": [
+      {
+        "entryId": "entry_0_1778545244031",
+        "sourceType": "nas",
+        "type": "file",
+        "name": "Adobe.Acrobat.Pro.2025.iso",
+        "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+        "size": 2017132544,
+        "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+      }
+    ]
+  },
+  {
+    "bundleId": "cab_643b7d7c64724b8bb4e7f637eb375263",
+    "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "ownerLoginId": "dntdlzz",
+    "sourceType": "nas",
+    "status": "canceled",
+    "createdAt": "2026-05-12T00:20:46.850Z",
+    "updatedAt": "2026-05-12T00:20:51.439Z",
+    "expiresAt": "2026-05-13T00:20:46.850Z",
+    "tempRoot": "chat_tmp/cab_643b7d7c64724b8bb4e7f637eb375263",
+    "itemCount": 1,
+    "items": [
+      {
+        "entryId": "entry_0_1778545246850",
+        "sourceType": "nas",
+        "type": "file",
+        "name": "Adobe.Acrobat.Pro.2025.iso",
+        "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+        "size": 2017132544,
+        "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+      }
+    ]
+  },
+  {
+    "bundleId": "cab_7f7aaf811b784f3785e039c14a1cab47",
+    "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "ownerLoginId": "dntdlzz",
+    "sourceType": "nas",
+    "status": "sent",
+    "createdAt": "2026-05-12T00:20:49.511Z",
+    "updatedAt": "2026-05-12T00:20:52.862Z",
+    "expiresAt": "2026-05-13T00:20:49.511Z",
+    "tempRoot": "chat_tmp/cab_7f7aaf811b784f3785e039c14a1cab47",
+    "itemCount": 1,
+    "items": [
+      {
+        "entryId": "entry_0_1778545249511",
+        "sourceType": "nas",
+        "type": "file",
+        "name": "Adobe.Acrobat.Pro.2025.iso",
+        "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+        "size": 2017132544,
+        "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+      }
+    ],
+    "linkedConversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "linkedMessageId": "msg_c0ab5f17814a4151a4e66cd2a8d2ed60",
+    "sentAt": "2026-05-12T00:20:52.840Z"
+  },
+  {
+    "bundleId": "cab_df525642d65f470d895d5f2bf58b28a3",
+    "ownerUid": "usr_3d420711e8af41dc913683563d959849",
+    "ownerLoginId": "admin",
+    "sourceType": "nas",
+    "status": "sent",
+    "createdAt": "2026-05-12T01:35:58.761Z",
+    "updatedAt": "2026-05-12T01:36:00.837Z",
+    "expiresAt": "2026-05-13T01:35:58.761Z",
+    "tempRoot": "chat_tmp/cab_df525642d65f470d895d5f2bf58b28a3",
+    "itemCount": 1,
+    "items": [
+      {
+        "entryId": "entry_0_1778549758760",
+        "sourceType": "nas",
+        "type": "folder",
+        "name": "ㅗ",
+        "relativePath": "ㅗ",
+        "size": 0,
+        "sourcePath": "/ㅗ"
+      }
+    ],
+    "linkedConversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "linkedMessageId": "msg_b028ce78703d44928b625c1252524e1b",
+    "sentAt": "2026-05-12T01:36:00.815Z"
+  },
+  {
+    "bundleId": "cab_43479baa68334204ac400f7bb4f8ec3b",
+    "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "ownerLoginId": "dntdlzz",
+    "sourceType": "nas",
+    "status": "sent",
+    "createdAt": "2026-05-12T05:47:05.806Z",
+    "updatedAt": "2026-05-12T05:47:19.002Z",
+    "expiresAt": "2026-05-13T05:47:05.806Z",
+    "tempRoot": "chat_tmp/cab_43479baa68334204ac400f7bb4f8ec3b",
+    "itemCount": 1,
+    "items": [
+      {
+        "entryId": "entry_0_1778564825805",
+        "sourceType": "nas",
+        "type": "file",
+        "name": "Adobe.Acrobat.Pro.2025.iso",
+        "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+        "size": 2017132544,
+        "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+      }
+    ],
+    "linkedConversationId": "cv_34db27c403374795b007965e0cd107ab",
+    "linkedMessageId": "msg_89d07b1947bd4fc9b7e75f2b635cf71b",
+    "sentAt": "2026-05-12T05:47:18.979Z"
+  },
+  {
+    "bundleId": "cab_fd940470dcf946e0a3f73768a819d5d6",
+    "ownerUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "ownerLoginId": "dntdlzz",
+    "sourceType": "nas",
+    "status": "sent",
+    "createdAt": "2026-05-12T05:49:57.267Z",
+    "updatedAt": "2026-05-12T05:50:13.246Z",
+    "expiresAt": "2026-05-13T05:49:57.267Z",
+    "tempRoot": "chat_tmp/cab_fd940470dcf946e0a3f73768a819d5d6",
+    "itemCount": 1,
+    "items": [
+      {
+        "entryId": "entry_0_1778564997266",
+        "sourceType": "nas",
+        "type": "file",
+        "name": "Adobe.Acrobat.Pro.2025.iso",
+        "relativePath": "Adobe.Acrobat.Pro.2025.iso",
+        "size": 2017132544,
+        "sourcePath": "/Adobe.Acrobat.Pro.2025.iso"
+      }
+    ],
+    "linkedConversationId": "cv_40a5f82f08fb4a4a80a51c2b7a2b6f8b",
+    "linkedMessageId": "msg_6d580ec2de8143d382c48fa48b7ef62b",
+    "sentAt": "2026-05-12T05:50:13.226Z"
+  }
+]

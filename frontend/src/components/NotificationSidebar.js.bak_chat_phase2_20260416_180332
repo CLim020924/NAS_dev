@@ -1,0 +1,226 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Drawer,
+  Box,
+  Typography,
+  IconButton,
+  List,
+  ListItemButton,
+  ListItemText,
+  Divider,
+  Chip,
+  Button,
+  CircularProgress,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
+import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
+import axios from 'axios';
+
+const NotificationSidebar = ({ open, onClose, onUnreadCountChange = () => {}, onNavigateFromNotification = () => {} }) => {
+  const [loading, setLoading] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+
+  const loadNotifications = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) setLoading(true);
+      const res = await axios.get('/api/notifications', { withCredentials: true });
+      const items = res.data.notifications || [];
+      setNotifications(items);
+      onUnreadCountChange(items.filter((n) => !n.isRead).length);
+    } catch (err) {
+      console.error('알림 목록 로드 실패', err);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [onUnreadCountChange]);
+
+  useEffect(() => {
+    if (!open) return;
+    loadNotifications();
+    const interval = setInterval(() => loadNotifications({ silent: true }), 10000);
+    return () => clearInterval(interval);
+  }, [open, loadNotifications]);
+
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !n.isRead).length,
+    [notifications]
+  );
+
+  const handleReadOne = async (notificationId, isRead) => {
+    if (isRead) return;
+    try {
+      await axios.post(
+        '/api/notifications/read',
+        { notificationId },
+        { withCredentials: true }
+      );
+      await loadNotifications({ silent: true });
+    } catch (err) {
+      alert(err.response?.data?.error || '알림 읽음 처리에 실패했습니다.');
+    }
+  };
+
+  const handleReadAll = async () => {
+    try {
+      await axios.post('/api/notifications/read-all', {}, { withCredentials: true });
+      await loadNotifications({ silent: true });
+    } catch (err) {
+      alert(err.response?.data?.error || '전체 읽음 처리에 실패했습니다.');
+    }
+  };
+
+  const handleNotificationClick = async (notification) => {
+    try {
+      if (!notification.isRead) {
+        await axios.post(
+          '/api/notifications/read',
+          { notificationId: notification.notificationId },
+          { withCredentials: true }
+        );
+      }
+      await loadNotifications({ silent: true });
+      onNavigateFromNotification(notification);
+    } catch (err) {
+      alert(err.response?.data?.error || '알림 처리에 실패했습니다.');
+    }
+  };
+
+  const getTypeLabel = (type) => {
+    switch (type) {
+      case 'friend_request':
+        return '친구 요청';
+      case 'friend_accept':
+        return '친구 수락';
+      case 'chat_message':
+        return '메시지';
+      default:
+        return '알림';
+    }
+  };
+
+  return (
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      sx={{ zIndex: (theme) => theme.zIndex.drawer + 3 }}
+      PaperProps={{
+        sx: {
+          width: { xs: '86vw', sm: 340 },
+          backgroundColor: 'background.paper',
+          color: 'text.primary',
+        }
+      }}
+    >
+      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <Box
+          sx={{
+            p: 2,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: 'background.default',
+            borderBottom: (theme) => `1px solid ${theme.palette.divider}`,
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <NotificationsNoneIcon fontSize="small" />
+            <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1.05rem' }}>
+              알림
+            </Typography>
+            {unreadCount > 0 && (
+              <Chip
+                size="small"
+                color="error"
+                label={unreadCount > 99 ? '99+' : unreadCount}
+                sx={{ height: 22 }}
+              />
+            )}
+          </Box>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Button
+              size="small"
+              color="inherit"
+              startIcon={<MarkEmailReadIcon />}
+              onClick={handleReadAll}
+              disabled={unreadCount === 0}
+            >
+              모두 읽음
+            </Button>
+            <IconButton onClick={onClose} size="small">
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        </Box>
+
+        <Box sx={{ flex: 1, overflowY: 'auto' }}>
+          {loading ? (
+            <Box sx={{ py: 6, display: 'flex', justifyContent: 'center' }}>
+              <CircularProgress size={28} />
+            </Box>
+          ) : notifications.length === 0 ? (
+            <Box sx={{ p: 3 }}>
+              <Typography variant="body2" color="text.secondary">
+                아직 새 알림이 없습니다.
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
+                친구 요청, 메세지, 파일 수신 알림이 이곳에 모이게 됩니다.
+              </Typography>
+            </Box>
+          ) : (
+            <List disablePadding>
+              {notifications.map((n, idx) => (
+                <React.Fragment key={n.notificationId}>
+                  <ListItemButton
+                    onClick={() => handleNotificationClick(n)}
+                    sx={{
+                      alignItems: 'flex-start',
+                      px: 2,
+                      py: 1.5,
+                      backgroundColor: n.isRead ? 'transparent' : 'action.hover',
+                    }}
+                  >
+                    <ListItemText
+                      primary={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                          <Typography variant="body2" sx={{ fontWeight: n.isRead ? 600 : 800 }}>
+                            {n.title}
+                          </Typography>
+                          <Chip
+                            size="small"
+                            variant={n.isRead ? 'outlined' : 'filled'}
+                            color={n.isRead ? 'default' : 'primary'}
+                            label={getTypeLabel(n.type)}
+                            sx={{ height: 20 }}
+                          />
+                          {!n.isRead && (
+                            <Chip size="small" color="error" label="NEW" sx={{ height: 20 }} />
+                          )}
+                        </Box>
+                      }
+                      secondary={
+                        <Box sx={{ mt: 0.5 }}>
+                          <Typography variant="body2" color="text.secondary">
+                            {n.message}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                            {n.createdAt}
+                          </Typography>
+                        </Box>
+                      }
+                    />
+                  </ListItemButton>
+                  {idx < notifications.length - 1 && <Divider />}
+                </React.Fragment>
+              ))}
+            </List>
+          )}
+        </Box>
+      </Box>
+    </Drawer>
+  );
+};
+
+export default NotificationSidebar;

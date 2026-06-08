@@ -1,0 +1,470 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Box, Typography, Paper, Grid, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemIcon, ListItemText, Button, TextField } from '@mui/material';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Rnd } from 'react-rnd';
+import axios from 'axios';
+
+// 아이콘 임포트
+import MenuIcon from '@mui/icons-material/Menu'; 
+import FolderIcon from '@mui/icons-material/Folder';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import CloseIcon from '@mui/icons-material/Close';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import StorageIcon from '@mui/icons-material/Storage';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import RemoveIcon from '@mui/icons-material/Remove'; // 최소화 아이콘
+import CropSquareIcon from '@mui/icons-material/CropSquare'; // 최대화 아이콘
+import FilterNoneIcon from '@mui/icons-material/FilterNone'; // 창 복원 아이콘
+import EditIcon from '@mui/icons-material/Edit'; // 편집 아이콘
+import SaveIcon from '@mui/icons-material/Save'; // 저장 아이콘
+import VisibilityIcon from '@mui/icons-material/Visibility'; // 보기 아이콘
+
+const NAS = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const fileInputRef = useRef(null);
+  
+  const currentUser = JSON.parse(localStorage.getItem('user')) || {};
+  const isAdmin = currentUser.Masters || currentUser.Managers;
+
+  const [openWindows, setOpenWindows] = useState([]);
+  const [desktopItems, setDesktopItems] = useState([]);
+  const [topZIndex, setTopZIndex] = useState(100);
+
+  // 바탕화면 로드
+  const loadDesktopItems = useCallback(async () => {
+    try {
+      const response = await axios.get('/api/files?path=/', { withCredentials: true });
+      setDesktopItems(response.data || []);
+    } catch (err) { console.error("바탕화면 로드 실패:", err); }
+  }, []);
+
+  // 폴더 데이터 로드
+  const fetchFiles = useCallback(async (windowId, path) => {
+    try {
+      const response = await axios.get(`/api/files?path=${encodeURIComponent(path)}`, { withCredentials: true });
+      setOpenWindows(prev => prev.map(w => w.id === windowId ? { 
+        ...w, files: response.data || [], currentPath: path, isLoaded: true 
+      } : w));
+    } catch (err) { console.error("파일 로드 실패:", err); }
+  }, []);
+
+  useEffect(() => { loadDesktopItems(); }, [loadDesktopItems]);
+
+  // 폴더 창 열기
+  const openFolderWindow = (item) => {
+    if (!openWindows.find(w => w.id === item.id)) {
+      setOpenWindows([...openWindows, { 
+        ...item, 
+        winType: 'folder', // 창 타입 구분 (폴더)
+        basePath: item.path || '/',
+        currentPath: item.path || '/', 
+        files: [], 
+        isLoaded: false, 
+        zIndex: topZIndex + 1, sidebarOpen: !isMobile, width: 900, height: 650,
+        x: 100 + (openWindows.length * 30), y: 50 + (openWindows.length * 30),
+        isMinimized: false, isMaximized: false,
+        prevSize: { width: 900, height: 650 }, prevPosition: { x: 100, y: 50 }
+      }]);
+      setTopZIndex(topZIndex + 1);
+    } else { focusWindow(item.id); }
+  };
+
+  // 텍스트 파일 내용을 읽어와 뷰어/편집기 창 열기
+  const openFileWindow = async (fileItem) => {
+    const fileId = `file_${fileItem.fullPath}`;
+    
+    // 이미 열려있는 파일이면 포커스만 맞추고 최소화 해제
+    if (openWindows.find(w => w.id === fileId)) {
+      setOpenWindows(prev => prev.map(w => w.id === fileId ? { ...w, isMinimized: false, zIndex: topZIndex + 1 } : w));
+      setTopZIndex(topZIndex + 1);
+      return;
+    }
+
+    try {
+      // 파일 내용 다운로드 (텍스트 기반 파일 처리)
+      const response = await axios.get(fileItem.url, { responseType: 'text', withCredentials: true });
+      const content = response.data;
+
+      setOpenWindows([...openWindows, { 
+        id: fileId,
+        name: fileItem.name,
+        fullPath: fileItem.fullPath,
+        winType: 'file', // 창 타입 구분 (파일)
+        content: content,
+        originalContent: content, // 수정 감지용
+        mode: 'view', // 'view' 또는 'edit'
+        zIndex: topZIndex + 1, width: 800, height: 600,
+        x: 150 + (openWindows.length * 30), y: 100 + (openWindows.length * 30),
+        isMinimized: false, isMaximized: false,
+        prevSize: { width: 800, height: 600 }, prevPosition: { x: 150, y: 100 }
+      }]);
+      setTopZIndex(topZIndex + 1);
+    } catch (err) {
+      alert("파일 내용을 읽을 수 없거나 지원하지 않는 형식입니다.");
+    }
+  };
+
+  const toggleSidebar = (windowId) => setOpenWindows(prev => prev.map(w => w.id === windowId ? { ...w, sidebarOpen: !w.sidebarOpen } : w));
+  
+  // 창 포커스
+  const focusWindow = (id) => { 
+    setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, zIndex: topZIndex + 1 } : w)); 
+    setTopZIndex(topZIndex + 1); 
+  };
+  
+  const closeWindow = (id) => setOpenWindows(openWindows.filter(w => w.id !== id));
+
+  // 창 최소화 처리
+  const toggleMinimize = (id) => {
+    setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, isMinimized: !w.isMinimized } : w));
+  };
+
+  // 창 최대화 및 복원 처리
+  const toggleMaximize = (id) => {
+    setOpenWindows(prev => prev.map(w => {
+      if (w.id !== id) return w;
+      if (!w.isMaximized) {
+        // 최대화 실행 시 현재 크기와 위치를 저장
+        return { ...w, isMaximized: true, prevSize: { width: w.width, height: w.height }, prevPosition: { x: w.x, y: w.y } };
+      } else {
+        // 복원 시 이전 크기와 위치로 되돌림
+        return { ...w, isMaximized: false, width: w.prevSize.width, height: w.prevSize.height, x: w.prevPosition.x, y: w.prevPosition.y };
+      }
+    }));
+  };
+
+  // 파일 편집 모드 전환
+  const toggleEditMode = (id) => {
+    setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, mode: w.mode === 'view' ? 'edit' : 'view' } : w));
+  };
+
+  // 텍스트 파일 수정 사항 반영
+  const handleContentChange = (id, newContent) => {
+    setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, content: newContent } : w));
+  };
+
+  // 수정한 파일 저장 처리
+  const saveFile = async (win) => {
+    try {
+      const blob = new Blob([win.content], { type: 'text/plain' });
+      const file = new File([blob], win.name, { type: 'text/plain' });
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      // 파일이 위치한 상위 폴더 경로 추출
+      const dirPath = win.fullPath.substring(0, win.fullPath.lastIndexOf('/'));
+      formData.append('path', dirPath || '/');
+
+      await axios.post('/api/file', formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } });
+      
+      // 저장 완료 후 원본 텍스트 갱신 및 보기 모드로 전환
+      setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, originalContent: win.content, mode: 'view' } : w));
+      alert("파일이 저장되었습니다.");
+    } catch (err) {
+      alert("파일 저장 중 오류가 발생했습니다.");
+    }
+  };
+
+  useEffect(() => { 
+    openWindows.forEach(w => { 
+      if (w.winType === 'folder' && !w.isLoaded) fetchFiles(w.id, w.currentPath); 
+    }); 
+  }, [openWindows, fetchFiles]);
+
+  const handleCreateDesktopFolder = async () => { /* 기존 로직 생략 없이 유지 */
+    const folderName = window.prompt("새 폴더 이름을 입력하세요:");
+    if (!folderName) return;
+    try {
+      await axios.post('/api/file', { folderName, path: '/' }, { withCredentials: true });
+      loadDesktopItems();
+    } catch (err) { alert("폴더 생성 중 오류가 발생했습니다."); }
+  };
+
+  const handleDesktopUpload = async (e) => { /* 기존 로직 생략 없이 유지 */
+    const file = e.target.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('path', '/');
+    try {
+      await axios.post('/api/file', formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } });
+      loadDesktopItems();
+    } catch (err) { alert("업로드 오류"); } finally { e.target.value = ''; }
+  };
+
+  const handleUp = (win) => { /* 기존 폴더 상위 이동 로직 */
+    if (win.currentPath === win.basePath || win.currentPath === '/') return; 
+    const segments = win.currentPath.split('/').filter(Boolean);
+    segments.pop();
+    const parentPath = segments.length > 0 ? segments.join('/') : '/';
+    fetchFiles(win.id, parentPath);
+  };
+
+  const handleDragStart = (e, item, sourceId) => {
+    e.dataTransfer.setData('application/json', JSON.stringify({ itemName: item.name, oldPath: item.fullPath, sourceId: sourceId }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+
+  const handleDrop = async (e, targetPath, targetId) => {
+    e.preventDefault(); e.stopPropagation(); 
+    try {
+      const dataString = e.dataTransfer.getData('application/json');
+      if (!dataString) return;
+      const { itemName, oldPath, sourceId } = JSON.parse(dataString);
+      const cleanTargetPath = targetPath.endsWith('/') ? targetPath.slice(0, -1) : targetPath;
+      const newPath = `${cleanTargetPath}/${itemName}`;
+
+      if (oldPath === newPath) return;
+      if (newPath.startsWith(oldPath + '/')) return alert("상위 폴더를 자신의 하위 폴더로 이동할 수 없습니다.");
+
+      await axios.put('/api/file', { oldPath, newPath }, { withCredentials: true });
+
+      if (sourceId === 'desktop') loadDesktopItems();
+      else fetchFiles(sourceId, openWindows.find(w => w.id === sourceId).currentPath);
+      if (sourceId !== targetId) {
+        if (targetId === 'desktop') loadDesktopItems();
+        else fetchFiles(targetId, openWindows.find(w => w.id === targetId).currentPath);
+      }
+    } catch (err) { alert("권한이 없거나 오류가 발생했습니다."); }
+  };
+
+  const getRelativeSegments = (current, base) => {
+    if (base === '/') return current.split('/').filter(Boolean);
+    if (current === base) return [];
+    if (current.startsWith(base + '/')) return current.slice(base.length + 1).split('/').filter(Boolean);
+    return current.split('/').filter(Boolean);
+  };
+
+  // 현재 열려있는 파일 창 목록 (작업표시줄 렌더링용)
+  const openedFileWindows = openWindows.filter(w => w.winType === 'file');
+
+  return (
+    <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%', userSelect: 'none', '& .react-resizable-handle': { transition: 'background-color 0.2s ease', zIndex: 100 }, '& .react-resizable-handle:hover': { backgroundColor: theme.palette.primary.main, opacity: 0.5 }}}>
+      
+      {/* 상단 파일 작업표시줄 (Taskbar) 영역 */}
+      {openedFileWindows.length > 0 && (
+        <Box sx={{ 
+          display: 'flex', gap: 1, p: 1, backgroundColor: theme.palette.mode === 'dark' ? '#1e293b' : '#f1f5f9', 
+          borderBottom: `1px solid ${theme.palette.divider}`, overflowX: 'auto', zIndex: 9999
+        }}>
+          {openedFileWindows.map(win => (
+            <Button
+              key={win.id}
+              variant={win.isMinimized ? 'outlined' : 'contained'}
+              color={win.isMinimized ? 'inherit' : 'primary'}
+              onClick={() => {
+                if (win.isMinimized) toggleMinimize(win.id);
+                focusWindow(win.id);
+              }}
+              sx={{ 
+                minWidth: 120, maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', 
+                textTransform: 'none', opacity: win.isMinimized ? 0.6 : 1, fontWeight: 'bold'
+              }}
+              startIcon={<InsertDriveFileIcon />}
+            >
+              {win.name}
+            </Button>
+          ))}
+        </Box>
+      )}
+
+      {/* 바탕화면 및 윈도우 렌더링 영역 */}
+      <Box onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, '/', 'desktop')} sx={{ flex: 1, position: 'relative', p: 3, background: theme.palette.mode === 'dark' ? 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)' : 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #93c5fd 100%)'}}>
+        
+        {/* 바탕화면 아이콘 */}
+        <Grid container spacing={4}>
+          <Grid item>
+            <motion.div whileHover={{ scale: 1.05 }} onClick={() => openFolderWindow({ id: 'system_root', name: isAdmin ? '서버 전체 저장소' : '내 클라우드', path: '/' })} style={{ textAlign: 'center', cursor: 'pointer', width: '100px' }}>
+              <Box sx={{ color: 'white', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
+                <StorageIcon sx={{ fontSize: 60, color: isAdmin ? '#ef4444' : '#fde047' }} />
+                <Typography variant="body2" sx={{ mt: 1, fontWeight: 'bold' }}>{isAdmin ? '서버 전체 저장소' : '내 클라우드'}</Typography>
+              </Box>
+            </motion.div>
+          </Grid>
+
+          {desktopItems.map((item, idx) => (
+            <Grid item key={idx}>
+              <motion.div 
+                draggable onDragStart={(e) => handleDragStart(e, item, 'desktop')}
+                onDragOver={item.type === 'folder' ? handleDragOver : undefined}
+                onDrop={item.type === 'folder' ? (e) => handleDrop(e, item.fullPath, 'desktop') : undefined}
+                whileHover={{ scale: 1.05 }} 
+                onDoubleClick={() => {
+                  if (item.type === 'folder') openFolderWindow({ id: `desk_${item.name}`, name: item.name, path: item.fullPath });
+                  else openFileWindow(item); // 파일 더블클릭 시 뷰어 호출
+                }} 
+                style={{ textAlign: 'center', cursor: 'pointer', width: '100px' }}
+              >
+                <Box sx={{ color: 'white', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
+                  {item.type === 'folder' ? <FolderIcon sx={{ fontSize: 60, color: '#fde047' }} /> : <InsertDriveFileIcon sx={{ fontSize: 60, color: '#e2e8f0' }} />}
+                  <Typography variant="body2" sx={{ mt: 1, fontWeight: 'bold' }}>{item.name}</Typography>
+                </Box>
+              </motion.div>
+            </Grid>
+          ))}
+        </Grid>
+
+        <Box sx={{ position: 'absolute', bottom: 30, right: 30, display: 'flex', gap: 2 }}>
+          <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleDesktopUpload} />
+          <Button variant="contained" color="secondary" onClick={() => fileInputRef.current.click()} startIcon={<UploadFileIcon />} sx={{ fontWeight: 'bold' }}>업로드</Button>
+          <Button variant="contained" color="primary" onClick={handleCreateDesktopFolder} startIcon={<CreateNewFolderIcon />} sx={{ fontWeight: 'bold' }}>새 폴더</Button>
+        </Box>
+
+        {/* 윈도우 창 렌더링 (폴더 및 파일) */}
+        <AnimatePresence>
+          {openWindows.map((win) => {
+            // 최소화 상태면 화면에서 숨김 처리
+            if (win.isMinimized) return null;
+
+            // 최대화 상태 적용
+            const width = win.isMaximized ? '100%' : (isMobile ? '100vw' : win.width);
+            const height = win.isMaximized ? '100%' : (isMobile ? '100%' : win.height);
+            const x = win.isMaximized || isMobile ? 0 : win.x;
+            const y = win.isMaximized || isMobile ? 0 : win.y;
+
+            return (
+              <Rnd 
+                key={win.id} style={{ zIndex: win.zIndex }} 
+                disableDragging={isMobile || win.isMaximized} 
+                enableResizing={!isMobile && !win.isMaximized} 
+                minWidth={500} minHeight={350} 
+                size={{ width, height }} position={{ x, y }} 
+                bounds="parent" onMouseDown={() => focusWindow(win.id)}
+                onDragStop={(e, d) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, x: d.x, y: d.y } : w))}
+                onResizeStop={(e, direction, ref, delta, position) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, width: ref.style.width, height: ref.style.height, x: position.x, y: position.y } : w))}
+                dragHandleClassName="window-header-drag-handle"
+              >
+                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} style={{ height: '100%', width: '100%' }}>
+                  <Paper elevation={12} sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderRadius: (isMobile || win.isMaximized) ? 0 : 2, overflow: 'hidden', background: theme.palette.background.paper, color: theme.palette.text.primary, border: `1px solid ${theme.palette.divider}`, boxShadow: theme.palette.mode === 'dark' ? `0 0 15px ${theme.palette.divider}` : theme.shadows[12] }}>
+                    
+                    {/* 공통 창 상단 제어 바 */}
+                    <Box className="window-header-drag-handle" sx={{ p: 1, background: theme.palette.background.default, borderBottom: `2px solid ${theme.palette.divider}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: win.isMaximized ? 'default' : 'move' }}>
+                      
+                      {/* 폴더일 경우 경로 표시, 파일일 경우 파일명 표시 */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, overflow: 'hidden' }}>
+                        {win.winType === 'folder' ? (
+                          <>
+                            <IconButton size="small" onClick={() => toggleSidebar(win.id)} color="primary" onMouseDown={(e) => e.stopPropagation()}><MenuIcon /></IconButton>
+                            <IconButton size="small" onClick={() => handleUp(win)} disabled={win.currentPath === win.basePath} color="inherit" onMouseDown={(e) => e.stopPropagation()}><ArrowBackIcon /></IconButton>
+                            <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', ml: 1 }} onMouseDown={(e) => e.stopPropagation()}>
+                              <Typography onClick={() => fetchFiles(win.id, win.basePath)} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800 }}>
+                                {win.name}
+                              </Typography>
+                              {getRelativeSegments(win.currentPath, win.basePath).map((segment, idx, arr) => {
+                                const absoluteToHere = win.basePath === '/' ? arr.slice(0, idx + 1).join('/') : win.basePath + '/' + arr.slice(0, idx + 1).join('/');
+                                return (
+                                  <React.Fragment key={idx}>
+                                    <Typography sx={{ mx: 0.5, color: 'text.secondary' }}>/</Typography>
+                                    <Typography onClick={() => fetchFiles(win.id, absoluteToHere)} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800 }}>{segment}</Typography>
+                                  </React.Fragment>
+                                );
+                              })}
+                            </Box>
+                          </>
+                        ) : (
+                          <>
+                            <InsertDriveFileIcon color="primary" />
+                            <Typography sx={{ fontWeight: 800 }}>{win.name}</Typography>
+                          </>
+                        )}
+                      </Box>
+                      
+                      {/* 창 제어 버튼 그룹 (최소화, 최대화/복원, 닫기) */}
+                      <Box onMouseDown={(e) => e.stopPropagation()}>
+                        <IconButton size="small" onClick={() => toggleMinimize(win.id)}><RemoveIcon fontSize="small"/></IconButton>
+                        <IconButton size="small" onClick={() => toggleMaximize(win.id)}>{win.isMaximized ? <FilterNoneIcon fontSize="small"/> : <CropSquareIcon fontSize="small"/>}</IconButton>
+                        <IconButton size="small" onClick={() => closeWindow(win.id)} color="error"><CloseIcon fontSize="small"/></IconButton>
+                      </Box>
+                    </Box>
+                    
+                    {/* 창 내부 컨텐츠 영역 분기 (폴더 vs 파일) */}
+                    <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
+                      
+                      {/* 1. 폴더 뷰 */}
+                      {win.winType === 'folder' && (
+                        <>
+                          <AnimatePresence>
+                            {win.sidebarOpen && (
+                              <motion.div initial={{ x: -220 }} animate={{ x: 0 }} exit={{ x: -220 }} transition={{ type: 'tween', duration: 0.2 }} style={{ width: 220, height: '100%', backgroundColor: theme.palette.background.default, borderRight: `1px solid ${theme.palette.divider}`, zIndex: 10 }}>
+                                <List sx={{ pt: 1 }}>
+                                  <ListItem button onClick={() => fetchFiles(win.id, win.basePath)}>
+                                    <ListItemIcon sx={{ minWidth: 40 }}><StorageIcon color="primary"/></ListItemIcon>
+                                    <ListItemText primary={<Typography sx={{ fontWeight: 600 }}>{win.name}</Typography>} />
+                                  </ListItem>
+                                </List>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                          <TableContainer onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} sx={{ flex: 1, background: 'transparent' }}>
+                            <Table stickyHeader size="small">
+                              <TableBody>
+                                {win.files.map((file, idx) => (
+                                  <TableRow 
+                                    key={idx} hover draggable
+                                    onDragStart={(e) => handleDragStart(e, file, win.id)}
+                                    onDragOver={file.type === 'folder' ? handleDragOver : undefined}
+                                    onDrop={file.type === 'folder' ? (e) => handleDrop(e, file.fullPath, win.id) : undefined}
+                                    onDoubleClick={() => {
+                                      if (file.type === 'folder') fetchFiles(win.id, file.fullPath);
+                                      else openFileWindow(file); // 더블클릭 시 파일 뷰어 호출
+                                    }} sx={{ cursor: 'pointer' }}
+                                  >
+                                    <TableCell sx={{ display: 'flex', alignItems: 'center', py: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
+                                      {file.type === 'folder' ? <FolderIcon sx={{ mr: 1.5, color: '#fbbf24' }} /> : <InsertDriveFileIcon sx={{ mr: 1.5, color: theme.palette.text.secondary }} />}
+                                      <Typography>{file.name}</Typography>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </TableContainer>
+                        </>
+                      )}
+
+                      {/* 2. 파일 뷰어 및 편집기 */}
+                      {win.winType === 'file' && (
+                        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2, overflow: 'auto', backgroundColor: theme.palette.mode === 'dark' ? '#0f172a' : '#ffffff' }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+                            {win.mode === 'view' ? (
+                              <Button variant="contained" size="small" startIcon={<EditIcon />} onClick={() => toggleEditMode(win.id)}>편집 모드</Button>
+                            ) : (
+                              <Box sx={{ display: 'flex', gap: 1 }}>
+                                <Button variant="outlined" size="small" startIcon={<VisibilityIcon />} onClick={() => toggleEditMode(win.id)}>보기 모드</Button>
+                                <Button variant="contained" size="small" color="success" startIcon={<SaveIcon />} onClick={() => saveFile(win)}>저장</Button>
+                              </Box>
+                            )}
+                          </Box>
+
+                          {/* 보기 모드 (읽기 전용 pre 태그) / 편집 모드 (TextField) */}
+                          {win.mode === 'view' ? (
+                            <Typography component="pre" sx={{ flex: 1, margin: 0, p: 2, border: `1px solid ${theme.palette.divider}`, borderRadius: 1, overflow: 'auto', backgroundColor: theme.palette.mode === 'dark' ? '#1e293b' : '#f8fafc', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                              {win.content}
+                            </Typography>
+                          ) : (
+                            <TextField
+                              multiline fullWidth variant="outlined"
+                              value={win.content}
+                              onChange={(e) => handleContentChange(win.id, e.target.value)}
+                              sx={{ flex: 1, '& .MuiInputBase-root': { height: '100%', alignItems: 'flex-start', fontFamily: 'monospace' } }}
+                            />
+                          )}
+                        </Box>
+                      )}
+
+                    </Box>
+                  </Paper>
+                </motion.div>
+              </Rnd>
+            );
+          })}
+        </AnimatePresence>
+      </Box>
+    </Box>
+  );
+};
+
+export default NAS;

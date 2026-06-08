@@ -1,0 +1,131 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  listNotifications,
+  readAllNotifications,
+  readNotificationGroup,
+} from './notificationApi';
+import {
+  getNotificationBadgeCount,
+  groupNotificationsForDisplay,
+  markAllNotificationsAsReadLocal,
+  markNotificationGroupAsReadLocal,
+} from './notificationSelectors';
+
+const useNotifications = ({
+  user,
+  open = false,
+  socket = null,
+  onNavigateFromNotification = () => {},
+}) => {
+  const [loading, setLoading] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+
+  const syncNotifications = useCallback((items) => {
+    setNotifications(Array.isArray(items) ? items : []);
+  }, []);
+
+  const refreshNotifications = useCallback(async ({ silent = false } = {}) => {
+    if (!user) {
+      syncNotifications([]);
+      return;
+    }
+
+    try {
+      if (!silent) setLoading(true);
+      const items = await listNotifications();
+      syncNotifications(items);
+    } catch (err) {
+      console.error('알림 목록 로드 실패', err);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [user, syncNotifications]);
+
+  useEffect(() => {
+    refreshNotifications();
+    if (!user) return undefined;
+
+    const interval = setInterval(() => {
+      refreshNotifications({ silent: true });
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [user, refreshNotifications]);
+
+  useEffect(() => {
+    if (!open || !user) return undefined;
+    refreshNotifications({ silent: true });
+    return undefined;
+  }, [open, user, refreshNotifications]);
+
+  useEffect(() => {
+    if (!socket || !user) return undefined;
+
+    const handleIncomingChatMessage = () => {
+      refreshNotifications({ silent: true });
+    };
+
+    socket.on('chat:message', handleIncomingChatMessage);
+
+    return () => {
+      socket.off('chat:message', handleIncomingChatMessage);
+    };
+  }, [socket, user, refreshNotifications]);
+
+  const handleNotificationClick = useCallback(async (notification) => {
+    const prev = notifications;
+    const next = markNotificationGroupAsReadLocal(notifications, notification);
+
+    try {
+      syncNotifications(next);
+
+      if (notification && !notification.isRead) {
+        await readNotificationGroup({
+          notificationId: notification.notificationId,
+          conversationId: String(notification?.meta?.conversationId || ''),
+          fromUserUid: String(notification?.meta?.fromUserUid || ''),
+        });
+      }
+
+      onNavigateFromNotification(notification);
+    } catch (err) {
+      syncNotifications(prev);
+      alert(err.response?.data?.error || '알림 처리에 실패했습니다.');
+    }
+  }, [notifications, syncNotifications, onNavigateFromNotification]);
+
+  const handleReadAll = useCallback(async () => {
+    const prev = notifications;
+    const next = markAllNotificationsAsReadLocal(notifications);
+
+    try {
+      syncNotifications(next);
+      await readAllNotifications();
+    } catch (err) {
+      syncNotifications(prev);
+      alert(err.response?.data?.error || '전체 읽음 처리에 실패했습니다.');
+    }
+  }, [notifications, syncNotifications]);
+
+  const visibleNotifications = useMemo(
+    () => groupNotificationsForDisplay(notifications),
+    [notifications]
+  );
+
+  const unreadCount = useMemo(
+    () => getNotificationBadgeCount(notifications),
+    [notifications]
+  );
+
+  return {
+    loading,
+    notifications,
+    visibleNotifications,
+    unreadCount,
+    refreshNotifications,
+    handleNotificationClick,
+    readAllNotifications: handleReadAll,
+  };
+};
+
+export default useNotifications;

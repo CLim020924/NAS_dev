@@ -1,0 +1,172 @@
+const express = require('express');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const fs = require('fs');
+const path = require('path');
+const http = require('http');           
+const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: true, credentials: true }
+});
+app.set('io', io);
+
+const JWT_SECRET = process.env.JWT_SECRET || 'my-service-platform-secure-key-2026';
+const nasPath = '/mnt/nas';
+// 서버 시작 시 루트 백업 폴더 생성
+const systemBackupPath = '/mnt/nas/backup';
+if (!fs.existsSync(systemBackupPath)) fs.mkdirSync(systemBackupPath, { recursive: true });
+ 
+
+app.use(express.json());
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
+
+// 데이터 로드
+const membersFilePath = path.join(__dirname, 'data', 'members.json');
+const requestsFilePath = path.join(__dirname, 'data', 'requests.json');
+let signupRequests = [];
+let approvedUsers = [];
+
+function loadData() {
+  try {
+    if (fs.existsSync(membersFilePath)) approvedUsers = JSON.parse(fs.readFileSync(membersFilePath, 'utf8'));
+    else { approvedUsers = [{"id": "admin", "password": "1234567890", "Masters": true, "Managers": true, "disabled": false, "globalAccess": true}]; saveMembers(); }
+  } catch (e) { approvedUsers = [{"id": "admin", "password": "1234567890", "Masters": true, "Managers": true, "globalAccess": true}]; }
+  try { if (fs.existsSync(requestsFilePath)) signupRequests = JSON.parse(fs.readFileSync(requestsFilePath, 'utf8')); } catch (e) { signupRequests = []; }
+}
+const saveMembers = () => fs.writeFileSync(membersFilePath, JSON.stringify(approvedUsers, null, 2));
+const saveRequests = () => fs.writeFileSync(requestsFilePath, JSON.stringify(signupRequests, null, 2));
+loadData();
+
+// 라우터 연결
+const nasRoutes = require('./nasRoutes');
+app.use('/api', nasRoutes);
+
+// --- API 영역 ---
+
+// [로그인]
+app.post('/api/login', (req, res) => {
+  const { id, password } = req.body;
+  const user = approvedUsers.find(u => u.id === id && u.password === password);
+  if (!user) return res.status(401).json({ error: '아이디/비번이 틀렸습니다.' });
+  const role = user.Masters ? 'MASTER' : (user.Managers ? 'MANAGER' : 'USER');
+  const token = jwt.sign({ id: user.id, role, Masters: user.Masters, Managers: user.Managers, globalAccess: user.globalAccess, rootPath: user.rootPath }, JWT_SECRET, { expiresIn: '1d' });
+  res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: 24*60*60*1000 });
+  res.json({ message: '성공', user: { ...user, role } });
+});
+
+// [회원가입 요청]
+app.post('/api/signup-request', (req, res) => {
+  const { id, password } = req.body;
+  if (approvedUsers.find(u => u.id === id) || signupRequests.find(r => r.id === id)) return res.status(400).json({ error: '이미 존재함' });
+  signupRequests.push({ id, password, date: new Date().toISOString().split('T')[0] });
+  saveRequests(); io.emit('membersChanged'); res.json({ success: true });
+});
+
+// [유저 데이터 조회]
+app.get('/api/users/data', (req, res) => {
+  const connectedIds = Array.from(io.sockets.sockets.values()).map(s => s.userId).filter(Boolean);
+  const users = approvedUsers.map(u => ({
+    id: u.id, username: u.id, role: u.Masters ? 'MASTER' : (u.Managers ? 'MANAGER' : 'USER'),
+    globalAccess: u.globalAccess, isOnline: connectedIds.includes(u.id), rootPath: u.rootPath || ''
+  }));
+  res.json({ users, pendingUsers: signupRequests });
+});
+
+// [권한 업데이트 & 강제 로그아웃 방송]
+app.put('/api/users/update', (req, res) => {
+  const updatedIds = [];
+  req.body.users.forEach(u => {
+    const target = approvedUsers.find(au => au.id === u.id);
+    if (target && target.id !== 'admin') {
+      if ((target.role !== u.role || target.globalAccess !== u.globalAccess) && u.role !== 'MASTER') updatedIds.push(u.id);
+      target.Masters = u.role === 'MASTER';
+      target.Managers = u.role === 'MANAGER' || u.role === 'MASTER';
+      target.globalAccess = u.role === 'MASTER' ? true : u.globalAccess;
+      target.role = u.role || target.role; // 🔥 권한 문자열 누락 픽스!
+      target.rootPath = u.rootPath || u.root_path || target.rootPath; // 🔥 대망의 경로 DB 저장 마법!
+    }
+  });
+  saveMembers();
+  updatedIds.forEach(targetId => io.emit('force_logout_target', { targetId }));
+  io.emit('membersChanged'); res.json({ success: true });
+});
+
+// [보안 계정 삭제 & 폴더 백업]
+app.post('/api/users/delete', (req, res) => {
+  const { targetId, adminId, adminPassword } = req.body;
+  const admin = approvedUsers.find(u => u.id === adminId);
+  if (!admin || admin.password !== adminPassword) return res.status(401).json({ error: '비밀번호 불일치' });
+  if (targetId === 'admin') return res.status(400).json({ error: '삭제 불가 계정' });
+
+  // 폴더 백업 이동
+  const userPath = path.join(nasPath, 'users', targetId);
+  const backupDir = path.join(nasPath, 'backup');
+  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+  if (fs.existsSync(userPath)) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.renameSync(userPath, path.join(backupDir, `${targetId}_${ts}`));
+  }
+
+  approvedUsers = approvedUsers.filter(u => u.id !== targetId);
+  saveMembers();
+  io.emit('force_logout_target', { targetId });
+  io.emit('membersChanged'); res.json({ success: true });
+});
+
+// [비밀번호 변경]
+app.put('/api/users/password', (req, res) => {
+  const { id, currentPassword, newPassword } = req.body;
+  const user = approvedUsers.find(u => u.id === id);
+  if (!user || user.password !== currentPassword) return res.status(401).json({ error: '비밀번호 틀림' });
+  user.password = newPassword; saveMembers(); res.json({ success: true });
+});
+
+// [승인/거절]
+
+// 🔥 [긴급 복구] 가입 거절 API
+app.post('/api/users/reject', (req, res) => {
+  const { id } = req.body;
+  signupRequests = signupRequests.filter(r => r.id !== id);
+  saveRequests();
+  io.emit('membersChanged');
+  res.json({ success: true });
+});
+
+app.post('/api/users/approve', (req, res) => {
+  const { id } = req.body;
+  const reqUser = signupRequests.find(r => r.id === id);
+  if (!reqUser) return res.status(404).json({ error: '없음' });
+  approvedUsers.push({ ...reqUser, Masters: false, Managers: false, globalAccess: false });
+  signupRequests = signupRequests.filter(r => r.id !== id);
+  const upath = path.join(nasPath, 'users', id);
+  if (!fs.existsSync(upath)) fs.mkdirSync(upath, { recursive: true });
+  saveMembers(); saveRequests(); io.emit('membersChanged'); res.json({ success: true });
+});
+
+io.on('connection', (socket) => {
+  const cookies = socket.handshake.headers.cookie;
+  if (cookies) {
+    const token = cookies.split('; ').find(row => row.startsWith('token='))?.split('=')[1];
+    try { socket.userId = jwt.verify(token, JWT_SECRET).id; io.emit('membersChanged'); } catch(e){}
+  }
+  socket.on('disconnect', () => { if(socket.userId) setTimeout(()=>io.emit('membersChanged'), 1000); });
+});
+
+
+// 🎨 [프론트엔드 라우팅 방어] 모르는 주소는 다 리액트(index.html)로 토스!
+
+
+
+// 🎨 [프론트엔드 라우팅 방어] 모르는 경로는 전부 index.html로!
+app.use(express.static('/var/www/html'));
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api')) return res.status(404).json({error: 'API Not Found'});
+  res.sendFile('/var/www/html/index.html');
+});
+
+server.listen(3030, () => console.log('🚀 서버 부활!'));

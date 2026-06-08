@@ -1,0 +1,466 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Drawer,
+  Box,
+  Typography,
+  List,
+  ListItemAvatar,
+  ListItemText,
+  Avatar,
+  Badge,
+  TextField,
+  InputAdornment,
+  IconButton,
+  Divider,
+  useTheme,
+  CircularProgress,
+  ListItemButton,
+  Menu,
+  MenuItem,
+  Tooltip,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import SearchIcon from '@mui/icons-material/Search';
+import CircleIcon from '@mui/icons-material/Circle';
+import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import BlockIcon from '@mui/icons-material/Block';
+import PersonRemoveIcon from '@mui/icons-material/PersonRemove';
+import Button from '@mui/material/Button';
+import axios from 'axios';
+import FriendManagePanel from './FriendManagePanel';
+
+const SIDEBAR_WIDTH = 360;
+
+const MessageSidebar = ({ open, onClose }) => {
+  const theme = useTheme();
+  const sidebarSignatureRef = useRef('');
+
+  const [loading, setLoading] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+
+  const [friends, setFriends] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [outgoingRequests, setOutgoingRequests] = useState([]);
+  const [blockedUsers, setBlockedUsers] = useState([]);
+  const [canViewAllUsers, setCanViewAllUsers] = useState(false);
+
+  const [filterQuery, setFilterQuery] = useState('');
+  const [manageSearchQuery, setManageSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+
+  const [actionAnchorEl, setActionAnchorEl] = useState(null);
+  const [actionUser, setActionUser] = useState(null);
+
+  const applySidebarData = useCallback((data) => {
+    const next = {
+      friends: data.friends || [],
+      incomingRequests: data.incomingRequests || [],
+      outgoingRequests: data.outgoingRequests || [],
+      blockedUsers: data.blockedUsers || [],
+      canViewAllUsers: !!data.canViewAllUsers,
+    };
+
+    const signature = JSON.stringify(next);
+    if (sidebarSignatureRef.current === signature) return;
+
+    sidebarSignatureRef.current = signature;
+    setFriends(next.friends);
+    setIncomingRequests(next.incomingRequests);
+    setOutgoingRequests(next.outgoingRequests);
+    setBlockedUsers(next.blockedUsers);
+    setCanViewAllUsers(next.canViewAllUsers);
+  }, []);
+
+  const loadSidebar = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) setLoading(true);
+      const res = await axios.get('/api/friends/sidebar', { withCredentials: true });
+      applySidebarData(res.data || {});
+    } catch (err) {
+      console.error('친구 목록 로드 실패', err);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [applySidebarData]);
+
+  const refreshManageSearch = useCallback(async () => {
+    const q = manageSearchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      setSearching(true);
+      const res = await axios.get('/api/friends/search', {
+        params: { q },
+        withCredentials: true,
+      });
+      setSearchResults(res.data.results || []);
+    } catch (err) {
+      console.error('친구 검색 실패', err);
+    } finally {
+      setSearching(false);
+    }
+  }, [manageSearchQuery]);
+
+  useEffect(() => {
+    if (!open) {
+      setManageOpen(false);
+      return;
+    }
+
+    loadSidebar();
+    const interval = setInterval(() => loadSidebar({ silent: true }), 5000);
+    return () => clearInterval(interval);
+  }, [open, loadSidebar]);
+
+  useEffect(() => {
+    if (!open || !manageOpen) return;
+    const timer = setTimeout(() => {
+      refreshManageSearch();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [open, manageOpen, manageSearchQuery, refreshManageSearch]);
+
+  const filteredFriends = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    if (!q) return friends;
+
+    return friends.filter((u) =>
+      [u.username, u.displayName, u.nickname]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [friends, filterQuery]);
+
+  const openActionMenu = (event, user) => {
+    event.stopPropagation();
+    setActionAnchorEl(event.currentTarget);
+    setActionUser(user);
+  };
+
+  const closeActionMenu = () => {
+    setActionAnchorEl(null);
+    setActionUser(null);
+  };
+
+  const runAndRefresh = async (runner) => {
+    await runner();
+    await loadSidebar({ silent: true });
+    await refreshManageSearch();
+  };
+
+  const handleRequestFriend = async (targetUserUid) => {
+    try {
+      await runAndRefresh(() =>
+        axios.post('/api/friends/request', { targetUserUid }, { withCredentials: true })
+      );
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 요청에 실패했습니다.');
+    }
+  };
+
+  const handleAccept = async (relationId) => {
+    try {
+      await runAndRefresh(() =>
+        axios.post('/api/friends/accept', { relationId }, { withCredentials: true })
+      );
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 요청 수락에 실패했습니다.');
+    }
+  };
+
+  const handleReject = async (relationId) => {
+    try {
+      await runAndRefresh(() =>
+        axios.post('/api/friends/reject', { relationId }, { withCredentials: true })
+      );
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 요청 거절에 실패했습니다.');
+    }
+  };
+
+  const handleRemove = async (targetUserUid) => {
+    if (!window.confirm('이 친구를 친구 목록에서 제거할까요?')) return;
+    try {
+      await runAndRefresh(() =>
+        axios.post('/api/friends/remove', { targetUserUid }, { withCredentials: true })
+      );
+    } catch (err) {
+      alert(err.response?.data?.error || '친구 제거에 실패했습니다.');
+    }
+  };
+
+  const handleToggleFavorite = async (targetUserUid, favorite) => {
+    try {
+      await runAndRefresh(() =>
+        axios.post('/api/friends/favorite', { targetUserUid, favorite }, { withCredentials: true })
+      );
+    } catch (err) {
+      alert(err.response?.data?.error || '즐겨찾기 변경에 실패했습니다.');
+    }
+  };
+
+  const handleToggleBlock = async (targetUserUid, blocked) => {
+    const message = blocked ? '이 사용자를 차단할까요?' : '이 사용자의 차단을 해제할까요?';
+    if (!window.confirm(message)) return;
+    try {
+      await runAndRefresh(() =>
+        axios.post('/api/friends/block', { targetUserUid, blocked }, { withCredentials: true })
+      );
+    } catch (err) {
+      alert(err.response?.data?.error || '차단 설정 변경에 실패했습니다.');
+    }
+  };
+
+  const sectionTitle = useMemo(
+    () => (canViewAllUsers ? '전체 사용자' : '친구 목록'),
+    [canViewAllUsers]
+  );
+
+  const FriendRow = ({ user }) => (
+    <ListItemButton
+      sx={{
+        borderRadius: 2,
+        mb: 0.5,
+        alignItems: 'flex-start',
+      }}
+    >
+      <ListItemAvatar>
+        <Badge
+          overlap="circular"
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          badgeContent={
+            <CircleIcon
+              sx={{
+                fontSize: 14,
+                color: user.isOnline ? 'success.main' : 'text.disabled',
+                border: `2px solid ${theme.palette.background.paper}`,
+                borderRadius: '50%',
+              }}
+            />
+          }
+        >
+          <Avatar
+            sx={{
+              width: 40,
+              height: 40,
+              bgcolor:
+                user.role === 'MASTER'
+                  ? 'error.main'
+                  : user.role === 'MANAGER'
+                  ? 'warning.main'
+                  : 'primary.main',
+              fontWeight: 'bold',
+            }}
+          >
+            {(user.displayName || user.username)?.[0]?.toUpperCase()}
+          </Avatar>
+        </Badge>
+      </ListItemAvatar>
+
+      <ListItemText
+        primary={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>
+              {user.displayName || user.username}
+            </Typography>
+            {user.isFavorite && <StarIcon sx={{ fontSize: 16, color: 'warning.main' }} />}
+          </Box>
+        }
+        secondary={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+            {user.displayName && user.displayName !== user.username && (
+              <>
+                <Typography variant="caption" color="text.secondary">
+                  @{user.username}
+                </Typography>
+                <Divider orientation="vertical" flexItem sx={{ height: 10, my: 'auto' }} />
+              </>
+            )}
+            <Typography
+              variant="caption"
+              sx={{
+                color: user.role === 'MASTER' ? 'error.main' : 'text.secondary',
+                fontWeight: 'bold',
+              }}
+            >
+              {user.role}
+            </Typography>
+            <Divider orientation="vertical" flexItem sx={{ height: 10, my: 'auto' }} />
+            <Typography variant="caption" sx={{ color: user.isOnline ? 'success.main' : 'text.secondary' }}>
+              {user.isOnline ? '온라인' : '오프라인'}
+            </Typography>
+          </Box>
+        }
+        sx={{ mr: 1 }}
+      />
+
+      <Box sx={{ ml: 1, display: 'flex', alignItems: 'center' }}>
+        {user.relationStatus === 'ACCEPTED' && (
+          <Tooltip title="더보기">
+            <IconButton size="small" onClick={(e) => openActionMenu(e, user)}>
+              <MoreVertIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
+      </Box>
+    </ListItemButton>
+  );
+
+  return (
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      sx={{ zIndex: (muiTheme) => muiTheme.zIndex.drawer + 2 }}
+      PaperProps={{
+        sx: {
+          width: { xs: '88vw', sm: SIDEBAR_WIDTH },
+          backgroundColor: 'background.paper',
+          color: 'text.primary',
+          overflow: 'visible',
+        },
+      }}
+    >
+      <Box sx={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'visible' }}>
+        <FriendManagePanel
+          open={manageOpen}
+          width={SIDEBAR_WIDTH}
+          manageSearchQuery={manageSearchQuery}
+          setManageSearchQuery={setManageSearchQuery}
+          searching={searching}
+          searchResults={searchResults}
+          incomingRequests={incomingRequests}
+          outgoingRequests={outgoingRequests}
+          blockedUsers={blockedUsers}
+          onClose={() => setManageOpen(false)}
+          onRequestFriend={handleRequestFriend}
+          onAccept={handleAccept}
+          onReject={handleReject}
+          onToggleBlock={handleToggleBlock}
+        />
+
+        <Box
+          sx={{
+            p: 2,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            backgroundColor: 'background.default',
+            borderBottom: `1px solid ${theme.palette.divider}`,
+          }}
+        >
+          <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1.1rem' }}>
+            메세지 & 친구
+          </Typography>
+          <IconButton onClick={onClose} size="small">
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+
+        <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}` }}>
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="친구 목록 검색"
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <Button
+            fullWidth
+            sx={{ mt: 1.25 }}
+            variant={manageOpen ? 'contained' : 'outlined'}
+            startIcon={<ManageAccountsIcon />}
+            onClick={() => setManageOpen((prev) => !prev)}
+          >
+            친구 관리
+          </Button>
+        </Box>
+
+        <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 1.25 }}>
+          {loading ? (
+            <Box sx={{ py: 6, display: 'flex', justifyContent: 'center' }}>
+              <CircularProgress size={28} />
+            </Box>
+          ) : (
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ px: 1, pb: 1, fontWeight: 800 }}>
+                {sectionTitle}
+              </Typography>
+              {filteredFriends.length === 0 ? (
+                <Typography variant="body2" sx={{ px: 1, py: 1, color: 'text.secondary' }}>
+                  {canViewAllUsers ? '표시할 사용자가 없습니다.' : '아직 친구가 없습니다.'}
+                </Typography>
+              ) : (
+                <List disablePadding>
+                  {filteredFriends.map((u) => (
+                    <FriendRow key={`friend-${u.userUid}`} user={u} />
+                  ))}
+                </List>
+              )}
+            </Box>
+          )}
+        </Box>
+
+        <Menu
+          anchorEl={actionAnchorEl}
+          open={Boolean(actionAnchorEl)}
+          onClose={closeActionMenu}
+          PaperProps={{ sx: { minWidth: 180, borderRadius: 2 } }}
+        >
+          <MenuItem
+            onClick={async () => {
+              const user = actionUser;
+              closeActionMenu();
+              if (!user) return;
+              await handleToggleFavorite(user.userUid, !user.isFavorite);
+            }}
+          >
+            {actionUser?.isFavorite ? <StarIcon fontSize="small" sx={{ mr: 1.25 }} /> : <StarBorderIcon fontSize="small" sx={{ mr: 1.25 }} />}
+            {actionUser?.isFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
+          </MenuItem>
+
+          <MenuItem
+            onClick={async () => {
+              const user = actionUser;
+              closeActionMenu();
+              if (!user) return;
+              await handleToggleBlock(user.userUid, !user.isBlockedByMe);
+            }}
+          >
+            <BlockIcon fontSize="small" sx={{ mr: 1.25 }} />
+            {actionUser?.isBlockedByMe ? '차단 해제' : '차단'}
+          </MenuItem>
+
+          <MenuItem
+            onClick={async () => {
+              const user = actionUser;
+              closeActionMenu();
+              if (!user) return;
+              await handleRemove(user.userUid);
+            }}
+            sx={{ color: 'error.main' }}
+          >
+            <PersonRemoveIcon fontSize="small" sx={{ mr: 1.25 }} />
+            친구 제거
+          </MenuItem>
+        </Menu>
+      </Box>
+    </Drawer>
+  );
+};
+
+export default MessageSidebar;

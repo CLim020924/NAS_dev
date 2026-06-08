@@ -1,0 +1,127 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Box, Typography, Button, useTheme, useMediaQuery } from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
+import SaveIcon from '@mui/icons-material/Save';
+import PrintIcon from '@mui/icons-material/Print';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import Editor from '@monaco-editor/react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { DocumentEditor } from "@onlyoffice/document-editor-react";
+import { useWindows } from '../../contexts/WindowContext';
+
+const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile }) => {
+  const theme = useTheme(); // 오타 수정 완료
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const { focusedContext } = useWindows();
+  const [isSaving, setIsSaving] = useState(false);
+  const editorRef = useRef(null);
+  
+  const { ext, url, name, isBinary, content, mode } = win;
+
+  // 변수 선언 최상단 배치
+  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic', 'heif'].includes(ext);
+  const isVideo = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(ext);
+  const isAudio = ['mp3', 'wav', 'flac', 'm4a'].includes(ext);
+  const isOffice = ['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt', 'pdf'].includes(ext);
+  const isMarkdown = ext === 'md';
+
+  const currentUser = JSON.parse(localStorage.getItem('user')) || {};
+  const isAdmin = currentUser.Masters || currentUser.Managers;
+
+  const handleNasSave = () => {
+    if (editorRef.current && isOffice && ext !== 'pdf') {
+      setIsSaving(true);
+      editorRef.current.serviceCommand('forceSave');
+      setTimeout(() => setIsSaving(false), 2000);
+    }
+  };
+
+  const handleNasPrint = () => {
+    if (editorRef.current && isOffice) {
+      // 도커 오피스 내부 인쇄 기능 강제 호출
+      editorRef.current.serviceCommand('print'); 
+    }
+  };
+
+  // 단축키 가로채기 (윈도우 포커스 기반)
+  useEffect(() => {
+    const handleKeydown = (e) => {
+      if (focusedContext !== win.id || !isOffice || !editorRef.current) return;
+      const isCtrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      if (isCtrl && (key === 'p' || key === 's')) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (key === 'p') handleNasPrint();
+        else if (key === 's') handleNasSave();
+      }
+    };
+    window.addEventListener('keydown', handleKeydown, true);
+    return () => window.removeEventListener('keydown', handleKeydown, true);
+  }, [focusedContext, win.id, isOffice]);
+
+  useEffect(() => {
+    return () => {
+      if (isOffice && editorRef.current && ext !== 'pdf') {
+        editorRef.current.serviceCommand('forceSave');
+      }
+    };
+  }, [isOffice, ext]);
+
+  const officeConfig = useMemo(() => {
+    if (!isOffice) return null;
+    const absoluteUrl = `${window.location.origin}${url}&oosecret=nas_office_2026&officeUid=${currentUser.id || ''}&officeRoot=${encodeURIComponent(currentUser.rootPath || '')}&officeAdmin=${isAdmin ? 'true' : 'false'}`;
+    const callbackUrl = `${window.location.origin}/api/onlyoffice/callback?path=${encodeURIComponent(win.fullPath)}&uid=${currentUser.id || ""}&isAdmin=${isAdmin ? "true" : "false"}`;
+    
+    return {
+      type: isMobile ? 'mobile' : 'desktop',
+      document: { fileType: ext, key: win.id.replace(/[^a-zA-Z0-9]/g, '') + Date.now(), title: name, url: absoluteUrl },
+      documentType: ['xls', 'xlsx', 'csv'].includes(ext) ? 'cell' : (['ppt', 'pptx'].includes(ext) ? 'slide' : 'word'),
+      editorConfig: { 
+        callbackUrl, 
+        lang: "ko-KR", 
+        mode: ext === 'pdf' ? 'view' : 'edit',
+        customization: { 
+          forcesave: true, 
+          autosave: true, 
+          compactHeader: false, // 툴바를 더 잘 보이게 함
+          toolbar: true // 도커 자체 툴바 활성화
+        } 
+      }
+    };
+  }, [ext, name, url, win.fullPath, isOffice, isMobile, currentUser.id, isAdmin, currentUser.rootPath, win.id]);
+
+  const renderContent = () => {
+    if (isImage) return <Box component="img" src={url} alt={name} sx={{ width: '100%', height: '100%', objectFit: 'contain' }} />;
+    if (isVideo) return <video src={url} controls autoPlay style={{ width: '100%', height: '100%' }} />;
+    if (isAudio) return <audio src={url} controls autoPlay style={{ width: '80%', marginTop: '20px' }} />;
+    if (isOffice && officeConfig) {
+      return (
+        <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+          <DocumentEditor id={`editor-${win.id}`} documentServerUrl={window.location.origin + "/"} config={officeConfig} onLoadComponent={(editor) => { editorRef.current = editor; }} />
+        </Box>
+      );
+    }
+    if (isBinary) return <Box sx={{ textAlign: 'center', p: 4 }}><Typography>문서 ({ext.toUpperCase()})</Typography><Button onClick={() => window.open(url)}>다운로드</Button></Box>;
+    if (isMarkdown && mode === 'view') return <Box sx={{ p: 3, overflow: 'auto', height: '100%' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ''}</ReactMarkdown></Box>;
+    return <Editor height="100%" language={ext} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} value={content || ''} onChange={(val) => handleContentChange(win.id, val)} options={{ readOnly: mode === 'view' }} />;
+  };
+
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', backgroundColor: (isImage || isVideo || isAudio) ? '#000' : theme.palette.background.paper }}>
+      {isOffice && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 0.5, borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: theme.palette.mode === 'dark' ? '#1e293b' : '#f8fafc', zIndex: 10 }}>
+          <Button size="small" variant="contained" startIcon={<SaveIcon />} onClick={handleNasSave} disabled={isSaving || ext === 'pdf'}>{isSaving ? '저장 중...' : '저장'}</Button>
+          <Button size="small" variant="outlined" startIcon={<PrintIcon />} onClick={handleNasPrint}>인쇄</Button>
+          <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>{name}</Typography>
+        </Box>
+      )}
+      <Box sx={{ flex: 1, position: 'relative' }}>
+        {renderContent()}
+      </Box>
+    </Box>
+  );
+};
+export default FileViewer;

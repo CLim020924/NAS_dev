@@ -1,0 +1,365 @@
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const jwt = require('jsonwebtoken');
+const { createNotification } = require('./notificationStore');
+const {
+  ensureDirectConversation,
+  getConversationById,
+  getMessageById,
+  listConversationsForUser,
+  listMessagesForConversation,
+  countUnreadForConversation,
+  createMessage,
+  saveReceivedAttachmentsForUser,
+  markConversationRead,
+} = require('./chatStore');
+
+const router = express.Router();
+
+const JWT_SECRET = process.env.JWT_SECRET || 'my-service-platform-secure-key-2026';
+const membersFilePath = path.join(__dirname, 'data', 'members.json');
+const friendsFilePath = path.join(__dirname, 'data', 'friends.json');
+const nasPath = '/mnt/nas';
+
+const readJsonArray = (filePath) => {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return Array.isArray(raw) ? raw : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+const verifyToken = (req, res, next) => {
+  const token = req.cookies.token;
+  if (!token) return res.status(401).json({ error: '로그인 필요' });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: '인증실패' });
+  }
+};
+
+const getAllMembers = () => readJsonArray(membersFilePath).filter((user) => user && !user.disabled);
+const getAllRelations = () => readJsonArray(friendsFilePath);
+
+const getLoginId = (user = {}) => user.loginId || user.id || user.username || '';
+const getDisplayName = (user = {}) => user.displayName || user.nickname || getLoginId(user);
+const getRole = (user = {}) => user.role || (user.Masters ? 'MASTER' : (user.Managers ? 'MANAGER' : 'USER'));
+
+const findMemberFromToken = (tokenUser, members) => {
+  return members.find((user) =>
+    [user.userUid, user.loginId, user.id, user.username].filter(Boolean).includes(
+      tokenUser.userUid || tokenUser.loginId || tokenUser.id || tokenUser.username
+    )
+  );
+};
+
+const pairMatches = (relation, aUid, bUid) => {
+  return (
+    (relation.userAUid === aUid && relation.userBUid === bUid) ||
+    (relation.userAUid === bUid && relation.userBUid === aUid)
+  );
+};
+
+const isAcceptedFriendPair = (relations, aUid, bUid) => {
+  return relations.some((relation) => pairMatches(relation, aUid, bUid) && relation.status === 'ACCEPTED');
+};
+
+const serializeOtherUser = (member = {}) => ({
+  userUid: member.userUid,
+  id: getLoginId(member),
+  loginId: getLoginId(member),
+  username: getLoginId(member),
+  displayName: getDisplayName(member),
+  nickname: member.nickname || '',
+  role: getRole(member),
+  globalAccess: !!member.globalAccess,
+});
+
+const serializeConversationForViewer = (conversation, viewerUid, members) => {
+  const otherUid = (conversation.participantUids || []).find((uid) => uid !== viewerUid) || viewerUid;
+  const otherUser = members.find((member) => member.userUid === otherUid) || null;
+
+  return {
+    conversationId: conversation.conversationId,
+    type: conversation.type,
+    participantUids: conversation.participantUids,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    lastMessageId: conversation.lastMessageId,
+    lastMessagePreview: conversation.lastMessagePreview,
+    lastMessageAt: conversation.lastMessageAt,
+    unreadCount: countUnreadForConversation(conversation.conversationId, viewerUid),
+    otherUser: otherUser ? serializeOtherUser(otherUser) : null,
+  };
+};
+
+const buildNotificationPreview = (message = {}) => {
+  const text = String(message.text || '').trim();
+  if (text) return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+
+  const count = Number(message.attachmentCount) || 0;
+  switch (message.messageType) {
+    case 'image':
+      return '사진을 보냈습니다.';
+    case 'folder':
+      return '폴더를 보냈습니다.';
+    case 'file':
+      return '파일을 보냈습니다.';
+    case 'attachment':
+      return count > 1 ? `첨부 ${count}개를 보냈습니다.` : '첨부를 보냈습니다.';
+    case 'mixed':
+      return text || (count > 1 ? `첨부 ${count}개를 보냈습니다.` : '첨부를 보냈습니다.');
+    default:
+      return '새 메시지';
+  }
+};
+
+const getUserBasePath = (user) => {
+  const isPrivileged = user.Masters || user.globalAccess;
+  const currentLoginId = getLoginId(user);
+  const relativeRoot = user.rootPath
+    ? user.rootPath.replace(/^(\/|\\)+/, '')
+    : path.join('users', currentLoginId);
+
+  return isPrivileged ? nasPath : path.resolve(nasPath, relativeRoot);
+};
+
+const ensureFixedSystemFolders = (user) => {
+  const basePath = getUserBasePath(user);
+  const receivedFolderPath = path.join(basePath, '받은 파일');
+  if (!fs.existsSync(receivedFolderPath)) {
+    fs.mkdirSync(receivedFolderPath, { recursive: true });
+  }
+
+  if (user.Masters || user.globalAccess) {
+    const chatdataPath = path.join(nasPath, 'chatdata');
+    if (!fs.existsSync(chatdataPath)) {
+      fs.mkdirSync(chatdataPath, { recursive: true });
+    }
+  }
+
+  return { basePath, receivedFolderPath };
+};
+
+router.post('/chat/direct', verifyToken, (req, res) => {
+  const { targetUserUid } = req.body || {};
+  const members = getAllMembers();
+  const relations = getAllRelations();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!targetUserUid) return res.status(400).json({ error: '대상 사용자가 필요합니다.' });
+  if (targetUserUid === me.userUid) return res.status(400).json({ error: '자기 자신과는 채팅할 수 없습니다.' });
+
+  const target = members.find((member) => member.userUid === targetUserUid);
+  if (!target) return res.status(404).json({ error: '대상 사용자가 없습니다.' });
+
+  if (!isAcceptedFriendPair(relations, me.userUid, targetUserUid)) {
+    return res.status(403).json({ error: '친구인 사용자와만 채팅할 수 있습니다.' });
+  }
+
+  const conversation = ensureDirectConversation(me.userUid, targetUserUid);
+  return res.json({
+    conversation: serializeConversationForViewer(conversation, me.userUid, members),
+  });
+});
+
+router.get('/chat/conversations', verifyToken, (req, res) => {
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+
+  const conversations = listConversationsForUser(me.userUid).map((conversation) =>
+    serializeConversationForViewer(conversation, me.userUid, members)
+  );
+
+  return res.json({ conversations });
+});
+
+router.get('/chat/messages', verifyToken, (req, res) => {
+  const conversationId = String(req.query.conversationId || '').trim();
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId) return res.status(400).json({ error: '대화방 식별자가 필요합니다.' });
+
+  const conversation = getConversationById(conversationId);
+  if (!conversation) return res.status(404).json({ error: '대화방이 없습니다.' });
+  if (!(conversation.participantUids || []).includes(me.userUid)) {
+    return res.status(403).json({ error: '접근 권한이 없습니다.' });
+  }
+
+  return res.json({
+    conversationId,
+    messages: listMessagesForConversation(conversationId),
+  });
+});
+
+router.post('/chat/messages', verifyToken, (req, res) => {
+  const { conversationId, text, attachmentBundleIds } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId) return res.status(400).json({ error: '대화방 식별자가 필요합니다.' });
+
+  const conversation = getConversationById(conversationId);
+  if (!conversation) return res.status(404).json({ error: '대화방이 없습니다.' });
+  if (!(conversation.participantUids || []).includes(me.userUid)) {
+    return res.status(403).json({ error: '접근 권한이 없습니다.' });
+  }
+
+  try {
+    const result = createMessage({
+      conversationId,
+      senderUid: me.userUid,
+      text,
+      attachmentBundleIds,
+    });
+
+    const io = req.app.get('io');
+    const recipientUid = result.message.recipientUid;
+    const previewMessage = buildNotificationPreview(result.message);
+
+    createNotification({
+      userUid: recipientUid,
+      type: 'chat_message',
+      title: '새 메시지',
+      message: `${getDisplayName(me)}: ${previewMessage}`,
+      meta: {
+        conversationId: result.conversation.conversationId,
+        messageId: result.message.messageId,
+        fromUserUid: me.userUid,
+        fromUsername: getLoginId(me),
+        fromDisplayName: getDisplayName(me),
+        fromRole: getRole(me),
+      },
+    });
+
+    io.to(`user:${recipientUid}`).emit('chat:message', {
+      conversationId: result.conversation.conversationId,
+      message: result.message,
+      sender: serializeOtherUser(me),
+    });
+
+    return res.json({
+      conversation: serializeConversationForViewer(result.conversation, me.userUid, members),
+      message: result.message,
+    });
+  } catch (e) {
+    if (e.message === 'EMPTY_PAYLOAD') {
+      return res.status(400).json({ error: '메시지나 첨부 중 하나는 필요합니다.' });
+    }
+    if (e.message === 'FORBIDDEN_PARTICIPANT') {
+      return res.status(403).json({ error: '대화 참가자가 아닙니다.' });
+    }
+    if (e.message === 'CONVERSATION_NOT_FOUND') {
+      return res.status(404).json({ error: '대화방이 없습니다.' });
+    }
+    if (e.message === 'ATTACHMENT_BUNDLE_NOT_FOUND') {
+      return res.status(404).json({ error: '첨부 번들을 찾을 수 없습니다.' });
+    }
+    if (e.message === 'ATTACHMENT_BUNDLE_FORBIDDEN') {
+      return res.status(403).json({ error: '다른 사용자의 첨부 번들은 보낼 수 없습니다.' });
+    }
+    if (e.message === 'ATTACHMENT_BUNDLE_INVALID_STATE') {
+      return res.status(400).json({ error: '이미 사용되었거나 만료된 첨부 번들입니다.' });
+    }
+    return res.status(500).json({ error: '메시지 전송에 실패했습니다.' });
+  }
+});
+
+router.post('/chat/messages/:messageId/save', verifyToken, (req, res) => {
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+  const messageId = String(req.params.messageId || '').trim();
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!messageId) return res.status(400).json({ error: '메시지 식별자가 필요합니다.' });
+
+  const message = getMessageById(messageId);
+  if (!message) return res.status(404).json({ error: '메시지를 찾을 수 없습니다.' });
+
+  const conversation = getConversationById(message.conversationId);
+  if (!conversation) return res.status(404).json({ error: '대화방이 없습니다.' });
+  if (!(conversation.participantUids || []).includes(me.userUid)) {
+    return res.status(403).json({ error: '접근 권한이 없습니다.' });
+  }
+  if (message.senderUid === me.userUid) {
+    return res.status(400).json({ error: '자신이 보낸 첨부는 저장 대상이 아닙니다.' });
+  }
+
+  try {
+    const { receivedFolderPath } = ensureFixedSystemFolders(me);
+    const result = saveReceivedAttachmentsForUser({
+      messageId,
+      userUid: me.userUid,
+      receivedDir: receivedFolderPath,
+    });
+
+    return res.json({
+      success: true,
+      alreadySaved: !!result.alreadySaved,
+      message: result.message,
+      savedEntries: result.savedEntries || [],
+      receivedFolderPath,
+    });
+  } catch (e) {
+    if (e.message === 'MESSAGE_NOT_FOUND') {
+      return res.status(404).json({ error: '메시지를 찾을 수 없습니다.' });
+    }
+    if (e.message === 'NO_ATTACHMENTS') {
+      return res.status(400).json({ error: '저장할 첨부가 없습니다.' });
+    }
+    if (e.message === 'ATTACHMENT_SOURCE_MISSING') {
+      return res.status(410).json({ error: '첨부 원본이 만료되었거나 존재하지 않습니다.' });
+    }
+    return res.status(500).json({ error: '첨부 저장에 실패했습니다.' });
+  }
+});
+
+router.post('/chat/read', verifyToken, (req, res) => {
+  const { conversationId } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId) return res.status(400).json({ error: '대화방 식별자가 필요합니다.' });
+
+  const conversation = getConversationById(conversationId);
+  if (!conversation) return res.status(404).json({ error: '대화방이 없습니다.' });
+  if (!(conversation.participantUids || []).includes(me.userUid)) {
+    return res.status(403).json({ error: '접근 권한이 없습니다.' });
+  }
+
+  const updatedMessageIds = markConversationRead({
+    conversationId,
+    userUid: me.userUid,
+  });
+
+  if (updatedMessageIds.length > 0) {
+    const io = req.app.get('io');
+    const otherUid = (conversation.participantUids || []).find((uid) => uid !== me.userUid);
+    if (otherUid) {
+      io.to(`user:${otherUid}`).emit('chat:read', {
+        conversationId,
+        readByUid: me.userUid,
+        updatedMessageIds,
+      });
+    }
+  }
+
+  return res.json({
+    success: true,
+    updatedMessageIds,
+  });
+});
+
+module.exports = router;

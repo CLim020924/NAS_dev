@@ -1,0 +1,132 @@
+[
+  {
+    "conversationId": "cv_7e7ab7a523cc4a1592c0cdc4e6b1f903",
+    "type": "direct",
+    "participantUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "createdAt": "2026-04-16T07:58:45.876Z",
+    "updatedAt": "2026-05-12T00:20:52.840Z",
+    "lastMessageId": "msg_c0ab5f17814a4151a4e66cd2a8d2ed60",
+    "lastMessagePreview": "파일을 보냈습니다.",
+    "lastMessageAt": "2026-05-12T00:20:52.840Z"
+  },
+  {
+    "conversationId": "cv_5ed99907747d4c668886a233860b675c",
+    "type": "direct",
+    "participantUids": [
+      "usr_a8efdb0e86454c4280df0b5989aab95b",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "createdAt": "2026-04-16T14:30:31.095Z",
+    "updatedAt": "2026-04-24T04:14:57.809Z",
+    "lastMessageId": null,
+    "lastMessagePreview": "",
+    "lastMessageAt": null
+  },
+  {
+    "conversationId": "cv_e53009af23774213915a60749a25d583",
+    "type": "direct",
+    "participantUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_a8efdb0e86454c4280df0b5989aab95b"
+    ],
+    "createdAt": "2026-04-16T14:31:22.614Z",
+    "updatedAt": "2026-04-28T02:01:48.018Z",
+    "lastMessageId": null,
+    "lastMessagePreview": "",
+    "lastMessageAt": null
+  },
+  {
+    "conversationId": "cv_76840b41e3c4465bbbb03cc10dc7c616",
+    "type": "direct",
+    "participantUids": [
+      "usr_1d8b7ee448ce4198af41fc1207c1159c",
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "createdAt": "2026-04-18T10:56:51.335Z",
+    "updatedAt": "2026-04-18T18:33:37.884Z",
+    "lastMessageId": null,
+    "lastMessagePreview": "",
+    "lastMessageAt": null
+  },
+  {
+    "conversationId": "cv_8e2f9c7c955e40a0a1664c96d06a0bc9",
+    "type": "direct",
+    "participantUids": [
+      "usr_3d420711e8af41dc913683563d959849",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "createdAt": "2026-04-18T11:25:34.826Z",
+    "updatedAt": "2026-05-12T01:36:00.815Z",
+    "lastMessageId": "msg_b028ce78703d44928b625c1252524e1b",
+    "lastMessagePreview": "폴더를 보냈습니다.",
+    "lastMessageAt": "2026-05-12T01:36:00.815Z"
+  },
+  {
+    "conversationId": "cv_806e257bdf5f46ab801ca388e1fa9818",
+    "type": "direct",
+    "participantUids": [
+      "usr_8788a62539414df2a96aa6c20056ef60",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "createdAt": "2026-04-20T04:39:35.086Z",
+    "updatedAt": "2026-04-20T04:46:06.848Z",
+    "lastMessageId": null,
+    "lastMessagePreview": "",
+    "lastMessageAt": null
+  },
+  {
+    "conversationId": "cv_143498b121c94b8196f820724c273279",
+    "type": "direct",
+    "participantUids": [
+      "usr_8788a62539414df2a96aa6c20056ef60",
+      "usr_a8efdb0e86454c4280df0b5989aab95b"
+    ],
+    "createdAt": "2026-04-20T04:48:21.094Z",
+    "updatedAt": "2026-04-22T13:37:04.342Z",
+    "lastMessageId": null,
+    "lastMessagePreview": "",
+    "lastMessageAt": null
+  },
+  {
+    "conversationId": "cv_ec13cb54101f4acfb2865a27eb2c3277",
+    "type": "direct",
+    "participantUids": [
+      "usr_53317387872343df856bd927a9f7ca4c",
+      "usr_62638eed0a5d4cbca84d56e4e0721524"
+    ],
+    "createdAt": "2026-04-20T05:40:19.715Z",
+    "updatedAt": "2026-04-21T05:50:52.072Z",
+    "lastMessageId": null,
+    "lastMessagePreview": "",
+    "lastMessageAt": null
+  },
+  {
+    "conversationId": "cv_34db27c403374795b007965e0cd107ab",
+    "type": "direct",
+    "participantUids": [
+      "usr_62638eed0a5d4cbca84d56e4e0721524",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "createdAt": "2026-05-12T05:46:52.163Z",
+    "updatedAt": "2026-05-12T05:47:18.979Z",
+    "lastMessageId": "msg_89d07b1947bd4fc9b7e75f2b635cf71b",
+    "lastMessagePreview": "파일을 보냈습니다.",
+    "lastMessageAt": "2026-05-12T05:47:18.979Z"
+  },
+  {
+    "conversationId": "cv_40a5f82f08fb4a4a80a51c2b7a2b6f8b",
+    "type": "direct",
+    "participantUids": [
+      "usr_b462e5bf016347cd8ea700bea8469525",
+      "usr_c19f79ecaa7844a3abe41703cadf9e62"
+    ],
+    "createdAt": "2026-05-12T05:49:36.152Z",
+    "updatedAt": "2026-05-12T05:50:13.226Z",
+    "lastMessageId": "msg_6d580ec2de8143d382c48fa48b7ef62b",
+    "lastMessagePreview": "파일을 보냈습니다.",
+    "lastMessageAt": "2026-05-12T05:50:13.226Z"
+  }
+]

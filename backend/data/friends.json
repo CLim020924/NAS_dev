@@ -1,0 +1,138 @@
+[
+  {
+    "relationId": "fr_1776260954195_82arvoli",
+    "userAUid": "usr_3d420711e8af41dc913683563d959849",
+    "userBUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "requestedByUid": "usr_3d420711e8af41dc913683563d959849",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-15T13:49:14.195Z",
+    "updatedAt": "2026-04-15T13:49:35.622Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776349789562_60na4m7j",
+    "userAUid": "usr_a8efdb0e86454c4280df0b5989aab95b",
+    "userBUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "requestedByUid": "usr_a8efdb0e86454c4280df0b5989aab95b",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-16T14:29:49.562Z",
+    "updatedAt": "2026-04-16T14:30:01.036Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776349855123_95h7kva8",
+    "userAUid": "usr_3d420711e8af41dc913683563d959849",
+    "userBUid": "usr_a8efdb0e86454c4280df0b5989aab95b",
+    "requestedByUid": "usr_a8efdb0e86454c4280df0b5989aab95b",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-16T14:30:55.123Z",
+    "updatedAt": "2026-04-17T18:17:37.522Z",
+    "favoriteByUids": [
+      "usr_3d420711e8af41dc913683563d959849"
+    ],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776450810232_qxtcz3th",
+    "userAUid": "usr_306689e1ce404be6a97c2fbdad48484c",
+    "userBUid": "usr_3d420711e8af41dc913683563d959849",
+    "requestedByUid": "usr_306689e1ce404be6a97c2fbdad48484c",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-17T18:33:30.232Z",
+    "updatedAt": "2026-04-18T03:04:31.420Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776505998326_jkr8nhp2",
+    "userAUid": "usr_53317387872343df856bd927a9f7ca4c",
+    "userBUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "requestedByUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-18T09:53:18.326Z",
+    "updatedAt": "2026-04-20T05:40:09.678Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776509712262_rccw323b",
+    "userAUid": "usr_3d420711e8af41dc913683563d959849",
+    "userBUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "requestedByUid": "usr_3d420711e8af41dc913683563d959849",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-18T10:55:12.262Z",
+    "updatedAt": "2026-04-18T11:25:29.385Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776530115545_xb1i7aqo",
+    "userAUid": "usr_1d8b7ee448ce4198af41fc1207c1159c",
+    "userBUid": "usr_3d420711e8af41dc913683563d959849",
+    "requestedByUid": "usr_3d420711e8af41dc913683563d959849",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-18T16:35:15.545Z",
+    "updatedAt": "2026-04-18T16:35:22.871Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776600598054_5a9m9r9t",
+    "userAUid": "usr_69e533e02c49409bb68b19eb6f1d7fc2",
+    "userBUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "requestedByUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-19T12:09:58.054Z",
+    "updatedAt": "2026-04-19T12:10:05.654Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776659949374_ecqq96vp",
+    "userAUid": "usr_8788a62539414df2a96aa6c20056ef60",
+    "userBUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "requestedByUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-20T04:39:09.374Z",
+    "updatedAt": "2026-04-20T04:39:26.728Z",
+    "favoriteByUids": [
+      "usr_8788a62539414df2a96aa6c20056ef60"
+    ],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1776660478432_6rzoghlw",
+    "userAUid": "usr_8788a62539414df2a96aa6c20056ef60",
+    "userBUid": "usr_a8efdb0e86454c4280df0b5989aab95b",
+    "requestedByUid": "usr_a8efdb0e86454c4280df0b5989aab95b",
+    "status": "ACCEPTED",
+    "createdAt": "2026-04-20T04:47:58.432Z",
+    "updatedAt": "2026-04-20T04:48:19.509Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1778564775432_ssv2icwl",
+    "userAUid": "usr_62638eed0a5d4cbca84d56e4e0721524",
+    "userBUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "requestedByUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "status": "ACCEPTED",
+    "createdAt": "2026-05-12T05:46:15.432Z",
+    "updatedAt": "2026-05-12T05:46:30.477Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  },
+  {
+    "relationId": "fr_1778564915542_xraypn5j",
+    "userAUid": "usr_b462e5bf016347cd8ea700bea8469525",
+    "userBUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "requestedByUid": "usr_c19f79ecaa7844a3abe41703cadf9e62",
+    "status": "ACCEPTED",
+    "createdAt": "2026-05-12T05:48:35.542Z",
+    "updatedAt": "2026-05-12T05:48:50.351Z",
+    "favoriteByUids": [],
+    "blockedByUids": []
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "id": "admin_1",
+      "username": "admin",
+      "role": "MASTER",
+      "rootPath": "/"
+    }
+  ],
+  "pendingUsers": [],
+  "settings": {
+    "globalFileAccess": false
+  }
+}

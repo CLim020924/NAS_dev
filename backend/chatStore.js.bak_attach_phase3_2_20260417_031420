@@ -1,0 +1,318 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const {
+  getBundle,
+  updateBundle,
+  cleanupExpiredPendingBundles,
+} = require('./chatAttachmentStore');
+
+const conversationsFilePath = path.join(__dirname, 'data', 'conversations.json');
+const messagesFilePath = path.join(__dirname, 'data', 'messages.json');
+
+const nowIso = () => new Date().toISOString();
+
+const generateId = (prefix) => {
+  if (typeof crypto.randomUUID === 'function') {
+    return `${prefix}_${crypto.randomUUID().replace(/-/g, '')}`;
+  }
+  return `${prefix}_${crypto.randomBytes(16).toString('hex')}`;
+};
+
+const ensureArrayFile = (filePath) => {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, '[]\n');
+};
+
+const readArray = (filePath) => {
+  ensureArrayFile(filePath);
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return Array.isArray(raw) ? raw : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+const writeArray = (filePath, items) => {
+  ensureArrayFile(filePath);
+  fs.writeFileSync(filePath, JSON.stringify(items, null, 2));
+};
+
+const sortParticipantUids = (uids) => {
+  return Array.from(new Set((uids || []).filter(Boolean))).sort();
+};
+
+const normalizeConversation = (conversation = {}) => {
+  const createdAt = conversation.createdAt || nowIso();
+  return {
+    conversationId: conversation.conversationId || generateId('cv'),
+    type: conversation.type || 'direct',
+    participantUids: sortParticipantUids(conversation.participantUids || []),
+    createdAt,
+    updatedAt: conversation.updatedAt || createdAt,
+    lastMessageId: conversation.lastMessageId || null,
+    lastMessagePreview: typeof conversation.lastMessagePreview === 'string' ? conversation.lastMessagePreview : '',
+    lastMessageAt: conversation.lastMessageAt || null,
+  };
+};
+
+const normalizeAttachmentBundle = (bundle = {}) => ({
+  ...bundle,
+  items: Array.isArray(bundle.items) ? bundle.items : [],
+  itemCount: Number(bundle.itemCount) || (Array.isArray(bundle.items) ? bundle.items.length : 0),
+});
+
+const normalizeMessage = (message = {}) => {
+  const createdAt = message.createdAt || nowIso();
+  const attachments = Array.isArray(message.attachments)
+    ? message.attachments.map(normalizeAttachmentBundle)
+    : [];
+
+  return {
+    messageId: message.messageId || generateId('msg'),
+    conversationId: message.conversationId || '',
+    senderUid: message.senderUid || '',
+    recipientUid: message.recipientUid || '',
+    text: typeof message.text === 'string' ? message.text : '',
+    messageType: message.messageType || 'text',
+    attachments,
+    attachmentCount: Number(message.attachmentCount) || attachments.reduce((sum, item) => sum + (item.itemCount || 0), 0),
+    createdAt,
+    readByUids: Array.from(new Set(Array.isArray(message.readByUids) ? message.readByUids.filter(Boolean) : [])),
+    deleted: !!message.deleted,
+  };
+};
+
+const getAllConversations = () => readArray(conversationsFilePath).map(normalizeConversation);
+const getAllMessages = () => readArray(messagesFilePath).map(normalizeMessage);
+
+const saveConversations = (items) => writeArray(conversationsFilePath, items.map(normalizeConversation));
+const saveMessages = (items) => writeArray(messagesFilePath, items.map(normalizeMessage));
+
+const getConversationById = (conversationId) => {
+  return getAllConversations().find((c) => c.conversationId === conversationId) || null;
+};
+
+const findDirectConversation = (userAUid, userBUid) => {
+  const pair = sortParticipantUids([userAUid, userBUid]);
+  return getAllConversations().find((conversation) =>
+    conversation.type === 'direct' &&
+    conversation.participantUids.length === 2 &&
+    conversation.participantUids[0] === pair[0] &&
+    conversation.participantUids[1] === pair[1]
+  ) || null;
+};
+
+const ensureDirectConversation = (userAUid, userBUid) => {
+  const existing = findDirectConversation(userAUid, userBUid);
+  if (existing) return existing;
+
+  const conversations = getAllConversations();
+  const created = normalizeConversation({
+    type: 'direct',
+    participantUids: [userAUid, userBUid],
+  });
+
+  conversations.push(created);
+  saveConversations(conversations);
+  return created;
+};
+
+const listConversationsForUser = (userUid) => {
+  return getAllConversations()
+    .filter((conversation) => conversation.participantUids.includes(userUid))
+    .sort((a, b) => {
+      const aKey = a.lastMessageAt || a.updatedAt || a.createdAt || '';
+      const bKey = b.lastMessageAt || b.updatedAt || b.createdAt || '';
+      return String(bKey).localeCompare(String(aKey));
+    });
+};
+
+const listMessagesForConversation = (conversationId) => {
+  return getAllMessages()
+    .filter((message) => message.conversationId === conversationId)
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+};
+
+const countUnreadForConversation = (conversationId, userUid) => {
+  return listMessagesForConversation(conversationId).filter((message) =>
+    message.senderUid !== userUid &&
+    !message.deleted &&
+    !message.readByUids.includes(userUid)
+  ).length;
+};
+
+const isImageName = (name = '') => {
+  const ext = path.extname(String(name || '')).toLowerCase();
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext);
+};
+
+const summarizeAttachments = (attachments = []) => {
+  const items = attachments.flatMap((bundle) => Array.isArray(bundle.items) ? bundle.items : []);
+  const total = items.length;
+  if (total === 0) return '첨부를 보냈습니다.';
+
+  if (total === 1) {
+    const first = items[0];
+    if (first.type === 'folder') return '폴더를 보냈습니다.';
+    if (isImageName(first.name)) return '사진을 보냈습니다.';
+    return '파일을 보냈습니다.';
+  }
+
+  return `첨부 ${total}개를 보냈습니다.`;
+};
+
+const deriveMessageType = ({ text, attachments }) => {
+  const hasText = !!String(text || '').trim();
+  const items = attachments.flatMap((bundle) => Array.isArray(bundle.items) ? bundle.items : []);
+
+  if (items.length === 0) return 'text';
+  if (hasText) return 'mixed';
+
+  if (items.length === 1) {
+    const first = items[0];
+    if (first.type === 'folder') return 'folder';
+    if (isImageName(first.name)) return 'image';
+    return 'file';
+  }
+
+  return 'attachment';
+};
+
+const buildConversationPreview = ({ text, attachments }) => {
+  const trimmed = String(text || '').trim();
+  if (trimmed) return trimmed.slice(0, 120);
+  return summarizeAttachments(attachments).slice(0, 120);
+};
+
+const createMessage = ({ conversationId, senderUid, text, attachmentBundleIds = [] }) => {
+  const trimmed = String(text || '').trim();
+  const bundleIds = Array.from(new Set((Array.isArray(attachmentBundleIds) ? attachmentBundleIds : []).filter(Boolean)));
+
+  if (!trimmed && bundleIds.length === 0) {
+    throw new Error('EMPTY_PAYLOAD');
+  }
+
+  const conversations = getAllConversations();
+  const targetConversation = conversations.find((conversation) => conversation.conversationId === conversationId);
+
+  if (!targetConversation) {
+    throw new Error('CONVERSATION_NOT_FOUND');
+  }
+
+  if (!targetConversation.participantUids.includes(senderUid)) {
+    throw new Error('FORBIDDEN_PARTICIPANT');
+  }
+
+  cleanupExpiredPendingBundles();
+
+  const attachments = bundleIds.map((bundleId) => {
+    const bundle = getBundle(bundleId);
+    if (!bundle) throw new Error('ATTACHMENT_BUNDLE_NOT_FOUND');
+    if (bundle.ownerUid !== senderUid) throw new Error('ATTACHMENT_BUNDLE_FORBIDDEN');
+    if (bundle.status !== 'pending') throw new Error('ATTACHMENT_BUNDLE_INVALID_STATE');
+    return normalizeAttachmentBundle(bundle);
+  });
+
+  const recipientUid = targetConversation.participantUids.find((uid) => uid !== senderUid) || senderUid;
+  const createdAt = nowIso();
+  const messageType = deriveMessageType({ text: trimmed, attachments });
+  const attachmentCount = attachments.reduce((sum, bundle) => sum + (bundle.itemCount || 0), 0);
+
+  const message = normalizeMessage({
+    conversationId,
+    senderUid,
+    recipientUid,
+    text: trimmed,
+    messageType,
+    attachments,
+    attachmentCount,
+    createdAt,
+    readByUids: [senderUid],
+    deleted: false,
+  });
+
+  const messages = getAllMessages();
+  messages.push(message);
+  saveMessages(messages);
+
+  attachments.forEach((bundle) => {
+    updateBundle(bundle.bundleId, {
+      status: 'sent',
+      linkedConversationId: conversationId,
+      linkedMessageId: message.messageId,
+      sentAt: createdAt,
+    });
+  });
+
+  const lastMessagePreview = buildConversationPreview({ text: trimmed, attachments });
+
+  const updatedConversations = conversations.map((conversation) => {
+    if (conversation.conversationId !== conversationId) return conversation;
+    return normalizeConversation({
+      ...conversation,
+      updatedAt: createdAt,
+      lastMessageId: message.messageId,
+      lastMessagePreview,
+      lastMessageAt: createdAt,
+    });
+  });
+
+  saveConversations(updatedConversations);
+
+  const updatedConversation = updatedConversations.find((conversation) => conversation.conversationId === conversationId);
+  return { conversation: updatedConversation, message };
+};
+
+const createTextMessage = ({ conversationId, senderUid, text }) => {
+  return createMessage({ conversationId, senderUid, text, attachmentBundleIds: [] });
+};
+
+const markConversationRead = ({ conversationId, userUid }) => {
+  const messages = getAllMessages();
+  const updatedMessageIds = [];
+  let changed = false;
+
+  const next = messages.map((message) => {
+    if (
+      message.conversationId === conversationId &&
+      message.senderUid !== userUid &&
+      !message.deleted &&
+      !message.readByUids.includes(userUid)
+    ) {
+      changed = true;
+      updatedMessageIds.push(message.messageId);
+      return normalizeMessage({
+        ...message,
+        readByUids: [...message.readByUids, userUid],
+      });
+    }
+    return message;
+  });
+
+  if (changed) {
+    saveMessages(next);
+  }
+
+  return updatedMessageIds;
+};
+
+const ensureStoreFiles = () => {
+  ensureArrayFile(conversationsFilePath);
+  ensureArrayFile(messagesFilePath);
+};
+
+module.exports = {
+  ensureStoreFiles,
+  getConversationById,
+  findDirectConversation,
+  ensureDirectConversation,
+  listConversationsForUser,
+  listMessagesForConversation,
+  countUnreadForConversation,
+  createMessage,
+  createTextMessage,
+  markConversationRead,
+};

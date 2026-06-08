@@ -1,0 +1,26 @@
+[
+  {
+    "token": "pair_9479bdaa96664344ba73cf6a8bdcc6a0",
+    "ownerKey": "usr_3d420711e8af41dc913683563d959849",
+    "targetPath": "/",
+    "userSnapshot": {
+      "userUid": "usr_3d420711e8af41dc913683563d959849",
+      "sessionId": "sess_0918de6a83174a7a9036d7f235c84f33",
+      "id": "admin",
+      "loginId": "admin",
+      "username": "admin",
+      "displayName": "admin",
+      "nickname": "",
+      "role": "MASTER",
+      "Masters": true,
+      "Managers": true,
+      "globalAccess": false,
+      "iat": 1779612898,
+      "exp": 1779699298
+    },
+    "status": "pending",
+    "createdAt": "2026-05-24T08:56:14.913Z",
+    "expiresAt": "2026-05-24T09:26:14.913Z",
+    "device": null
+  }
+]

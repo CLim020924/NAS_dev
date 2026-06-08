@@ -1,0 +1,116 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { ThemeProvider as MUIThemeProvider, createTheme, CssBaseline, Box, Toolbar } from '@mui/material';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import socketIOClient from 'socket.io-client';
+
+import ServicePlatform from './components/ServicePlatform';
+import TopBar from './components/TopBar';
+import Settings from './components/Settings';
+import NAS from './components/NAS';
+import Login from './components/Login';
+import Signup from './components/Signup';
+import MessageSidebar from './components/MessageSidebar';
+
+import { WindowProvider } from './contexts/WindowContext';
+import { CustomThemeProvider, useCustomTheme } from './contexts/ThemeContext';
+
+const PrivateRoute = ({ children }) => {
+  const user = localStorage.getItem('user');
+  return user ? children : <Navigate to="/login" />;
+};
+
+function AppContent() {
+  const { themeName } = useCustomTheme();
+  const [messagesOpen, setMessagesOpen] = useState(false);
+  const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')));
+
+  // 🔥 수정 1: 로그인 버튼을 누르면 화면이 멈추지 않고 즉각 반응하도록 안전장치 추가!
+  useEffect(() => {
+    const checkUser = setInterval(() => {
+      const currentUser = localStorage.getItem('user');
+      if (JSON.stringify(user) !== currentUser) {
+        setUser(JSON.parse(currentUser));
+      }
+    }, 500);
+    return () => clearInterval(checkUser);
+  }, [user]);
+
+  // 🔥 수정 2: "로그인 한 사람"만 소켓에 연결합니다! (로그인 창 404 에러 원천 차단)
+  useEffect(() => {
+    if (!user) return; // 로그인 안 했으면 소켓 연결 시도조차 하지 않고 조용히 대기!
+
+    // 뒤에 슬래시(/)를 붙여야 Nginx가 길을 잃지 않습니다.
+    const socket = socketIOClient("https://filemanager-nas.com", { 
+      withCredentials: true 
+    });
+
+    socket.on("force_logout_target", (data) => {
+      const currentUser = JSON.parse(localStorage.getItem('user'));
+      // 방송으로 날아온 ID(targetId)가 내 ID와 똑같다면?!
+      if (currentUser && (currentUser.id === data.targetId || currentUser.username === data.targetId)) {
+        alert("관리자로 인해 계정정보가 변경되어 로그아웃 됩니다. 다시 로그인 하세요.");
+        document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+      }
+    });
+
+    return () => socket.disconnect();
+  }, [user]); // 유저 정보가 들어오는 순간 통신 시작
+
+  const isManager = user?.role === 'MASTER' || user?.role === 'MANAGER' || user?.Masters || user?.Managers;
+
+  const theme = useMemo(() => createTheme({
+    palette: {
+      mode: themeName === 'dark' ? 'dark' : 'light',
+      primary: { main: themeName === 'ocean' ? '#0284c7' : '#2563eb' },
+      background: { default: themeName === 'dark' ? '#0f172a' : (themeName === 'ocean' ? '#e0f2fe' : '#f1f5f9') },
+    },
+    typography: { fontFamily: 'Noto Sans KR, system-ui, sans-serif' },
+    components: {
+      MuiAppBar: { styleOverrides: { root: { boxShadow: 'none' } } },
+      MuiButton: { styleOverrides: { root: { textTransform: 'none', fontWeight: 'bold', borderRadius: 8 } } },
+      MuiPaper: { styleOverrides: { root: { borderRadius: 12 } } },
+    }
+  }), [themeName]);
+
+  return (
+    <MUIThemeProvider theme={theme}>
+      <CssBaseline />
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/*" element={
+            <PrivateRoute>
+              <Box sx={{ display: 'flex', height: '100vh', flexDirection: 'column', overflow: 'hidden' }}>
+                <TopBar onOpenMessages={() => setMessagesOpen(true)} />
+                <MessageSidebar open={messagesOpen} onClose={() => setMessagesOpen(false)} />
+                <Box component="main" sx={{ flexGrow: 1, height: '100%', overflow: 'hidden' }}>
+                  <Toolbar size="small" sx={{ minHeight: '48px !important' }} />
+                  <Routes>
+                    <Route path="/platform" element={<ServicePlatform />} />
+                    <Route path="/" element={<Navigate to="/platform" replace />} />
+                    <Route path="/nas/*" element={<NAS />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="*" element={<Navigate to="/platform" replace />} />
+                  </Routes>
+                </Box>
+              </Box>
+            </PrivateRoute>
+          } />
+        </Routes>
+      </BrowserRouter>
+    </MUIThemeProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <CustomThemeProvider>
+      <WindowProvider>
+        <AppContent />
+      </WindowProvider>
+    </CustomThemeProvider>
+  );
+}

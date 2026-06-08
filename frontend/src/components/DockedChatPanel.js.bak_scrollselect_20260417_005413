@@ -1,0 +1,239 @@
+import React, { useEffect, useMemo } from 'react';
+import {
+  Box,
+  Paper,
+  Typography,
+  Avatar,
+  Button,
+  TextField,
+  Divider,
+  useTheme,
+} from '@mui/material';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { useChat } from '../contexts/ChatContext';
+
+const formatMessageTime = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+};
+
+const DockedChatPanel = ({ sidebarWidth = 360, activeChat = null, onOpenWindow = () => {} }) => {
+  const theme = useTheme();
+  const {
+    currentUserUid,
+    drafts,
+    setDraft,
+    messagesByConversation,
+    loadMessages,
+    sendTextMessage,
+    markConversationRead,
+  } = useChat();
+
+  const conversationId = activeChat?.conversationId || null;
+
+  const messages = useMemo(() => {
+    if (!conversationId) return [];
+    return messagesByConversation[conversationId] || [];
+  }, [messagesByConversation, conversationId]);
+
+  const hasUnreadFromOther = useMemo(() => {
+    return messages.some((msg) =>
+      msg.senderUid !== currentUserUid &&
+      !msg.deleted &&
+      !(Array.isArray(msg.readByUids) ? msg.readByUids : []).includes(currentUserUid)
+    );
+  }, [messages, currentUserUid]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    loadMessages(conversationId);
+  }, [conversationId, loadMessages]);
+
+  useEffect(() => {
+    if (!conversationId || !hasUnreadFromOther) return;
+    markConversationRead(conversationId);
+  }, [conversationId, hasUnreadFromOther, markConversationRead]);
+
+  if (!activeChat || !conversationId) return null;
+
+  const handleSend = async () => {
+    const value = (drafts[conversationId] || '').trim();
+    if (!value) return;
+
+    try {
+      await sendTextMessage(conversationId, value);
+      setDraft(conversationId, '');
+    } catch (err) {
+      console.error('메시지 전송 실패', err);
+      alert(err.response?.data?.error || '메시지 전송에 실패했습니다.');
+    }
+  };
+
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        left: 0,
+        width: typeof window !== 'undefined' && window.innerWidth < 600
+          ? Math.min(360, Math.round(window.innerWidth * 0.86))
+          : Math.max(390, sidebarWidth + 30),
+        transform: 'translateX(-100%)',
+        borderRadius: 0,
+        borderLeft: `1px solid ${theme.palette.divider}`,
+        borderTop: `1px solid ${theme.palette.divider}`,
+        borderBottom: `1px solid ${theme.palette.divider}`,
+        bgcolor: 'background.paper',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
+      <Box
+        sx={{
+          px: 1.25,
+          py: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          bgcolor: theme.palette.mode === 'dark' ? '#111827' : '#f8fafc',
+          borderBottom: `1px solid ${theme.palette.divider}`,
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, gap: 1 }}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<OpenInNewIcon />}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenWindow();
+            }}
+          >
+            window
+          </Button>
+          <Avatar
+            sx={{
+              width: 28,
+              height: 28,
+              bgcolor:
+                activeChat.role === 'MASTER'
+                  ? 'error.main'
+                  : activeChat.role === 'MANAGER'
+                  ? 'warning.main'
+                  : 'primary.main',
+              fontSize: '0.85rem',
+              fontWeight: 'bold',
+            }}
+          >
+            {(activeChat.displayName || activeChat.username)?.[0]?.toUpperCase()}
+          </Avatar>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 800 }} noWrap>
+              {activeChat.username}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap>
+              {activeChat.displayName && activeChat.displayName !== activeChat.username
+                ? activeChat.displayName
+                : (activeChat.role || '채팅')}
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+
+      <Box sx={{ px: 1.5, py: 1, bgcolor: 'background.default', borderBottom: `1px solid ${theme.palette.divider}` }}>
+        <Typography variant="caption" color="text.secondary">
+          window 버튼을 누르면 채팅 전용 창으로 전환됩니다.
+        </Typography>
+      </Box>
+
+      <Box sx={{ flex: 1, overflowY: 'auto', p: 1.5, bgcolor: 'background.default' }}>
+        {messages.length === 0 ? (
+          <Typography variant="caption" color="text.secondary">
+            아직 대화가 없습니다.
+          </Typography>
+        ) : messages.map((msg) => {
+          const isMine = msg.senderUid === currentUserUid || msg.sender === 'me';
+          const key = msg.messageId || msg.id || `${conversationId}_${msg.createdAt}`;
+
+          return (
+            <Box
+              key={key}
+              sx={{
+                display: 'flex',
+                justifyContent: isMine ? 'flex-end' : 'flex-start',
+                mb: 1,
+              }}
+            >
+              <Box
+                sx={{
+                  maxWidth: '80%',
+                  px: 1.25,
+                  py: 1,
+                  borderRadius: 2,
+                  bgcolor: isMine ? 'primary.main' : 'background.paper',
+                  color: isMine ? 'primary.contrastText' : 'text.primary',
+                  border: isMine ? 'none' : `1px solid ${theme.palette.divider}`,
+                  boxShadow: 1,
+                }}
+              >
+                <Typography
+                  variant="body2"
+                  sx={{
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    userSelect: 'text',
+                    WebkitUserSelect: 'text',
+                    cursor: 'text',
+                  }}
+                >
+                  {msg.text}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    mt: 0.5,
+                    display: 'block',
+                    textAlign: 'right',
+                    color: isMine ? 'rgba(255,255,255,0.82)' : 'text.secondary',
+                  }}
+                >
+                  {formatMessageTime(msg.createdAt)}
+                </Typography>
+              </Box>
+            </Box>
+          );
+        })}
+      </Box>
+
+      <Divider />
+
+      <Box sx={{ p: 1.25, display: 'flex', gap: 1, alignItems: 'flex-end', bgcolor: 'background.paper' }}>
+        <TextField
+          fullWidth
+          multiline
+          minRows={2}
+          maxRows={4}
+          placeholder="메시지를 입력하세요"
+          value={drafts[conversationId] || ''}
+          onChange={(e) => setDraft(conversationId, e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+        />
+        <Button variant="contained" onClick={handleSend} sx={{ minWidth: 96, height: 40 }}>
+          전송
+        </Button>
+      </Box>
+    </Paper>
+  );
+};
+
+export default DockedChatPanel;

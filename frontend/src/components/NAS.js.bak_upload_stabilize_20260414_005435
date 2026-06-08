@@ -1,0 +1,993 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress , Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions} from '@mui/material';
+import { alpha } from '@mui/material/styles';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Rnd } from 'react-rnd';
+import axios from 'axios';
+
+import { ensureSlash, getUniqueName, getRelativeSegments } from './NAS/nasUtils';
+import InlineInput from './NAS/InlineInput';
+import FileViewer from './NAS/FileViewer';
+import NASContextMenu from './NAS/NASContextMenu';
+import SidebarTree from './NAS/Window/SidebarTree';
+
+import MenuIcon from '@mui/icons-material/Menu'; 
+import FolderIcon from '@mui/icons-material/Folder';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import CloseIcon from '@mui/icons-material/Close';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import StorageIcon from '@mui/icons-material/Storage';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import NoteAddIcon from '@mui/icons-material/NoteAdd'; 
+import RemoveIcon from '@mui/icons-material/Remove';
+import CropSquareIcon from '@mui/icons-material/CropSquare';
+import FilterNoneIcon from '@mui/icons-material/FilterNone';
+
+import { useWindows } from '../contexts/WindowContext';
+import useShortcuts from '../hooks/useShortcuts';
+
+const NAS = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const fileInputRef = useRef(null);
+  const uploadTargetRef = useRef('/'); 
+  const desktopRef = useRef(null); 
+  
+  const currentUser = JSON.parse(localStorage.getItem('user')) || {};
+  const isAdmin = currentUser.Masters || currentUser.Managers;
+
+  const [desktopItems, setDesktopItems] = useState([]);
+
+  const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
+  useEffect(() => {
+    const handleStorageChange = () => setShowExt(localStorage.getItem('nas_show_extensions') === 'true');
+    window.addEventListener('nas_settings_changed', handleStorageChange);
+    return () => window.removeEventListener('nas_settings_changed', handleStorageChange);
+  }, []);
+
+  const getDisplayName = (item) => {
+    if (item.type !== 'file' || showExt) return item.name;
+    return item.name.includes('.') ? item.name.substring(0, item.name.lastIndexOf('.')) : item.name;
+  };
+
+  const [closePrompt, setClosePrompt] = useState(null);
+  const [hoveredHeader, setHoveredHeader] = useState(null);
+  const [folderDownload, setFolderDownload] = useState(null);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  const [transferTasks, setTransferTasks] = useState([]);
+
+  const [contextMenu, setContextMenu] = useState(null);
+  const [inlineEdit, setInlineEdit] = useState(null);
+  const [selectedItems, setSelectedItems] = useState([]);
+  const [dragOverTarget, setDragOverTarget] = useState(null);
+  const [iconPositions, setIconPositions] = useState(() => JSON.parse(localStorage.getItem('msp_icon_positions') || '{}'));
+  
+  const { openWindows, setOpenWindows, topZIndex, setTopZIndex, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles } = useWindows();
+
+  const desktopItemsRef = useRef(desktopItems); desktopItemsRef.current = desktopItems;
+  const openWindowsRef = useRef(openWindows); openWindowsRef.current = openWindows;
+  const inlineEditRef = useRef(inlineEdit); inlineEditRef.current = inlineEdit;
+  const contextMenuRef = useRef(contextMenu); contextMenuRef.current = contextMenu;
+
+  const touchTimer = useRef(null);
+  const isLongPressTriggered = useRef(false);
+
+  const handleTouchStart = (e, type, ctxData) => {
+    if (e.touches.length > 1) return;
+    isLongPressTriggered.current = false;
+    const clientX = e.touches[0].clientX, clientY = e.touches[0].clientY;
+    touchTimer.current = setTimeout(() => {
+      isLongPressTriggered.current = true;
+      setFocusedContext(ctxData.windowId || 'desktop');
+      setContextMenu({ mouseX: clientX, mouseY: clientY, type, ...ctxData });
+      const safePath = ctxData.item ? ensureSlash(ctxData.item.fullPath) : null;
+      if (safePath && !selectedItems.includes(safePath)) setSelectedItems([safePath]);
+      if (navigator.vibrate) navigator.vibrate(50);
+    }, 500);
+  };
+  const cancelTouch = () => { if (touchTimer.current) { clearTimeout(touchTimer.current); touchTimer.current = null; } };
+
+  useEffect(() => { localStorage.setItem('msp_icon_positions', JSON.stringify(iconPositions)); }, [iconPositions]);
+  
+  const [clipboard, setClipboard] = useState({ paths: [] });
+
+  useEffect(() => {
+    const handleKeyDown = async (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.closest('.monaco-editor') || e.target?.closest('.onlyoffice-wrapper')) return;
+
+      if (e.key === 'Delete' || ((e.ctrlKey || e.metaKey) && ['c', 'v'].includes(e.key.toLowerCase()))) {
+        console.log("⌨️ 단축키 감지됨:", e.key, "| 🎯 선택된 파일:", selectedItems, "| 📋 클립보드:", clipboard.paths);
+      }
+
+      let targetFolder = '/';
+      if (focusedContext && focusedContext !== 'desktop') {
+        const win = openWindowsRef.current.find(w => w.id === focusedContext);
+        if (win && win.currentPath) targetFolder = win.currentPath;
+      }
+
+      if (e.key === 'Delete' && selectedItems.length > 0) {
+        if (window.confirm(`선택한 ${selectedItems.length}개 항목을 삭제하시겠습니까?`)) {
+          try {
+            await Promise.all(selectedItems.map(item => axios.delete('/api/file', { data: { path: item }, withCredentials: true })));
+            setSelectedItems([]); 
+            if (typeof fetchFiles === 'function') { fetchFiles(targetFolder || '/'); if ((targetFolder || '/') !== '/') fetchFiles('/'); }
+            setSnackbar({ open: true, message: '삭제 완료!', severity: 'success' });
+          } catch(err) { showError('삭제', err); }
+        }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && selectedItems.length > 0) {
+        setClipboard({ paths: selectedItems });
+        setSnackbar({ open: true, message: `${selectedItems.length}개 항목 복사됨`, severity: 'info' });
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && clipboard.paths.length > 0) {
+        try {
+          await axios.post('/api/file/copy', { sourcePaths: clipboard.paths, destinationFolder: targetFolder || '/' }, { withCredentials: true });
+          if (typeof fetchFiles === 'function') { fetchFiles(targetFolder || '/'); if ((targetFolder || '/') !== '/') fetchFiles('/'); }
+          setSnackbar({ open: true, message: '붙여넣기 성공!', severity: 'success' });
+        } catch(err) { showError('붙여넣기', err); }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedItems, focusedContext, clipboard, fetchFiles]);
+
+  useEffect(() => {
+    let isSelecting = false;
+    let startX = 0, startY = 0;
+    let selectionBox = null;
+    let limitRect = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+    let currentContainer = null;
+
+    const handleMouseDown = (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('.selectable-item') || e.target.closest('button') || e.target.closest('.window-header-drag-handle') || e.target.closest('.MuiDialogTitle-root') || e.target.closest('input')) return;
+
+      currentContainer = e.target.closest('.window-content-area') || document.body;
+
+      if (currentContainer === document.body) {
+        limitRect = { top: 64, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+      } else {
+        const rect = currentContainer.getBoundingClientRect();
+        limitRect = { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom };
+      }
+
+      if (e.clientX < limitRect.left || e.clientX > limitRect.right || e.clientY < limitRect.top || e.clientY > limitRect.bottom) return;
+
+      setSelectedItems([]);
+      isSelecting = true;
+      startX = e.clientX;
+      startY = e.clientY;
+
+      selectionBox = document.createElement('div');
+      selectionBox.style.position = 'fixed';
+      selectionBox.style.border = '1px solid rgba(59, 130, 246, 0.8)';
+      selectionBox.style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
+      selectionBox.style.zIndex = '9999';
+      selectionBox.style.pointerEvents = 'none';
+      document.body.appendChild(selectionBox);
+    };
+
+    const handleMouseMove = (e) => {
+      if (!isSelecting || !selectionBox) return;
+
+      let clampedX = Math.max(limitRect.left, Math.min(e.clientX, limitRect.right));
+      let clampedY = Math.max(limitRect.top, Math.min(e.clientY, limitRect.bottom));
+
+      const left = Math.min(startX, clampedX);
+      const top = Math.min(startY, clampedY);
+      const width = Math.abs(clampedX - startX);
+      const height = Math.abs(clampedY - startY);
+
+      selectionBox.style.left = left + 'px';
+      selectionBox.style.top = top + 'px';
+      selectionBox.style.width = width + 'px';
+      selectionBox.style.height = height + 'px';
+
+      const boxRect = selectionBox.getBoundingClientRect();
+      const targetArea = currentContainer === document.body ? document : currentContainer;
+      const items = targetArea.querySelectorAll('.selectable-item');
+      const newSelected = [];
+
+      items.forEach(item => {
+        const itemRect = item.getBoundingClientRect();
+        const isIntersecting = !(
+          boxRect.right < itemRect.left || 
+          boxRect.left > itemRect.right || 
+          boxRect.bottom < itemRect.top || 
+          boxRect.top > itemRect.bottom
+        );
+        if (isIntersecting) {
+          const path = item.getAttribute('data-path');
+          if (path) newSelected.push(path);
+        }
+      });
+
+      setSelectedItems(prev => {
+        if (prev.length === newSelected.length && prev.every((val, index) => val === newSelected[index])) return prev;
+        return newSelected;
+      });
+    };
+
+    const handleMouseUp = () => {
+      if (isSelecting) {
+        isSelecting = false;
+        if (selectionBox && selectionBox.parentNode) selectionBox.parentNode.removeChild(selectionBox);
+        selectionBox = null;
+      }
+    };
+
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleEscAndHover = (e) => {
+      if (e.type === 'keydown' && e.key === 'Escape') {
+        setOpenWindows(prev => prev.map(w => w.isImmersive ? { ...w, isImmersive: false } : w));
+      }
+    };
+    window.addEventListener('keydown', handleEscAndHover);
+    return () => window.removeEventListener('keydown', handleEscAndHover);
+  }, [setOpenWindows]);
+
+  const handleCloseSnackbar = () => setSnackbar(prev => ({ ...prev, open: false }));
+
+  const showError = (action, err) => {
+    let errorMsg = err.message;
+    if (err.response) { errorMsg = `Code: ${err.response.status}, Data: ${JSON.stringify(err.response.data)}`; if (err.response.status === 401) { alert("로그인이 만료되었습니다."); localStorage.removeItem('user'); window.location.href = '/login'; return; } }
+    setSnackbar({ open: true, message: `[${action} 오류] ${errorMsg}`, severity: 'error' });
+  };
+
+  const handleCopyContextMenu = (items) => {
+    const paths = items.map(it => it.fullPath || it.path).filter(Boolean);
+    if (paths.length > 0) {
+      setClipboard({ paths });
+      setSnackbar({ open: true, message: `${paths.length}개 항목이 복사되었습니다.`, severity: 'info' });
+    }
+  };
+
+  const handlePasteContextMenu = async (targetFolder) => {
+    if (!clipboard || !clipboard.paths || clipboard.paths.length === 0) return;
+    try {
+      await axios.post('/api/file/copy', { sourcePaths: clipboard.paths, destinationFolder: targetFolder || '/' }, { withCredentials: true });
+      if (typeof fetchFiles === 'function') {
+        fetchFiles(targetFolder || '/');
+        if ((targetFolder || '/') !== '/') fetchFiles('/');
+      }
+      setSnackbar({ open: true, message: '붙여넣기 완료!', severity: 'success' });
+    } catch(err) { showError('붙여넣기', err); }
+  };
+
+
+  const loadDesktopItems = useCallback(async () => {
+    try { const response = await axios.get(`/api/files?path=/&t=${Date.now()}`, { withCredentials: true }); setDesktopItems(response.data || []); } catch (err) { showError('바탕화면 로드', err); }
+  }, [isMobile]);
+  useEffect(() => { loadDesktopItems(); }, [loadDesktopItems]);
+
+  useEffect(() => {
+    const syncInterval = setInterval(async () => {
+      if (inlineEditRef.current || contextMenuRef.current) return;
+      try { const res = await axios.get(`/api/files?path=/&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(desktopItemsRef.current)) setDesktopItems(res.data || []); } catch(e) {}
+      openWindowsRef.current.forEach(async (win) => {
+        if (win.winType === 'folder') { try { const res = await axios.get(`/api/files?path=${encodeURIComponent(win.currentPath)}&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(win.files)) setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, files: res.data || [] } : w)); } catch(e) {} }
+      });
+    }, 3000); 
+    return () => clearInterval(syncInterval);
+  }, [setOpenWindows]);
+
+  useEffect(() => {
+    if (desktopItems.length === 0) return; 
+    setIconPositions(prev => {
+      let hasChanges = false; const newPos = { ...prev }; const occupied = new Set();
+      desktopItems.forEach(item => { if (newPos[ensureSlash(item.fullPath)]) occupied.add(`${newPos[ensureSlash(item.fullPath)].x},${newPos[ensureSlash(item.fullPath)].y}`); });
+      const maxCols = typeof window !== 'undefined' ? Math.max(1, Math.floor(window.innerWidth / 120)) : 10;
+      const getNextSlot = () => { let gridCol = 0, gridRow = 0; while(true) { const x = 20 + gridCol * 110, y = 20 + gridRow * 105; if (x === 20 && y === 20) { gridCol++; continue; } if (!occupied.has(`${x},${y}`)) { occupied.add(`${x},${y}`); return { x, y }; } gridCol++; if (gridCol >= maxCols) { gridCol = 0; gridRow++; } } };
+      desktopItems.forEach(item => { if (!newPos[ensureSlash(item.fullPath)]) { newPos[ensureSlash(item.fullPath)] = getNextSlot(); hasChanges = true; } });
+      return hasChanges ? newPos : prev;
+    });
+  }, [desktopItems]);
+
+  const refreshPath = (path) => { const safePath = ensureSlash(path); if (safePath === '/') loadDesktopItems(); openWindows.forEach(w => { if (w.winType === 'folder' && w.currentPath === safePath) setTimeout(() => fetchFiles(w.id, safePath), 50); }); window.dispatchEvent(new CustomEvent('nas_tree_refresh')); };
+  const getActiveTargetPath = () => { if (!focusedContext || focusedContext === 'desktop') return '/'; const activeWin = openWindows.find(w => w.id === focusedContext); if (!activeWin) return '/'; return activeWin.winType === 'folder' ? activeWin.currentPath : ensureSlash(activeWin.fullPath.substring(0, activeWin.fullPath.lastIndexOf('/'))); };
+  const getSelectedItemsData = useCallback(() => { let currentFiles = focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || []); const activeWin = openWindows.find(w => w.id === focusedContext); if (activeWin && activeWin.winType === 'folder') { currentFiles = [...currentFiles, { fullPath: activeWin.currentPath, name: activeWin.currentPath === '/' ? activeWin.name : activeWin.currentPath.split('/').pop(), type: 'folder' }]; } return selectedItems.map(path => { const found = currentFiles.find(f => ensureSlash(f.fullPath) === path); if (found) return found; const name = path === '/' ? 'Root' : path.split('/').pop(); return { fullPath: path, name, type: name.includes('.') ? 'file' : 'folder' }; }); }, [selectedItems, focusedContext, desktopItems, openWindows]);
+  const getItemsToProcess = (clickedItem) => selectedItems.includes(ensureSlash(clickedItem.fullPath)) && selectedItems.length > 1 ? getSelectedItemsData() : [clickedItem];
+
+  const openFolderWindow = (item) => {
+    const winId = `desk_${item.name}`; const targetPath = ensureSlash(item.path || item.fullPath);
+    if (!openWindows.find(w => w.id === winId && w.id !== 'system_root')) {
+      const newWinId = item.id === 'system_root' ? 'system_root' : winId; if(openWindows.find(w => w.id === newWinId)) return focusWindow(newWinId);
+      setOpenWindows(prev => [...prev, { ...item, id: newWinId, winType: 'folder', basePath: targetPath, currentPath: targetPath, files: [], isLoaded: false, zIndex: topZIndex + 1, sidebarOpen: !isMobile, width: 900, height: 650, x: 100 + (prev.length * 30), y: 50 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
+      setTopZIndex(prev => prev + 1); setFocusedContext(newWinId);
+    } else focusWindow(winId); setSelectedItems([]); 
+  };
+
+  useEffect(() => { openWindows.forEach(w => { if (w.winType === 'folder' && !w.isLoaded) fetchFiles(w.id, w.currentPath); }); }, [openWindows, fetchFiles]);
+
+  const openFileWindow = async (fileItem, forceEditMode = false) => {
+    const safePath = ensureSlash(fileItem.fullPath); const fileId = `file_${safePath}`;
+    if (openWindows.find(w => w.id === fileId)) { setOpenWindows(prev => prev.map(w => w.id === fileId ? { ...w, isMinimized: false, zIndex: topZIndex + 1, mode: forceEditMode ? 'edit' : w.mode } : w)); setTopZIndex(topZIndex + 1); setFocusedContext(fileId); return; }
+    const safeApiUrl = `/api/file/download?path=${encodeURIComponent(safePath)}`; 
+    let ext = fileItem.name.includes('.') ? fileItem.name.split('.').pop().toLowerCase() : '';
+    const binaryExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'mp3', 'wav', 'flac', 'm4a', 'pdf', 'heic', 'heif', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'hwp', 'hwpx', 'zip', 'tar', 'gz'];
+    
+    if (ext === '') {
+      try {
+        const { data } = await axios.get(`/api/file/detect?path=${encodeURIComponent(safePath)}`, { withCredentials: true });
+        if (data.ext) ext = data.ext; 
+      } catch (e) { console.error('지문 감식 실패', e); }
+    }
+
+    const isBinary = binaryExts.includes(ext);
+    try { let content = ''; if (!isBinary) { const response = await axios.get(safeApiUrl, { responseType: 'text', withCredentials: true }); content = typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : response.data; }
+      setOpenWindows(prev => [...prev, { id: fileId, name: fileItem.name, fullPath: safePath, winType: 'file', content: content, originalContent: content, mode: forceEditMode && !isBinary ? 'edit' : 'view', isBinary: isBinary, url: safeApiUrl, ext: ext, zIndex: topZIndex + 1, width: 800, height: 600, x: 150 + (prev.length * 30), y: 100 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
+      setTopZIndex(prev => prev + 1); setFocusedContext(fileId); } catch (err) { showError('파일 열기', err); } setSelectedItems([]);
+  };
+
+  const handleCloseWindowClick = (win) => {
+    const isOffice = ['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt'].includes(win.ext);
+    if (win.winType === 'file' && !win.isBinary && !isOffice && win.content !== win.originalContent) {
+      setClosePrompt(win);
+    } else {
+      closeWindow(win.id);
+    }
+  };
+  const toggleSidebar = (windowId) => setOpenWindows(prev => prev.map(w => w.id === windowId ? { ...w, sidebarOpen: !w.sidebarOpen } : w));
+  const toggleEditMode = (id) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, mode: w.mode === 'view' ? 'edit' : 'view' } : w));
+  const handleContentChange = (id, newContent) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, content: newContent } : w));
+
+  const saveFile = async (win) => {
+    try { const blob = new Blob([win.content], { type: 'text/plain' }); const file = new File([blob], win.name, { type: 'text/plain' }); const formData = new FormData(); formData.append('path', ensureSlash(win.fullPath.substring(0, win.fullPath.lastIndexOf('/')))); formData.append('file', file);
+      await axios.post('/api/file', formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } }); setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, originalContent: win.content, mode: 'view' } : w)); setSnackbar({ open: true, message: `'${win.name}' 저장 완료.`, severity: 'success' }); } catch (err) { showError('저장', err); }
+  };
+
+  const handleInlineSubmit = async (value, editState) => {
+    if (!editState) return; setInlineEdit(null); 
+    const { mode, contextPath, oldPath, originalName, spawnPosition } = editState;
+    const safeContextPath = ensureSlash(contextPath);
+    let targetFiles = safeContextPath === '/' ? desktopItems : (openWindows.find(w => w.currentPath === safeContextPath)?.files || []);
+    
+    try {
+      if (mode === 'new') {
+        let finalName = getUniqueName(value.trim() || '새 폴더', targetFiles.map(f => f.name));
+        await axios.post('/api/file', { folderName: finalName, path: safeContextPath }, { withCredentials: true });
+        if (safeContextPath === '/' && spawnPosition && !isMobile) setIconPositions(prev => ({ ...prev, [`/${finalName}`]: spawnPosition }));
+        refreshPath(safeContextPath); setSnackbar({ open: true, message: `'${finalName}' 폴더 생성 완료`, severity: 'success' });
+      
+      } else if (mode === 'newFile') {
+        let finalName = value.trim() || '새_파일.txt';
+        if (targetFiles.map(f => f.name).includes(finalName)) return setSnackbar({ open: true, message: "동일 이름 존재", severity: 'error' });
+        
+        const file = new File([new Blob([''], { type: 'text/plain' })], finalName, { type: 'text/plain' });
+        const formData = new FormData(); formData.append('path', safeContextPath); formData.append('file', file);
+        await axios.post('/api/file', formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } });
+        
+        if (safeContextPath === '/' && spawnPosition && !isMobile) setIconPositions(prev => ({ ...prev, [`/${finalName}`]: spawnPosition }));
+        refreshPath(safeContextPath); setSnackbar({ open: true, message: `'${finalName}' 파일 생성 완료`, severity: 'success' });
+      
+      } else if (mode === 'rename') {
+        let finalName = value.trim();
+        if (!finalName) return;
+        
+        if (editState.type === 'file') {
+            const isExtVisible = localStorage.getItem('nas_show_extensions') === 'true';
+            const getExt = (n) => n.includes('.') ? n.substring(n.lastIndexOf('.')) : '';
+            const oldExt = getExt(originalName);
+            
+            if (!isExtVisible) {
+                finalName += oldExt;
+            } else {
+                const newExt = getExt(finalName);
+                if (oldExt.toLowerCase() !== newExt.toLowerCase()) {
+                    if (!window.confirm("파일의 확장명을 변경하면 사용할 수 없게 될 수도 있습니다.\n변경하시겠습니까?")) {
+                        setInlineEdit(null);
+                        return;
+                    }
+                }
+            }
+        }
+        
+        if (finalName === originalName) { setInlineEdit(null); return; }
+        if (targetFiles.map(f => f.name).includes(finalName)) return setSnackbar({ open: true, message: "동일 이름 존재", severity: 'error' });
+        const safeOldPath = ensureSlash(oldPath); const newPath = `${safeContextPath.endsWith('/') && safeContextPath !== '/' ? safeContextPath : (safeContextPath === '/' ? '' : safeContextPath)}/${finalName}`;
+        await axios.put('/api/file', { oldPath: safeOldPath, newPath }, { withCredentials: true });
+        if (safeContextPath === '/' && !isMobile) setIconPositions(prev => { const newPos = { ...prev }; if (newPos[safeOldPath]) { newPos[newPath] = newPos[safeOldPath]; delete newPos[safeOldPath]; } return newPos; });
+        refreshPath(safeContextPath);
+      }
+    } catch (err) { showError('적용', err); }
+  };
+
+  const getAvailableDesktopSlot = useCallback(() => {
+    const occupied = new Set(['20,20']); 
+    desktopItems.forEach(item => { if (iconPositions[ensureSlash(item.fullPath)]) occupied.add(`${iconPositions[ensureSlash(item.fullPath)].x},${iconPositions[ensureSlash(item.fullPath)].y}`); });
+    if (inlineEdit?.windowId === 'desktop' && inlineEdit.spawnPosition) occupied.add(`${inlineEdit.spawnPosition.x},${inlineEdit.spawnPosition.y}`);
+    let gridCol = 0, gridRow = 0; const maxCols = typeof window !== 'undefined' ? Math.max(1, Math.floor(window.innerWidth / 120)) : 10;
+    while(true) { const x = 20 + gridCol * 110, y = 20 + gridRow * 105; if (!occupied.has(`${x},${y}`)) return { x, y }; gridCol++; if (gridCol >= maxCols) { gridCol = 0; gridRow++; } }
+  }, [desktopItems, iconPositions, inlineEdit]);
+
+  const handleCreateFolderStart = (targetPath, targetWinId, spawnPosition = null) => setInlineEdit({ mode: 'new', contextPath: targetPath, windowId: targetWinId || 'desktop', name: '', spawnPosition: spawnPosition && !isMobile ? { x: Math.max(0, Math.round((spawnPosition.x - 20) / 110)) * 110 + 20, y: Math.max(0, Math.round((spawnPosition.y - 20) / 105)) * 105 + 20 } : null });
+  const handleCreateFileStart = (targetPath, targetWinId, spawnPosition = null) => setInlineEdit({ mode: 'newFile', contextPath: targetPath, windowId: targetWinId || 'desktop', name: '문서.txt', spawnPosition: spawnPosition && !isMobile ? { x: Math.max(0, Math.round((spawnPosition.x - 20) / 110)) * 110 + 20, y: Math.max(0, Math.round((spawnPosition.y - 20) / 105)) * 105 + 20 } : null });
+  const handleRenameStart = (item, pathContext) => { let wid = focusedContext; const w = openWindowsRef.current.find(x => x.id === wid); if (w && w.winType === 'folder' && !w.files.some(f => ensureSlash(f.fullPath) === ensureSlash(item.fullPath))) wid = w.id + '_tree'; setInlineEdit({ mode: 'rename', oldPath: item.fullPath, originalName: item.name, name: getDisplayName(item), type: item.type, contextPath: pathContext, windowId: wid }); };
+  const handleUploadClick = (targetPath) => { uploadTargetRef.current = ensureSlash(targetPath); if(fileInputRef.current) { fileInputRef.current.value = ''; fileInputRef.current.click(); } };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0]; if (!file) return; 
+    const targetPath = ensureSlash(uploadTargetRef.current); setSnackbar({ open: true, message: `'${file.name}' 업로드 중...`, severity: 'info' });
+    const formData = new FormData(); formData.append('path', targetPath); formData.append('file', file);
+    try { await axios.post('/api/file', formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' }, onUploadProgress: (evt) => { const p = Math.round((evt.loaded * 100) / evt.total); setSnackbar({ open: true, message: p === 100 ? `서버 저장 중...` : `전송 중... ${p}%`, severity: 'info' }); } }); 
+      setSnackbar({ open: true, message: `'${file.name}' 완료!`, severity: 'success' }); refreshPath(targetPath); } catch (err) { showError('업로드', err); } finally { if (fileInputRef.current) fileInputRef.current.value = ''; }
+  };
+
+  const handleDelete = async (itemsToDel, pathContext) => {
+    if (!itemsToDel || itemsToDel.length === 0) return; if (!window.confirm(itemsToDel.length === 1 ? `'${itemsToDel[0].name}' 삭제?` : `${itemsToDel.length}개 삭제?`)) return;
+    try { await Promise.all(itemsToDel.map(async (item) => { const safePath = ensureSlash(item.fullPath); await axios.delete(`/api/file?path=${encodeURIComponent(safePath)}`, { data: { path: safePath }, withCredentials: true }); if (!isMobile) setIconPositions(prev => { const n = {...prev}; delete n[safePath]; return n; }); })); refreshPath(ensureSlash(pathContext)); setSelectedItems([]); setSnackbar({ open: true, message: "삭제 완료", severity: 'success' }); } catch (err) { showError('삭제', err); }
+  };
+
+  const handleDownload = (item) => { 
+    if (item.type === 'folder') {
+      setFolderDownload(item); 
+    } else {
+      const a = document.createElement('a'); 
+      a.href = `/api/file/download?path=${encodeURIComponent(ensureSlash(item.fullPath))}`; 
+      a.download = item.name; 
+      document.body.appendChild(a); 
+      a.click(); 
+      document.body.removeChild(a); 
+    }
+  };
+
+  const executeFolderDownload = (format) => {
+    if (!folderDownload) return;
+    const a = document.createElement('a');
+    a.href = `/api/file/download-folder?path=${encodeURIComponent(ensureSlash(folderDownload.fullPath))}&format=${format}`;
+    document.body.appendChild(a); 
+    a.click(); 
+    document.body.removeChild(a);
+    setFolderDownload(null);
+  };
+  const handleUp = (win) => { if (win.currentPath === win.basePath || win.currentPath === '/') return; const segments = win.currentPath.split('/').filter(Boolean); segments.pop(); fetchFiles(win.id, segments.length > 0 ? ensureSlash(segments.join('/')) : '/'); };
+
+  const handleDragStart = (e, item, sourceId) => { const rect = e.target.getBoundingClientRect(); const safePath = ensureSlash(item.fullPath); let currentSelection = selectedItems.includes(safePath) ? selectedItems : [safePath]; if (!selectedItems.includes(safePath)) setSelectedItems(currentSelection); e.dataTransfer.setData('application/json', JSON.stringify({ draggedPaths: currentSelection, anchorPath: safePath, sourceId, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top })); e.dataTransfer.effectAllowed = 'move'; };
+  const handleDragOver = (e, itemPath = null) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; const safePath = itemPath ? ensureSlash(itemPath) : null; if (safePath && dragOverTarget !== safePath) setDragOverTarget(safePath); };
+  const handleDragLeave = (e, itemPath = null) => { const safePath = itemPath ? ensureSlash(itemPath) : null; if (safePath && dragOverTarget === safePath) setDragOverTarget(null); };
+
+  const handleDrop = async (e, targetPath, targetId) => {
+    // FOLDER_UPLOAD_SAFE_PATCH
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      e.preventDefault();
+
+      const files = Array.from(e.dataTransfer.files);
+
+      const ensureSlash = (p) => p.endsWith('/') ? p : p + '/';
+
+      const join = (base, rel) => {
+        base = ensureSlash(base);
+        rel = rel.replace(/^\/+/, '');
+        return base === '/' ? `/${rel}` : base + rel;
+      };
+
+      // 🔥 1. 폴더 목록 추출
+      const dirSet = new Set();
+
+      files.forEach(f => {
+        const rel = f.webkitRelativePath || f.name;
+        const parts = rel.split('/').filter(Boolean);
+        if (parts.length > 1) {
+          let acc = '';
+          parts.slice(0, -1).forEach(p => {
+            acc = acc ? acc + '/' + p : p;
+            dirSet.add(acc);
+          });
+        }
+      });
+
+      // UPLOAD_STABILIZE_PATCH_V1
+      // 🔥 2. 폴더 먼저 생성
+      const dirs = Array.from(dirSet).sort((a,b)=>a.split('/').length - b.split('/').length);
+
+      let createdDirs = 0;
+      let dirErrors = 0;
+
+      for (const d of dirs) {
+        const full = join(targetPath, d);
+        const parent = full.substring(0, full.lastIndexOf('/')) || '/';
+        const name = full.split('/').filter(Boolean).pop();
+
+        try {
+          await axios.post('/api/file', {
+            path: parent,
+            folderName: name
+          }, { withCredentials: true });
+          createdDirs += 1;
+        } catch (e) {
+          const msg = e?.response?.data?.error || e?.response?.data || '';
+          const status = e?.response?.status;
+          const ignorable = status === 400 || status === 409 || String(msg).includes('exists') || String(msg).includes('이미');
+          if (!ignorable) dirErrors += 1;
+        }
+      }
+
+      // 🔥 3. 파일 업로드
+      let uploaded = 0;
+      let failed = 0;
+      let lastError = '';
+
+      for (const f of files) {
+        const rel = f.webkitRelativePath || f.name;
+        const full = join(targetPath, rel);
+        const parent = full.substring(0, full.lastIndexOf('/')) || '/';
+
+        const form = new FormData();
+        form.append('path', parent);
+        form.append('file', f);
+
+        try {
+          await axios.post('/api/file', form, { withCredentials: true });
+          uploaded += 1;
+        } catch (e) {
+          failed += 1;
+          lastError = e?.response?.data?.error || e?.response?.data || e?.message || '업로드 실패';
+          console.error('업로드 실패:', rel, e);
+        }
+      }
+
+      try { refreshPath(targetPath); } catch (e) {}
+      try { if (targetPath !== '/') refreshPath('/'); } catch (e) {}
+
+      if (failed === 0 && dirErrors === 0) {
+        setSnackbar({
+          open: true,
+          message: `업로드 완료 (파일 ${uploaded}개${createdDirs ? `, 폴더 ${createdDirs}개` : ''})`,
+          severity: 'success'
+        });
+      } else {
+        setSnackbar({
+          open: true,
+          message: `부분 완료 - 성공 ${uploaded}개, 실패 ${failed}개${dirErrors ? `, 폴더오류 ${dirErrors}개` : ''}${lastError ? ` / ${String(lastError).slice(0, 80)}` : ''}`,
+          severity: 'warning'
+        });
+      }
+      return;
+    }
+
+    // EXTERNAL_DRAG_UPLOAD_RESTORED
+    // OS 바깥(탐색기/파일관리자)에서 파일/폴더를 끌어다 놓는 경우 우선 처리
+    if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragOverTarget(null);
+
+      const normalizeJoin = (base, rel) => {
+        const safeBase = ensureSlash(base || '/');
+        const cleanRel = String(rel || '').replace(/^\/+/, '');
+        if (!cleanRel) return safeBase;
+        return safeBase === '/' ? `/${cleanRel}` : `${safeBase}/${cleanRel}`;
+      };
+
+      const uploadOne = async (file, relPath = '') => {
+        const fullPath = normalizeJoin(targetPath, relPath);
+        const destDirPath = fullPath.substring(0, fullPath.lastIndexOf('/')) || '/';
+        const formData = new FormData();
+        formData.append('path', destDirPath);
+        formData.append('file', file);
+        await axios.post('/api/file', formData, { withCredentials: true });
+      };
+
+      const scanEntry = async (entry, prefix = '') => {
+        if (!entry) return [];
+        if (entry.isFile) {
+          const file = await new Promise((resolve, reject) => {
+            entry.file(resolve, reject);
+          });
+          return [{ file, relPath: `${prefix}${file.name}` }];
+        }
+        if (entry.isDirectory) {
+          const dirName = entry.name || '';
+          const dirPrefix = `${prefix}${dirName}/`;
+          const reader = entry.createReader();
+          const readAllEntries = async () => {
+            let all = [];
+            while (true) {
+              const chunk = await new Promise((resolve, reject) => {
+                reader.readEntries(resolve, reject);
+              });
+              if (!chunk || chunk.length === 0) break;
+              all = all.concat(chunk);
+            }
+            return all;
+          };
+          const children = await readAllEntries();
+          let out = [];
+          for (const child of children) {
+            out = out.concat(await scanEntry(child, dirPrefix));
+          }
+          return out;
+        }
+        return [];
+      };
+
+      try {
+        let uploadList = [];
+        const items = e.dataTransfer.items ? Array.from(e.dataTransfer.items) : [];
+
+        if (items.length > 0 && items.some(item => item.webkitGetAsEntry)) {
+          for (const item of items) {
+            const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+            if (!entry) continue;
+            const scanned = await scanEntry(entry, '');
+            uploadList = uploadList.concat(scanned);
+          }
+        } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          uploadList = Array.from(e.dataTransfer.files).map(file => ({
+            file,
+            relPath: file.webkitRelativePath || file.name
+          }));
+        }
+
+        if (!uploadList.length) {
+          setSnackbar({ open: true, message: '업로드할 파일을 읽지 못했습니다.', severity: 'warning' });
+          return;
+        }
+
+        let done = 0;
+        for (const item of uploadList) {
+          await uploadOne(item.file, item.relPath);
+          done += 1;
+        }
+
+        refreshPath(targetPath);
+        if (ensureSlash(targetPath) !== '/') refreshPath('/');
+        setSnackbar({ open: true, message: `${done}개 업로드 완료`, severity: 'success' });
+        return;
+      } catch (err) {
+        console.error('외부 드래그 업로드 실패:', err);
+        showError ? showError('업로드', err) : setSnackbar({ open: true, message: '업로드 실패', severity: 'error' });
+        return;
+      }
+    }
+
+
+    // 🔥 파일 업로드 복구
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files);
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append('path', targetPath);
+        formData.append('file', file);
+        try {
+          await axios.post('/api/file', formData, { withCredentials: true });
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      setSnackbar({ open: true, message: '업로드 완료', severity: 'success' });
+      refreshPath(targetPath);
+      return;
+    }
+
+    e.preventDefault(); e.stopPropagation(); setDragOverTarget(null); 
+    try {
+      const dataStr = e.dataTransfer.getData('application/json'); if (!dataStr) return;
+      const { draggedPaths, anchorPath, sourceId, offsetX, offsetY } = JSON.parse(dataStr);
+      const safeTarget = ensureSlash(targetPath); const cleanTarget = safeTarget.endsWith('/') && safeTarget !== '/' ? safeTarget.slice(0, -1) : safeTarget;
+      if (draggedPaths.some(p => safeTarget === p || safeTarget.startsWith(p + '/'))) return alert("이동 불가");
+
+      if (sourceId === 'desktop' && targetId === 'desktop' && safeTarget === '/') {
+        if (desktopRef.current && !isMobile) {
+          const rect = desktopRef.current.getBoundingClientRect();
+          const deltaX = (Math.max(0, Math.round((e.clientX - rect.left - (offsetX || 40) - 20) / 110)) * 110 + 20) - (iconPositions[anchorPath] || {x:0,y:0}).x;
+          const deltaY = (Math.max(0, Math.round((e.clientY - rect.top - (offsetY || 40) - 20) / 105)) * 105 + 20) - (iconPositions[anchorPath] || {x:0,y:0}).y;
+          let collision = false; const newPos = {};
+          draggedPaths.forEach(p => { const oldP = iconPositions[p] || { x: 0, y: 0 }; const nx = Math.max(20, oldP.x + deltaX), ny = Math.max(20, oldP.y + deltaY); newPos[p] = { x: nx, y: ny }; if (desktopItems.some(i => !draggedPaths.includes(ensureSlash(i.fullPath)) && iconPositions[ensureSlash(i.fullPath)]?.x === nx && iconPositions[ensureSlash(i.fullPath)]?.y === ny)) collision = true; });
+          if (!collision) setIconPositions(prev => ({ ...prev, ...newPos }));
+        } return; 
+      }
+      let refreshNeeded = new Set([cleanTarget || '/']), movedCount = 0;
+      await Promise.all(draggedPaths.map(async (oldP) => { const safeOld = ensureSlash(oldP); const newP = (cleanTarget === '/' ? '' : cleanTarget) + '/' + safeOld.split('/').pop(); if (safeOld === newP) return; await axios.put('/api/file', { oldPath: safeOld, newPath: newP }, { withCredentials: true }); if (sourceId === 'desktop' && !isMobile) setIconPositions(prev => { const n = {...prev}; delete n[safeOld]; return n; }); refreshNeeded.add(ensureSlash(safeOld.substring(0, safeOld.lastIndexOf('/')))); movedCount++; }));
+      if (movedCount > 0) { refreshNeeded.forEach(p => refreshPath(p)); setSelectedItems([]); setSnackbar({ open: true, message: `${movedCount}개 이동`, severity: 'success' }); }
+    } catch (err) { showError('이동', err); }
+  };
+
+  const handleContextMenuClose = () => setContextMenu(null);
+  const handleContextMenu = (e, type, ctxData) => { e.preventDefault(); e.stopPropagation(); setFocusedContext(ctxData.windowId || 'desktop'); setContextMenu({ mouseX: e.clientX, mouseY: e.clientY, type, ...ctxData }); const safePath = ctxData.item ? ensureSlash(ctxData.item.fullPath) : null; if (safePath && !selectedItems.includes(safePath)) setSelectedItems([safePath]); };
+  const handleItemClick = (e, safePath, item) => { e.stopPropagation(); if (isLongPressTriggered.current) return; if (e.ctrlKey || e.metaKey) setSelectedItems(prev => prev.includes(safePath) ? prev.filter(p => p !== safePath) : [...prev, safePath]); else setSelectedItems([safePath]); if (isMobile && !inlineEdit) item.type === 'folder' ? openFolderWindow(item) : openFileWindow(item, false); };
+
+  useShortcuts({ selectedItems, onRename: () => { const items = getSelectedItemsData(); if (items.length === 1) handleRenameStart(items[0], items[0].fullPath.substring(0, items[0].fullPath.lastIndexOf('/')) || '/'); }, onDelete: () => { const items = getSelectedItemsData(); if (items.length > 0) handleDelete(items, getActiveTargetPath()); }, onOpen: () => { const items = getSelectedItemsData(); if (items.length === 1) items[0].type === 'folder' ? openFolderWindow(items[0]) : openFileWindow(items[0], false); }, onSelectAll: () => setSelectedItems((focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || [])).map(f => ensureSlash(f.fullPath))), onDeselectAll: () => { setSelectedItems([]); setInlineEdit(null); setContextMenu(null); }, onNewFolder: () => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null) });
+
+  return (
+    <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%', userSelect: 'none', '& .react-resizable-handle:hover': { backgroundColor: theme.palette.primary.main, opacity: 0.5 }}}>
+      <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, '/', 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: '/', windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: '/', windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: isMobile ? 'flex' : 'block', flexWrap: isMobile ? 'wrap' : 'nowrap', alignContent: 'flex-start', gap: isMobile ? 2 : 0, p: isMobile ? 2 : 0, background: theme.palette.mode === 'dark' ? 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)' : 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #93c5fd 100%)' }}>
+        <motion.div onClick={(e) => { e.stopPropagation(); setSelectedItems(['system_root']); if (isMobile) openFolderWindow({ id: 'system_root', name: isAdmin ? '서버 전체 저장소' : '내 클라우드', path: '/' }); }} onDoubleClick={(e) => { e.stopPropagation(); if(!isMobile) openFolderWindow({ id: 'system_root', name: isAdmin ? '서버 전체 저장소' : '내 클라우드', path: '/' }); }} style={isMobile ? { textAlign: 'center', width: '80px', cursor: 'pointer', zIndex: 10 } : { position: 'absolute', left: 20, top: 20, textAlign: 'center', cursor: 'pointer', width: '100px', zIndex: 10 }}>
+          <Box sx={{ p: 1, borderRadius: '6px', border: selectedItems.includes('system_root') ? '1px solid rgba(255,255,255,0.4)' : '1px solid transparent', backgroundColor: selectedItems.includes('system_root') ? 'rgba(255, 255, 255, 0.15)' : 'transparent', color: 'white', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}><StorageIcon sx={{ fontSize: isMobile ? 40 : 60, color: isAdmin ? '#ef4444' : '#fde047' }} /><Typography variant="body2" sx={{ mt: 1, fontWeight: 'bold', fontSize: isMobile ? '0.75rem' : '0.875rem' }}>{isAdmin ? '전체 저장소' : '내 클라우드'}</Typography>
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+        </motion.div>
+
+        {desktopItems.map((item) => {
+          const safePath = ensureSlash(item.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === 'desktop'); const isSelected = selectedItems.includes(safePath); const pos = iconPositions[safePath] || { x: 0, y: 0 }; 
+          return (
+            <motion.div key={safePath} className="selectable-item" data-path={safePath}     draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, item, 'desktop') }} onDragOver={(e) => { if (item.type === 'folder' && !isMobile) handleDragOver(e, item.fullPath); }} onDragLeave={(e) => { if (item.type === 'folder' && !isMobile) handleDragLeave(e, item.fullPath); }} onDrop={(e) => { if (item.type === 'folder' && !isMobile) handleDrop(e, item.fullPath, 'desktop'); }} onClick={(e) => handleItemClick(e, safePath, item)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) item.type === 'folder' ? openFolderWindow(item) : openFileWindow(item, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} style={isMobile ? { textAlign: 'center', cursor: isEditing ? 'default' : 'pointer', width: '80px', zIndex: isSelected ? 20 : (isEditing ? 15 : 10) } : { position: 'absolute', left: pos.x, top: pos.y, textAlign: 'center', cursor: isEditing ? 'default' : 'pointer', width: '100px', zIndex: isSelected ? 20 : (isEditing ? 15 : 10) }}>
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
+                <Box sx={{ color: 'white', p: 1, borderRadius: '6px', border: dragOverTarget === safePath ? '2px dashed #fbbf24' : (isSelected ? '1px solid rgba(255,255,255,0.4)' : '1px solid transparent'), backgroundColor: dragOverTarget === safePath ? 'rgba(251, 191, 36, 0.2)' : (isSelected ? 'rgba(255, 255, 255, 0.15)' : 'transparent'), transition: 'all 0.1s ease-in-out', '&:hover': { backgroundColor: isSelected ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.08)' } }}>{item.type === 'folder' ? <FolderIcon sx={{ fontSize: !isMobile ? 60 : 40, color: '#fde047' }} /> : <InsertDriveFileIcon sx={{ fontSize: !isMobile ? 60 : 40, color: '#e2e8f0' }} />}
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+                {isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={true} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 'bold', color: 'white', textShadow: '1px 1px 3px rgba(0,0,0,0.8)', wordBreak: 'break-all', maxWidth: isMobile ? '80px' : '90px', lineHeight: 1.2, fontSize: isMobile ? '0.75rem' : '0.875rem' }}>{isSelected || isMobile ? getDisplayName(item) : (getDisplayName(item).length > 8 ? getDisplayName(item).substring(0, 8) + '...' : getDisplayName(item))}</Typography>}
+              
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+            </motion.div>
+          );
+        })}
+        {/* 🔥 바탕화면: 새 파일/새 폴더 입력창 표시 (아이콘 동적 변경) */}
+        {inlineEdit && (inlineEdit.mode === 'new' || inlineEdit.mode === 'newFile') && inlineEdit.windowId === 'desktop' && (<motion.div style={isMobile ? { textAlign: 'center', width: '80px', zIndex: 15 } : { position: 'absolute', left: inlineEdit.spawnPosition?.x || 200, top: inlineEdit.spawnPosition?.y || 200, textAlign: 'center', width: '100px', zIndex: 15 }}><Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>{inlineEdit.mode === 'new' ? <FolderIcon sx={{ fontSize: isMobile ? 40 : 60, color: '#fde047' }} /> : <InsertDriveFileIcon sx={{ fontSize: isMobile ? 40 : 60, color: '#e2e8f0' }} />}<InlineInput defaultValue={inlineEdit.name} isDesktop={true} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} />
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+</motion.div>)}
+      
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+
+      {/* 🔥 [버튼 3대장] 파일, 폴더, 업로드 버튼 배치! */}
+      <Box sx={{ position: isMobile ? 'fixed' : 'absolute', bottom: isMobile ? 20 : 30, right: isMobile ? 15 : 30, display: (openWindows.some(w => w.isImmersive) || (isMobile && openWindows.find(w => w.id === focusedContext)?.winType === 'file')) ? 'none' : 'flex', gap: isMobile ? 1 : 2, zIndex: 1200 }}>
+        <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileUpload} />
+        <Button variant="contained" color="secondary" size={isMobile ? "small" : "medium"} onClick={() => handleUploadClick(getActiveTargetPath())} sx={{ minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1 }}><UploadFileIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "업로드"}</Button>
+        <Button variant="contained" color="info" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFileStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ bgcolor: '#0ea5e9', minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1, '&:hover':{ bgcolor: '#0284c7' } }}><NoteAddIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 파일"}</Button>
+        <Button variant="contained" color="primary" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1 }}><CreateNewFolderIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 폴더"}</Button>
+      
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+
+      <AnimatePresence>
+        {openWindows.map((win) => {
+          
+          const winStyles = win.isImmersive ? { width: '100vw', height: '100vh', x: 0, y: 0 } : (isMobile ? { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' } : { width: win.isMaximized ? '100%' : win.width, height: win.isMaximized ? '100%' : win.height, x: win.isMaximized ? 0 : win.x, y: win.isMaximized ? 0 : win.y });
+          const isActive = focusedContext === win.id;
+
+          return (
+            <Rnd 
+              key={win.id} style={{ display: win.isMinimized ? 'none' : 'block', zIndex: win.isImmersive ? 99999 : win.zIndex, position: win.isImmersive ? 'fixed' : 'absolute', top: win.isImmersive ? 0 : 'auto', left: win.isImmersive ? 0 : 'auto' }} disableDragging={isMobile || win.isMaximized || win.isImmersive} enableResizing={!isMobile && !win.isMaximized && !win.isImmersive} 
+              minWidth={300} minHeight={350} size={isMobile ? { width: '100%', height: '100%' } : { width: winStyles.width, height: winStyles.height }} position={isMobile ? { x: 0, y: 0 } : { x: winStyles.x, y: winStyles.y }} 
+              onMouseDown={() => focusWindow(win.id)} onDragStop={(e, d) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, x: d.x, y: d.y } : w))} onResizeStop={(e, direction, ref, delta, position) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, width: ref.style.width, height: ref.style.height, x: position.x, y: position.y } : w))} dragHandleClassName="window-header-drag-handle" bounds="parent" 
+            >
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} style={{ height: '100%', width: '100%' }}>
+                <Paper elevation={isActive ? 24 : 8} sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderRadius: (isMobile || win.isMaximized || win.isImmersive) ? 0 : 2, overflow: 'hidden', border: isActive ? `3px solid ${theme.palette.primary.main}` : `1px solid ${theme.palette.divider}`, boxShadow: isActive ? `0 0 25px ${alpha(theme.palette.primary.main, 0.4)}` : theme.shadows[10], transition: 'border 0.2s ease, box-shadow 0.2s ease' }}>
+                  {win.isImmersive && <Box onMouseEnter={() => setHoveredHeader(win.id)} sx={{ position: 'absolute', top: 0, left: 0, right: 0, height: '30px', zIndex: 99998, cursor: 'default' }} />}
+                  <Box className="window-header-drag-handle" onMouseEnter={() => setHoveredHeader(win.id)} onMouseLeave={() => setHoveredHeader(null)} sx={{ display: 'flex', position: win.isImmersive ? 'absolute' : 'relative', top: win.isImmersive ? (hoveredHeader === win.id ? 0 : '-70px') : 0, left: 0, right: 0, width: '100%', transition: 'top 0.35s cubic-bezier(0.4, 0, 0.2, 1)', zIndex: 100000, p: 1, background: isActive ? alpha(theme.palette.primary.main, 0.08) : theme.palette.background.default, borderBottom: `1px solid ${theme.palette.divider}`, justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, cursor: win.isMaximized ? 'default' : 'move' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, overflow: 'hidden' }}>
+                      {win.winType === 'folder' ? (
+                        <>
+                          <IconButton size="small" onClick={() => toggleSidebar(win.id)} color={isActive ? "primary" : "inherit"} onMouseDown={(e) => e.stopPropagation()}><MenuIcon /></IconButton>
+                          <IconButton size="small" onClick={() => handleUp(win)} disabled={win.currentPath === win.basePath} color="inherit" onMouseDown={(e) => e.stopPropagation()}><ArrowBackIcon /></IconButton>
+                          <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', ml: 1 }} onMouseDown={(e) => e.stopPropagation()}>
+                            <Typography onClick={() => fetchFiles(win.id, win.basePath)} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800, whiteSpace: 'nowrap' }}>{win.name}</Typography>
+                            {getRelativeSegments(win.currentPath, win.basePath).map((seg, idx, arr) => (<React.Fragment key={idx}><Typography sx={{ mx: 0.5, color: 'text.secondary' }}>/</Typography><Typography onClick={() => fetchFiles(win.id, (win.basePath === '/' ? '' : win.basePath.replace(/\/$/, '')) + '/' + arr.slice(0, idx + 1).join('/'))} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800, whiteSpace: 'nowrap' }}>{seg}</Typography></React.Fragment>))}
+                          
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+                        </>
+                      ) : (<><InsertDriveFileIcon color={isActive ? "primary" : "inherit"} /><Typography sx={{ fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{win.name}</Typography></>)}
+                    
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+                    <Box sx={{ display: 'flex', flexShrink: 0 }} onMouseDown={(e) => e.stopPropagation()}>
+                      {!isMobile && <IconButton size="small" onClick={(e) => { e.stopPropagation(); if (win.isImmersive) { setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, isImmersive: false, isMinimized: true } : w)); } else { toggleMinimize(win.id); } }}><RemoveIcon fontSize="small"/></IconButton>}
+                      {!isMobile && <IconButton size="small" onClick={(e) => { e.stopPropagation(); if (win.isImmersive) { setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, isImmersive: false } : w)); } else { toggleMaximize(win.id); } }} onMouseDown={() => { window.immersiveTimer = setTimeout(() => { setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, isImmersive: true } : w)); }, 500); }} onMouseUp={() => clearTimeout(window.immersiveTimer)} onMouseLeave={() => clearTimeout(window.immersiveTimer)} onTouchStart={() => { window.immersiveTimer = setTimeout(() => { setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, isImmersive: true } : w)); }, 500); }} onTouchEnd={() => clearTimeout(window.immersiveTimer)}>{win.isMaximized ? <FilterNoneIcon fontSize="small"/> : <CropSquareIcon fontSize="small"/>}</IconButton>}
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleCloseWindowClick(win); }} color="error"><CloseIcon fontSize="small"/></IconButton>
+                    
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+                  
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+                  
+                  <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
+                    {win.winType === 'folder' && (
+                      <>
+                        <AnimatePresence>
+                          {win.sidebarOpen && !isMobile && (
+                            <motion.div initial={{ x: -220 }} animate={{ x: 0 }} exit={{ x: -220 }} transition={{ type: 'tween', duration: 0.2 }} style={{ width: 220, height: '100%', backgroundColor: theme.palette.background.default, borderRight: `1px solid ${theme.palette.divider}`, zIndex: 10 }}>
+                              <SidebarTree win={win} fetchFiles={fetchFiles} theme={theme} openFileWindow={openFileWindow} handleContextMenu={handleContextMenu} handleItemClick={handleItemClick} selectedItems={selectedItems} inlineEdit={inlineEdit} handleInlineSubmit={handleInlineSubmit} setInlineEdit={setInlineEdit} />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                        <TableContainer className="window-content-area" onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} onContextMenu={(e) => handleContextMenu(e, 'background', { path: win.currentPath, windowId: win.id })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if(e.target === e.currentTarget) setSelectedItems([]); }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, background: 'transparent' }}>
+                          <Table stickyHeader size="small">
+                            <TableBody>
+                              {win.files.map((file, idx) => {
+                                const safePath = ensureSlash(file.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === win.id); const isSelected = selectedItems.includes(safePath); const isDragTarget = dragOverTarget === safePath;
+                                return (
+                                  <TableRow key={idx} className="selectable-item" data-path={safePath} hover draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, file, win.id) }} onDragOver={(e) => { if(file.type === 'folder' && !isMobile) handleDragOver(e, file.fullPath) }} onDragLeave={(e) => { if(file.type === 'folder' && !isMobile) handleDragLeave(e, file.fullPath) }} onDrop={(e) => { if(file.type === 'folder' && !isMobile) handleDrop(e, file.fullPath, win.id) }} onClick={(e) => handleItemClick(e, safePath, file)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) file.type === 'folder' ? fetchFiles(win.id, ensureSlash(file.fullPath)) : openFileWindow(file, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, file.type, { item: file, path: win.currentPath, windowId: win.id }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, file.type, { item: file, path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ cursor: isEditing ? 'default' : 'pointer', backgroundColor: isDragTarget ? alpha(theme.palette.warning.main, 0.2) : (isSelected ? alpha(theme.palette.primary.main, 0.1) : 'inherit'), border: isDragTarget ? `2px dashed ${theme.palette.warning.main}` : 'none' }}>
+                                    <TableCell sx={{ display: 'flex', alignItems: 'center', py: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>{file.type === 'folder' ? <FolderIcon sx={{ mr: 1.5, color: '#fbbf24' }} /> : <InsertDriveFileIcon sx={{ mr: 1.5, color: theme.palette.text.secondary }} />}{isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={false} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography>{getDisplayName(file)}</Typography>}</TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                              {/* 🔥 창 안쪽: 새 파일/새 폴더 입력창 표시 */}
+                              {inlineEdit && (inlineEdit.mode === 'new' || inlineEdit.mode === 'newFile') && inlineEdit.windowId === win.id && (<TableRow><TableCell sx={{ display: 'flex', alignItems: 'center', py: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>{inlineEdit.mode === 'new' ? <FolderIcon sx={{ mr: 1.5, color: '#fbbf24' }} /> : <InsertDriveFileIcon sx={{ mr: 1.5, color: theme.palette.text.secondary }} />}<InlineInput defaultValue={inlineEdit.name} isDesktop={false} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /></TableCell></TableRow>)}
+                            </TableBody>
+                          </Table>
+                        </TableContainer>
+                      </>
+                    )}
+                    {win.winType === 'file' && <FileViewer win={win} toggleEditMode={toggleEditMode} handleContentChange={handleContentChange} saveFile={saveFile} />}
+                  
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+                </Paper>
+              </motion.div>
+            </Rnd>
+          );
+        })}
+      </AnimatePresence>
+
+      
+      {/* 🔥 저장 3지선다 다이얼로그 */}
+      <Dialog open={Boolean(closePrompt)} onClose={() => setClosePrompt(null)}>
+        <DialogTitle sx={{ fontWeight: 'bold' }}>저장되지 않은 변경 사항</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            '{closePrompt?.name}' 파일의 변경 내용을 저장하시겠습니까?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, pt: 0 }}>
+          <Button onClick={async () => { await saveFile(closePrompt); closeWindow(closePrompt.id); setClosePrompt(null); }} color="primary" variant="contained" disableElevation>저장</Button>
+          <Button onClick={() => { closeWindow(closePrompt.id); setClosePrompt(null); }} color="error" variant="outlined">저장 안 함</Button>
+          <Button onClick={() => setClosePrompt(null)} color="inherit">취소</Button>
+        </DialogActions>
+      </Dialog>
+    
+      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} getItemsToProcess={getItemsToProcess} />
+      <Snackbar open={snackbar.open} autoHideDuration={snackbar.severity === 'info' ? null : 3000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}><Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', display: 'flex', alignItems: 'center' }}>{snackbar.severity === 'info' && <CircularProgress size={20} sx={{ mr: 2, color: 'inherit' }} />}{snackbar.message}</Alert></Snackbar>
+      {/* 🔥 폴더 다운로드 다이얼로그 */}
+      <Dialog open={!!folderDownload} onClose={() => setFolderDownload(null)} PaperProps={{ elevation: 24, sx: { borderRadius: 3, p: 1 } }}>
+        <DialogTitle sx={{ fontWeight: 800, textAlign: 'center' }}>폴더 다운로드</DialogTitle>
+        <DialogContent sx={{ textAlign: 'center' }}>
+          <DialogContentText sx={{ mb: 3 }}>
+            <strong style={{ color: '#3b82f6' }}>'{folderDownload?.name}'</strong> 폴더를 압축합니다.<br/>원하시는 압축 포맷을 선택해 주세요.
+          </DialogContentText>
+          <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+            <Button variant="contained" color="primary" onClick={() => executeFolderDownload('zip')} sx={{ fontWeight: 'bold' }}>.ZIP (권장)</Button>
+            <Button variant="outlined" color="secondary" onClick={() => executeFolderDownload('tar')}>.TAR</Button>
+            <Button variant="outlined" color="info" onClick={() => executeFolderDownload('tgz')}>.TAR.GZ</Button>
+          
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+        </DialogContent>
+        <DialogActions sx={{ justifyContent: 'center' }}>
+          <Button onClick={() => setFolderDownload(null)} color="inherit">취소</Button>
+        </DialogActions>
+      </Dialog>
+    
+    
+{transferTasks.length > 0 && (
+  <Box sx={{ position: 'fixed', bottom: 20, right: 20 }}>
+    {transferTasks.map(task => (
+      <Paper key={task.id} sx={{ p: 1 }}>
+        <Typography variant="caption">{task.name}</Typography>
+      </Paper>
+    ))}
+  </Box>
+)}
+</Box>
+
+  );
+};
+
+export default NAS;

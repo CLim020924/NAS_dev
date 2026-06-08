@@ -1,0 +1,371 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress , Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions} from '@mui/material';
+import { alpha } from '@mui/material/styles';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Rnd } from 'react-rnd';
+import axios from 'axios';
+
+import { ensureSlash, getUniqueName, getRelativeSegments } from './NAS/nasUtils';
+import InlineInput from './NAS/InlineInput';
+import FileViewer from './NAS/FileViewer';
+import NASContextMenu from './NAS/NASContextMenu';
+import SidebarTree from './NAS/Window/SidebarTree'; 
+
+import MenuIcon from '@mui/icons-material/Menu'; 
+import FolderIcon from '@mui/icons-material/Folder';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import CloseIcon from '@mui/icons-material/Close';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import StorageIcon from '@mui/icons-material/Storage';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import RemoveIcon from '@mui/icons-material/Remove';
+import CropSquareIcon from '@mui/icons-material/CropSquare';
+import FilterNoneIcon from '@mui/icons-material/FilterNone';
+
+import { useWindows } from '../contexts/WindowContext';
+import useShortcuts from '../hooks/useShortcuts';
+
+const NAS = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const fileInputRef = useRef(null);
+  const uploadTargetRef = useRef('/'); 
+  const desktopRef = useRef(null); 
+  
+  const currentUser = JSON.parse(localStorage.getItem('user')) || {};
+  const isAdmin = currentUser.Masters || currentUser.Managers;
+
+  const [desktopItems, setDesktopItems] = useState([]);
+  const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
+  useEffect(() => {
+    const handleStorageChange = () => setShowExt(localStorage.getItem('nas_show_extensions') === 'true');
+    window.addEventListener('nas_settings_changed', handleStorageChange);
+    return () => window.removeEventListener('nas_settings_changed', handleStorageChange);
+  }, []);
+
+  const getDisplayName = (item) => {
+    if (item.type !== 'file' || showExt) return item.name;
+    return item.name.includes('.') ? item.name.substring(0, item.name.lastIndexOf('.')) : item.name;
+  };
+
+  const [closePrompt, setClosePrompt] = useState(null);
+  const [hoveredHeader, setHoveredHeader] = useState(null);
+  const [folderDownload, setFolderDownload] = useState(null);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  const [contextMenu, setContextMenu] = useState(null);
+  const [inlineEdit, setInlineEdit] = useState(null);
+  const [selectedItems, setSelectedItems] = useState([]);
+  const [dragOverTarget, setDragOverTarget] = useState(null);
+  const [iconPositions, setIconPositions] = useState(() => JSON.parse(localStorage.getItem('msp_icon_positions') || '{}'));
+  
+  const { openWindows, setOpenWindows, topZIndex, setTopZIndex, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles } = useWindows();
+
+  const desktopItemsRef = useRef(desktopItems); desktopItemsRef.current = desktopItems;
+  const openWindowsRef = useRef(openWindows); openWindowsRef.current = openWindows;
+  const inlineEditRef = useRef(inlineEdit); inlineEditRef.current = inlineEdit;
+  const contextMenuRef = useRef(contextMenu); contextMenuRef.current = contextMenu;
+
+  const touchTimer = useRef(null);
+  const isLongPressTriggered = useRef(false);
+
+  const handleTouchStart = (e, type, ctxData) => {
+    if (e.touches.length > 1) return;
+    isLongPressTriggered.current = false;
+    const clientX = e.touches[0].clientX, clientY = e.touches[0].clientY;
+    touchTimer.current = setTimeout(() => {
+      isLongPressTriggered.current = true;
+      setFocusedContext(ctxData.windowId || 'desktop');
+      setContextMenu({ mouseX: clientX, mouseY: clientY, type, ...ctxData });
+      const safePath = ctxData.item ? ensureSlash(ctxData.item.fullPath) : null;
+      if (safePath && !selectedItems.includes(safePath)) setSelectedItems([safePath]);
+      if (navigator.vibrate) navigator.vibrate(50);
+    }, 500);
+  };
+  const cancelTouch = () => { if (touchTimer.current) { clearTimeout(touchTimer.current); touchTimer.current = null; } };
+
+  useEffect(() => { localStorage.setItem('msp_icon_positions', JSON.stringify(iconPositions)); }, [iconPositions]);
+  
+  const [clipboard, setClipboard] = useState({ paths: [] });
+
+  useEffect(() => {
+    const handleKeyDown = async (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.closest('.monaco-editor') || e.target?.closest('.onlyoffice-wrapper')) return;
+
+      let targetFolder = '/';
+      if (focusedContext && focusedContext !== 'desktop') {
+        const win = openWindowsRef.current.find(w => w.id === focusedContext);
+        if (win && win.currentPath) targetFolder = win.currentPath;
+      }
+
+      if (e.key === 'Delete' && selectedItems.length > 0) {
+        if (window.confirm(`선택한 ${selectedItems.length}개 항목을 삭제하시겠습니까?`)) {
+          try {
+            await Promise.all(selectedItems.map(item => axios.delete('/api/file', { data: { path: item }, withCredentials: true })));
+            setSelectedItems([]); 
+            if (typeof fetchFiles === 'function') { fetchFiles(targetFolder || '/'); if ((targetFolder || '/') !== '/') fetchFiles('/'); }
+            setSnackbar({ open: true, message: '삭제 완료!', severity: 'success' });
+          } catch(err) { showError('삭제', err); }
+        }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && selectedItems.length > 0) {
+        setClipboard({ paths: selectedItems });
+        setSnackbar({ open: true, message: `${selectedItems.length}개 항목 복사됨`, severity: 'info' });
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && clipboard.paths.length > 0) {
+        try {
+          await axios.post('/api/file/copy', { sourcePaths: clipboard.paths, destinationFolder: targetFolder || '/' }, { withCredentials: true });
+          if (typeof fetchFiles === 'function') { fetchFiles(targetFolder || '/'); if ((targetFolder || '/') !== '/') fetchFiles('/'); }
+          setSnackbar({ open: true, message: '붙여넣기 성공!', severity: 'success' });
+        } catch(err) { showError('붙여넣기', err); }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedItems, focusedContext, clipboard, fetchFiles]);
+
+  useEffect(() => {
+    let isSelecting = false;
+    let startX = 0, startY = 0;
+    let selectionBox = null;
+    let limitRect = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+    let currentContainer = null;
+
+    const handleMouseDown = (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('.selectable-item') || e.target.closest('button') || e.target.closest('.window-header-drag-handle') || e.target.closest('.MuiDialogTitle-root') || e.target.closest('input')) return;
+      currentContainer = e.target.closest('.window-content-area') || document.body;
+      if (currentContainer === document.body) {
+        limitRect = { top: 64, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+      } else {
+        const rect = currentContainer.getBoundingClientRect();
+        limitRect = { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom };
+      }
+      if (e.clientX < limitRect.left || e.clientX > limitRect.right || e.clientY < limitRect.top || e.clientY > limitRect.bottom) return;
+
+      setSelectedItems([]);
+      isSelecting = true;
+      startX = e.clientX;
+      startY = e.clientY;
+
+      selectionBox = document.createElement('div');
+      selectionBox.style.position = 'fixed';
+      selectionBox.style.border = '1px solid rgba(59, 130, 246, 0.8)';
+      selectionBox.style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
+      selectionBox.style.zIndex = '9999';
+      selectionBox.style.pointerEvents = 'none';
+      document.body.appendChild(selectionBox);
+    };
+
+    const handleMouseMove = (e) => {
+      if (!isSelecting || !selectionBox) return;
+      let clampedX = Math.max(limitRect.left, Math.min(e.clientX, limitRect.right));
+      let clampedY = Math.max(limitRect.top, Math.min(e.clientY, limitRect.bottom));
+      const left = Math.min(startX, clampedX);
+      const top = Math.min(startY, clampedY);
+      const width = Math.abs(clampedX - startX);
+      const height = Math.abs(clampedY - startY);
+      selectionBox.style.left = left + 'px';
+      selectionBox.style.top = top + 'px';
+      selectionBox.style.width = width + 'px';
+      selectionBox.style.height = height + 'px';
+
+      const boxRect = selectionBox.getBoundingClientRect();
+      const targetArea = currentContainer === document.body ? document : currentContainer;
+      const items = targetArea.querySelectorAll('.selectable-item');
+      const newSelected = [];
+      items.forEach(item => {
+        const itemRect = item.getBoundingClientRect();
+        const isIntersecting = !(boxRect.right < itemRect.left || boxRect.left > itemRect.right || boxRect.bottom < itemRect.top || boxRect.top > itemRect.bottom);
+        if (isIntersecting) {
+          const path = item.getAttribute('data-path');
+          if (path) newSelected.push(path);
+        }
+      });
+      setSelectedItems(prev => JSON.stringify(prev) === JSON.stringify(newSelected) ? prev : newSelected);
+    };
+
+    const handleMouseUp = () => {
+      if (isSelecting) {
+        isSelecting = false;
+        if (selectionBox && selectionBox.parentNode) selectionBox.parentNode.removeChild(selectionBox);
+        selectionBox = null;
+      }
+    };
+
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleEsc = (e) => { if (e.key === 'Escape') setOpenWindows(prev => prev.map(w => w.isImmersive ? { ...w, isImmersive: false } : w)); };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [setOpenWindows]);
+
+  const handleCloseSnackbar = () => setSnackbar(prev => ({ ...prev, open: false }));
+  const showError = (action, err) => {
+    let msg = err.message;
+    if (err.response?.status === 401) { alert("로그인이 만료되었습니다."); window.location.href = '/login'; return; }
+    setSnackbar({ open: true, message: `[${action} 오류] ${msg}`, severity: 'error' });
+  };
+
+  const handleCopyContextMenu = (items) => {
+    const paths = items.map(it => it.fullPath || it.path).filter(Boolean);
+    if (paths.length > 0) { setClipboard({ paths }); setSnackbar({ open: true, message: `${paths.length}개 항목 복사됨`, severity: 'info' }); }
+  };
+
+  const handlePasteContextMenu = async (targetFolder) => {
+    if (!clipboard.paths.length) return;
+    try {
+      await axios.post('/api/file/copy', { sourcePaths: clipboard.paths, destinationFolder: targetFolder || '/' }, { withCredentials: true });
+      fetchFiles(targetFolder || '/'); refreshPath(targetFolder || '/');
+      setSnackbar({ open: true, message: '붙여넣기 완료!', severity: 'success' });
+    } catch(err) { showError('붙여넣기', err); }
+  };
+
+  const loadDesktopItems = useCallback(async () => {
+    try { const res = await axios.get(`/api/files?path=/&t=${Date.now()}`, { withCredentials: true }); setDesktopItems(res.data || []); } catch (err) { showError('바탕화면 로드', err); }
+  }, []);
+  useEffect(() => { loadDesktopItems(); }, [loadDesktopItems]);
+
+  useEffect(() => {
+    const sync = setInterval(async () => {
+      if (inlineEditRef.current || contextMenuRef.current) return;
+      loadDesktopItems();
+      openWindowsRef.current.forEach(async (win) => {
+        if (win.winType === 'folder') fetchFiles(win.id, win.currentPath);
+      });
+    }, 5000);
+    return () => clearInterval(sync);
+  }, [loadDesktopItems, fetchFiles]);
+
+  useEffect(() => {
+    if (!desktopItems.length) return;
+    setIconPositions(prev => {
+      let changed = false; const nPos = { ...prev }; const occ = new Set();
+      desktopItems.forEach(i => { if (nPos[ensureSlash(i.fullPath)]) occ.add(`${nPos[ensureSlash(i.fullPath)].x},${nPos[ensureSlash(i.fullPath)].y}`); });
+      const cols = Math.max(1, Math.floor(window.innerWidth / 120));
+      const getSlot = () => { let c = 0, r = 0; while(true) { const x = 20 + c * 110, y = 20 + r * 105; if (x===20 && y===20) { c++; continue; } if (!occ.has(`${x},${y}`)) { occ.add(`${x},${y}`); return {x,y}; } c++; if (c>=cols) { c=0; r++; } } };
+      desktopItems.forEach(i => { if (!nPos[ensureSlash(i.fullPath)]) { nPos[ensureSlash(i.fullPath)] = getSlot(); changed = true; } });
+      return changed ? nPos : prev;
+    });
+  }, [desktopItems]);
+
+  const refreshPath = (p) => { if (ensureSlash(p) === '/') loadDesktopItems(); openWindows.forEach(w => { if (w.winType === 'folder' && w.currentPath === ensureSlash(p)) fetchFiles(w.id, p); }); };
+  const getActiveTargetPath = () => { if (!focusedContext || focusedContext === 'desktop') return '/'; const w = openWindows.find(win => win.id === focusedContext); return w?.winType === 'folder' ? w.currentPath : '/'; };
+
+  const openFolderWindow = (item) => {
+    const winId = `desk_${item.name}`; const p = ensureSlash(item.path || item.fullPath);
+    if (!openWindows.find(w => w.id === winId)) {
+      setOpenWindows(prev => [...prev, { ...item, id: winId, winType: 'folder', basePath: p, currentPath: p, files: [], isLoaded: false, zIndex: topZIndex + 1, sidebarOpen: !isMobile, width: 900, height: 650, x: 100 + (prev.length * 30), y: 50 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
+      setTopZIndex(prev => prev + 1); setFocusedContext(winId);
+    } else focusWindow(winId);
+  };
+
+  const openFileWindow = async (fileItem, forceEdit = false) => {
+    const p = ensureSlash(fileItem.fullPath); const id = `file_${p}`;
+    if (openWindows.find(w => w.id === id)) { focusWindow(id); return; }
+    try {
+      const res = await axios.get(`/api/file/download?path=${encodeURIComponent(p)}`, { responseType: 'text', withCredentials: true });
+      const content = typeof res.data === 'object' ? JSON.stringify(res.data, null, 2) : res.data;
+      setOpenWindows(prev => [...prev, { id, name: fileItem.name, fullPath: p, winType: 'file', content, originalContent: content, mode: forceEdit ? 'edit' : 'view', zIndex: topZIndex + 1, width: 800, height: 600, x: 150 + (prev.length * 30), y: 100 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
+      setTopZIndex(prev => prev + 1); setFocusedContext(id);
+    } catch (err) { showError('파일 열기', err); }
+  };
+
+  const handleCloseWindowClick = (win) => { closeWindow(win.id); };
+  const toggleSidebar = (id) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, sidebarOpen: !w.sidebarOpen } : w));
+  const handleUp = (win) => { if (win.currentPath === win.basePath || win.currentPath === '/') return; const segs = win.currentPath.split('/').filter(Boolean); segs.pop(); fetchFiles(win.id, segs.length > 0 ? ensureSlash(segs.join('/')) : '/'); };
+
+  const handleDragStart = (e, item, sourceId) => { const rect = e.target.getBoundingClientRect(); const p = ensureSlash(item.fullPath); const sel = selectedItems.includes(p) ? selectedItems : [p]; e.dataTransfer.setData('application/json', JSON.stringify({ draggedPaths: sel, anchorPath: p, sourceId, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top })); };
+  const handleDragOver = (e, p = null) => { e.preventDefault(); if (p && dragOverTarget !== ensureSlash(p)) setDragOverTarget(ensureSlash(p)); };
+  const handleDrop = async (e, targetPath, targetId) => {
+    e.preventDefault(); setDragOverTarget(null);
+    try {
+      const { draggedPaths, anchorPath, sourceId, offsetX, offsetY } = JSON.parse(e.dataTransfer.getData('application/json'));
+      const t = ensureSlash(targetPath);
+      if (sourceId === 'desktop' && targetId === 'desktop' && t === '/') {
+        const rect = desktopRef.current.getBoundingClientRect();
+        const nx = Math.max(20, Math.round((e.clientX - rect.left - offsetX - 20) / 110) * 110 + 20);
+        const ny = Math.max(20, Math.round((e.clientY - rect.top - offsetY - 20) / 105) * 105 + 20);
+        setIconPositions(prev => ({ ...prev, [anchorPath]: { x: nx, y: ny } }));
+        return;
+      }
+      await Promise.all(draggedPaths.map(p => axios.put('/api/file', { oldPath: p, newPath: t + '/' + p.split('/').pop() }, { withCredentials: true })));
+      refreshPath(t); loadDesktopItems();
+    } catch (err) { showError('이동', err); }
+  };
+
+  const handleItemClick = (e, p, item) => { e.stopPropagation(); if (e.ctrlKey) setSelectedItems(prev => prev.includes(p) ? prev.filter(i => i !== p) : [...prev, p]); else setSelectedItems([p]); };
+  const handleContextMenu = (e, type, data) => { e.preventDefault(); setFocusedContext(data.windowId || 'desktop'); setContextMenu({ mouseX: e.clientX, mouseY: e.clientY, type, ...data }); };
+
+  return (
+    <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%', userSelect: 'none' }}>
+      <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e)} onDrop={(e) => handleDrop(e, '/', 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: '/', windowId: 'desktop' })} onMouseDown={() => { setFocusedContext('desktop'); setSelectedItems([]); }} sx={{ flex: 1, position: 'relative', background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)' }}>
+        <motion.div onClick={() => setSelectedItems(['system_root'])} onDoubleClick={() => openFolderWindow({ id: 'system_root', name: '전체 저장소', path: '/' })} style={{ position: 'absolute', left: 20, top: 20, textAlign: 'center', cursor: 'pointer', width: '100px' }}>
+          <Box sx={{ p: 1, borderRadius: '6px', border: selectedItems.includes('system_root') ? '1px solid white' : 'none', color: 'white' }}><StorageIcon sx={{ fontSize: 60, color: '#fde047' }} /><Typography variant="body2">전체 저장소</Typography></Box>
+        </motion.div>
+
+        {desktopItems.map(item => {
+          const p = ensureSlash(item.fullPath); const pos = iconPositions[p] || { x: 0, y: 0 };
+          return (
+            <motion.div key={p} className="selectable-item" data-path={p} draggable onDragStart={(e) => handleDragStart(e, item, 'desktop')} onClick={(e) => handleItemClick(e, p, item)} onDoubleClick={() => item.type === 'folder' ? openFolderWindow(item) : openFileWindow(item)} onContextMenu={(e) => handleContextMenu(e, item.type, { item, windowId: 'desktop' })} style={{ position: 'absolute', left: pos.x, top: pos.y, textAlign: 'center', width: '100px', cursor: 'pointer' }}>
+              <Box sx={{ p: 1, border: selectedItems.includes(p) ? '1px solid white' : 'none', color: 'white' }}>{item.type === 'folder' ? <FolderIcon sx={{ fontSize: 60, color: '#fde047' }} /> : <InsertDriveFileIcon sx={{ fontSize: 60 }} /><Typography variant="body2">{item.name}</Typography>}</Box>
+            </motion.div>
+          );
+        })}
+      </Box>
+
+      <AnimatePresence>
+        {openWindows.map((win) => (
+          <Rnd key={win.id} size={{ width: win.width, height: win.height }} position={{ x: win.x, y: win.y }} onMouseDown={() => focusWindow(win.id)} dragHandleClassName="window-header" bounds="parent" style={{ display: win.isMinimized ? 'none' : 'block', zIndex: win.zIndex }}>
+            <Paper elevation={12} sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: focusedContext === win.id ? `2px solid ${theme.palette.primary.main}` : '1px solid #ddd' }}>
+              <Box className="window-header" sx={{ p: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#f5f5f5', borderBottom: '1px solid #ddd' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {win.winType === 'folder' && <IconButton size="small" onClick={() => toggleSidebar(win.id)}><MenuIcon /></IconButton>}
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>{win.currentPath}</Typography>
+                </Box>
+                <IconButton size="small" onClick={() => handleCloseWindowClick(win)} color="error"><CloseIcon /></IconButton>
+              </Box>
+              <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                {win.winType === 'folder' && win.sidebarOpen && (
+                  <Box sx={{ width: 220, borderRight: '1px solid #ddd', bgcolor: '#fafafa', overflow: 'auto' }}>
+                    <SidebarTree win={win} fetchFiles={fetchFiles} theme={theme} />
+                  </Box>
+                )}
+                <TableContainer className="window-content-area" sx={{ flex: 1 }}>
+                  <Table stickyHeader size="small">
+                    <TableBody>
+                      {win.winType === 'folder' && win.files.map((file, idx) => (
+                        <TableRow key={idx} hover onClick={(e) => handleItemClick(e, ensureSlash(file.fullPath), file)} onDoubleClick={() => file.type === 'folder' ? fetchFiles(win.id, file.fullPath) : openFileWindow(file)}>
+                          <TableCell sx={{ display: 'flex', alignItems: 'center' }}>{file.type === 'folder' ? <FolderIcon sx={{ mr: 1, color: '#fbbf24' }} /> : <InsertDriveFileIcon sx={{ mr: 1 }} />}{file.name}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            </Paper>
+          </Rnd>
+        ))}
+      </AnimatePresence>
+
+      <NASContextMenu contextMenu={contextMenu} handleContextMenuClose={() => setContextMenu(null)} />
+      <Snackbar open={snackbar.open} autoHideDuration={3000} onClose={handleCloseSnackbar}><Alert severity={snackbar.severity}>{snackbar.message}</Alert></Snackbar>
+    </Box>
+  );
+};
+
+export default NAS;
