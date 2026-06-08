@@ -517,14 +517,14 @@ const NAS = () => {
 
     if (!ok) return;
 
-    const safeTargetPath = '/';
+    const safeTargetPath = ensureSlash(targetPath || '/');
 
     try {
       const startRes = await axios.post('/api/devices/pair/start', {
         path: safeTargetPath
       }, { withCredentials: true });
 
-      const { pairingToken, agentDownloadUrl, agentDownloadName, agentKind } = startRes.data || {};
+      const { pairingToken, agentDownloadUrl, agentDownloadName, mode } = startRes.data || {};
 
       if (!pairingToken) {
         throw new Error('연동 토큰을 받지 못했습니다.');
@@ -532,16 +532,16 @@ const NAS = () => {
 
       setSnackbar({
         open: true,
-        message: agentKind === 'powershell'
-          ? 'NAS Sync Agent PowerShell 파일을 다운로드했습니다. 실행 후 연동할 폴더를 선택하고 창을 열어두면 실시간 동기화됩니다.'
-          : 'NAS Sync Agent 실행 파일을 다운로드했습니다. 실행하면 연동이 감지됩니다.',
+        message: mode === 'add-folder'
+          ? '추가 연동용 NAS Sync Agent를 다운로드했습니다. 실행해서 새 PC 폴더를 선택하세요.'
+          : 'NAS Sync Agent 실행 파일을 다운로드했습니다. 실행하면 PC 등록과 폴더 연동이 진행됩니다.',
         severity: 'info'
       });
 
       if (agentDownloadUrl) {
         const a = document.createElement('a');
         a.href = agentDownloadUrl;
-        a.download = agentDownloadName || (agentKind === 'powershell' ? 'NAS-Sync-Agent.ps1' : 'NAS-Sync-Agent.exe');
+        a.download = agentDownloadName || 'NAS-Sync-Agent.cmd';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -574,9 +574,7 @@ const NAS = () => {
 
       setSnackbar({
         open: true,
-        message: agentKind === 'powershell'
-          ? '아직 Agent 실행이 감지되지 않았습니다. NAS-Sync-Agent.ps1을 PowerShell로 실행하고 연동할 폴더를 선택해 주세요.'
-          : '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.exe를 실행해 주세요.',
+        message: '아직 Agent 실행이 감지되지 않았습니다. 다운로드된 NAS-Sync-Agent.cmd를 실행해 주세요.',
         severity: 'info'
       });
     } catch (err) {

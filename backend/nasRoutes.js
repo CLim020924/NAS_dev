@@ -147,6 +147,13 @@ const createDeviceId = () => {
   return 'dev_' + crypto.randomBytes(16).toString('hex');
 };
 
+const createSyncRootId = () => {
+  if (typeof crypto.randomUUID === 'function') {
+    return 'root_' + crypto.randomUUID().replace(/-/g, '');
+  }
+  return 'root_' + crypto.randomBytes(16).toString('hex');
+};
+
 const sanitizeDeviceFolderName = (name = '내-PC') => {
   const safe = String(name || '내-PC')
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
@@ -178,6 +185,92 @@ const readLinkedDeviceMeta = (folderPath) => {
   } catch (err) {
     return null;
   }
+};
+
+const writeLinkedDeviceMeta = (device) => {
+  if (!device?.absolutePath) return;
+  if (!fs.existsSync(device.absolutePath)) fs.mkdirSync(device.absolutePath, { recursive: true });
+  fs.writeFileSync(path.join(device.absolutePath, LINKED_DEVICE_META), JSON.stringify(device, null, 2));
+};
+
+const isSameOrChildPath = (parent, child) => {
+  const parentPath = path.resolve(parent);
+  const childPath = path.resolve(child);
+  return childPath === parentPath || childPath.startsWith(parentPath + path.sep);
+};
+
+const normalizeDeviceSyncRoots = (device = {}) => {
+  const roots = Array.isArray(device.syncRoots) ? device.syncRoots.filter(Boolean) : [];
+  if (roots.length > 0) return roots;
+  if (!device.absolutePath) return [];
+
+  return [{
+    syncRootId: device.syncRootId || 'root_default',
+    name: device.syncRootName || device.deviceName || device.name || 'Synced Folder',
+    localPath: device.syncRootPath || device.desktopPath || '',
+    linkedNasPath: device.linkedNasPath || '',
+    absolutePath: device.absolutePath,
+    createdAt: device.createdAt || new Date().toISOString(),
+    lastSeenAt: device.lastSeenAt || new Date().toISOString(),
+    fileCount: Number(device.syncRootFileCount || 0),
+    folderCount: Number(device.syncRootFolderCount || 0),
+    sizeBytes: Number(device.syncRootSizeBytes || 0)
+  }];
+};
+
+const findLinkedDeviceByAbsolutePath = (ownerKey, absolutePath) => {
+  const target = path.resolve(absolutePath);
+  return readJsonArrayFile(LINKED_DEVICES_FILE).find((device) => (
+    device.ownerKey === ownerKey &&
+    device.absolutePath &&
+    path.resolve(device.absolutePath) === target
+  ));
+};
+
+const addSyncRootToDevice = (device, user, localPath, summary = {}) => {
+  const basePath = getUserBasePath(user);
+  const deviceRoot = path.resolve(device.absolutePath);
+  const hasExplicitRoots = Array.isArray(device.syncRoots);
+  const hasLegacyContents = !hasExplicitRoots && fs.existsSync(deviceRoot)
+    ? fs.readdirSync(deviceRoot).some(name => name !== LINKED_DEVICE_META)
+    : false;
+  const roots = hasExplicitRoots
+    ? device.syncRoots.filter(Boolean)
+    : (hasLegacyContents ? normalizeDeviceSyncRoots(device) : []);
+  const safeName = sanitizeDeviceFolderName(path.basename(String(localPath || '').replace(/[\\\/]+$/, '')) || 'Synced Folder');
+  const existingByLocalPath = roots.find(root => String(root.localPath || '').toLowerCase() === String(localPath || '').toLowerCase());
+
+  if (existingByLocalPath) {
+    return { device, syncRoot: existingByLocalPath, alreadyLinked: true };
+  }
+
+  const { finalName, finalPath } = makeUniqueFolderPath(deviceRoot, safeName);
+  fs.mkdirSync(finalPath, { recursive: true });
+
+  const now = new Date().toISOString();
+  const syncRoot = {
+    syncRootId: createSyncRootId(),
+    name: finalName,
+    localPath,
+    linkedNasPath: path.relative(basePath, finalPath).replace(/\\/g, '/'),
+    absolutePath: finalPath,
+    createdAt: now,
+    lastSeenAt: now,
+    fileCount: Number(summary.fileCount || 0),
+    folderCount: Number(summary.folderCount || 0),
+    sizeBytes: Number(summary.sizeBytes || 0)
+  };
+
+  const updated = {
+    ...device,
+    syncRoots: [...roots, syncRoot],
+    lastSeenAt: now,
+    status: 'connected'
+  };
+
+  writeLinkedDeviceMeta(updated);
+  updateLinkedDeviceRecord(updated);
+  return { device: updated, syncRoot, alreadyLinked: false };
 };
 
 const createLinkedDeviceFolder = (user, parentReqPath, deviceInfo = {}) => {
@@ -213,7 +306,7 @@ const createLinkedDeviceFolder = (user, parentReqPath, deviceInfo = {}) => {
     lastSeenAt: new Date().toISOString()
   };
 
-  fs.writeFileSync(path.join(finalPath, LINKED_DEVICE_META), JSON.stringify(meta, null, 2));
+  writeLinkedDeviceMeta(meta);
 
   const devices = readJsonArrayFile(LINKED_DEVICES_FILE).filter(d => d.deviceId !== deviceId);
   devices.push(meta);
@@ -1209,6 +1302,11 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
     const ownerKey = getDeviceOwnerKey(req.user);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+    const { targetPath: pairingTargetAbs } = getValidatedPath(req.user, targetPath, req.headers['x-nas-password']);
+    const targetDevice = fs.existsSync(pairingTargetAbs) && fs.statSync(pairingTargetAbs).isDirectory()
+      ? findLinkedDeviceByAbsolutePath(ownerKey, pairingTargetAbs)
+      : null;
+    const pairingMode = targetDevice ? 'add-folder' : 'install-device';
 
     // 생성 위치 권한 사전 검증
     getValidatedPath(req.user, targetPath, req.headers['x-nas-password']);
@@ -1222,6 +1320,8 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
       token,
       ownerKey,
       targetPath,
+      targetDeviceId: targetDevice?.deviceId || null,
+      mode: pairingMode,
       userSnapshot: req.user,
       status: 'pending',
       createdAt: now.toISOString(),
@@ -1241,7 +1341,8 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
       status: 'pending',
       agentDownloadUrl: `/api/devices/agent/windows?token=${encodeURIComponent(token)}`,
       agentDownloadName,
-      agentKind: 'windows-cmd'
+      agentKind: 'windows-cmd',
+      mode: pairingMode
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || '연동 시작 실패' });
@@ -1289,6 +1390,26 @@ function Load-AgentConfig {
     }
   } catch {}
   return $null
+}
+
+function Get-ConfigRoots($config) {
+  if ($config -and $config.syncRoots) { return @($config.syncRoots) }
+  if ($config -and $config.syncFolder -and $config.deviceId -and $config.agentToken) {
+    return @([PSCustomObject]@{
+      syncRootId = if ($config.syncRootId) { $config.syncRootId } else { "root_default" }
+      name = if ($config.syncRootName) { $config.syncRootName } else { $config.deviceName }
+      localPath = $config.syncFolder
+      linkedNasPath = $config.linkedNasPath
+    })
+  }
+  return @()
+}
+
+function Add-OrUpdateConfigRoot($config, $root) {
+  $roots = @()
+  if ($config) { $roots = @(Get-ConfigRoots $config) }
+  $roots = @($roots | Where-Object { $_.syncRootId -ne $root.syncRootId -and $_.localPath -ne $root.localPath })
+  return @($roots + $root)
 }
 
 function Start-BackgroundAgent {
@@ -1354,23 +1475,19 @@ function Get-DeviceDisplayName($defaultName) {
   return $defaultName
 }
 
-function Get-ExistingDeviceName($deviceKey) {
+function Get-DeviceLookup($deviceKey) {
   try {
     $lookupBody = @{
       pairingToken = $PairingToken
       clientDeviceKey = $deviceKey
     } | ConvertTo-Json -Compress
 
-    $lookup = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/lookup" -ContentType "application/json" -Body $lookupBody
-    if ($lookup.exists -and $lookup.device.deviceName) {
-      Write-Host "Existing registered PC detected: $($lookup.device.deviceName)"
-      return $lookup.device.deviceName
-    }
+    return Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/lookup" -ContentType "application/json" -Body $lookupBody
   } catch {
     Write-Host "Existing PC lookup failed. Continuing as a new registration."
   }
 
-  return ""
+  return $null
 }
 
 function Get-FolderSummary($root) {
@@ -1419,60 +1536,61 @@ function Invoke-AgentGet($endpoint) {
   return Invoke-RestMethod -Method Get -Uri "$ServerBase$endpoint" -Headers @{ "x-agent-token" = $Script:AgentToken }
 }
 
-function Sync-Folder($fullPath) {
+function Sync-Folder($root, $fullPath) {
   if (-not (Test-Path -LiteralPath $fullPath -PathType Container)) { return }
-  $relPath = Convert-ToRelPath $Script:SyncFolder $fullPath
+  $relPath = Convert-ToRelPath $root.localPath $fullPath
   if (-not $relPath) { return }
-  Invoke-AgentJson "/api/devices/agent/sync-folder" @{ deviceId = $Script:DeviceId; relPath = $relPath } | Out-Null
+  Invoke-AgentJson "/api/devices/agent/sync-folder" @{ deviceId = $Script:DeviceId; syncRootId = $root.syncRootId; relPath = $relPath } | Out-Null
   Write-Host "[folder] $relPath"
 }
 
-function Sync-Delete($fullPath) {
-  $relPath = Convert-ToRelPath $Script:SyncFolder $fullPath
+function Sync-Delete($root, $fullPath) {
+  $relPath = Convert-ToRelPath $root.localPath $fullPath
   if (-not $relPath) { return }
-  Invoke-AgentJson "/api/devices/agent/sync-delete" @{ deviceId = $Script:DeviceId; relPath = $relPath } | Out-Null
+  Invoke-AgentJson "/api/devices/agent/sync-delete" @{ deviceId = $Script:DeviceId; syncRootId = $root.syncRootId; relPath = $relPath } | Out-Null
   Write-Host "[delete] $relPath"
 }
 
-function Sync-File($fullPath) {
+function Sync-File($root, $fullPath) {
   if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) { return }
   $file = Get-Item -LiteralPath $fullPath -Force
-  $relPath = Convert-ToRelPath $Script:SyncFolder $file.FullName
+  $relPath = Convert-ToRelPath $root.localPath $file.FullName
   if ($file.Length -gt $MaxFileBytes) {
     Write-Host "[skip >90MB] $relPath"
     return
   }
   $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
   if (-not $curl) { throw "curl.exe was not found. Windows 10/11 includes curl.exe by default." }
-  $args = @("-sS", "-X", "POST", "$ServerBase/api/devices/agent/sync-file", "-H", "x-agent-token: $Script:AgentToken", "-F", "deviceId=$Script:DeviceId", "-F", "relPath=$relPath", "-F", "file=@$($file.FullName)")
+  $args = @("-sS", "-X", "POST", "$ServerBase/api/devices/agent/sync-file", "-H", "x-agent-token: $Script:AgentToken", "-F", "deviceId=$Script:DeviceId", "-F", "syncRootId=$($root.syncRootId)", "-F", "relPath=$relPath", "-F", "file=@$($file.FullName)")
   $response = & $curl.Source @args
   if ($LASTEXITCODE -ne 0) { throw "curl upload failed with exit code $LASTEXITCODE" }
   Write-Host "[file] $relPath"
 }
 
-function Initial-Sync {
+function Initial-Sync($root) {
   Write-Host ""
-  Write-Host "Initial sync started..."
-  Get-ChildItem -LiteralPath $Script:SyncFolder -Recurse -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
-    try { Sync-Folder $_.FullName } catch { Write-Host "[folder failed] $($_.FullName) $($_.Exception.Message)" }
+  Write-Host "Initial sync started: $($root.localPath)"
+  Get-ChildItem -LiteralPath $root.localPath -Recurse -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    try { Sync-Folder $root $_.FullName } catch { Write-Host "[folder failed] $($_.FullName) $($_.Exception.Message)" }
   }
-  Get-ChildItem -LiteralPath $Script:SyncFolder -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-    try { Sync-File $_.FullName } catch { Write-Host "[file failed] $($_.FullName) $($_.Exception.Message)" }
+  Get-ChildItem -LiteralPath $root.localPath -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    try { Sync-File $root $_.FullName } catch { Write-Host "[file failed] $($_.FullName) $($_.Exception.Message)" }
   }
   Write-Host "Initial sync complete."
 }
 
-function Pull-NasChanges {
+function Pull-NasChanges($root) {
   try {
-    if (-not $Script:DeviceId -or -not $Script:AgentToken -or -not $Script:SyncFolder) { return }
+    if (-not $Script:DeviceId -or -not $Script:AgentToken -or -not $root.localPath) { return }
     $deviceIdEncoded = [System.Uri]::EscapeDataString($Script:DeviceId)
-    $manifest = Invoke-AgentGet "/api/devices/agent/manifest?deviceId=$deviceIdEncoded"
+    $rootIdEncoded = [System.Uri]::EscapeDataString($root.syncRootId)
+    $manifest = Invoke-AgentGet "/api/devices/agent/manifest?deviceId=$deviceIdEncoded&syncRootId=$rootIdEncoded"
     if (-not $manifest.entries) { return }
 
     $Script:ApplyingRemoteChange = $true
 
     $manifest.entries | Where-Object { $_.type -eq "folder" } | ForEach-Object {
-      $target = Join-Path $Script:SyncFolder ($_.relPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+      $target = Join-Path $root.localPath ($_.relPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
       if (-not (Test-Path -LiteralPath $target -PathType Container)) {
         New-Item -ItemType Directory -Path $target -Force | Out-Null
         Write-Host "[nas folder] $($_.relPath)"
@@ -1480,7 +1598,7 @@ function Pull-NasChanges {
     }
 
     $manifest.entries | Where-Object { $_.type -eq "file" } | ForEach-Object {
-      $target = Join-Path $Script:SyncFolder ($_.relPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+      $target = Join-Path $root.localPath ($_.relPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
       $parent = Split-Path -Parent $target
       if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -1497,7 +1615,7 @@ function Pull-NasChanges {
       if ($needsDownload) {
         $relEncoded = [System.Uri]::EscapeDataString($_.relPath)
         $tmp = "$target.nasdownload"
-        Invoke-WebRequest -Method Get -Uri "$ServerBase/api/devices/agent/file?deviceId=$deviceIdEncoded&relPath=$relEncoded" -Headers @{ "x-agent-token" = $Script:AgentToken } -OutFile $tmp
+        Invoke-WebRequest -Method Get -Uri "$ServerBase/api/devices/agent/file?deviceId=$deviceIdEncoded&syncRootId=$rootIdEncoded&relPath=$relEncoded" -Headers @{ "x-agent-token" = $Script:AgentToken } -OutFile $tmp
         Move-Item -LiteralPath $tmp -Destination $target -Force
         try {
           (Get-Item -LiteralPath $target -Force).LastWriteTimeUtc = [DateTimeOffset]::FromUnixTimeMilliseconds([Int64]$_.mtimeMs).UtcDateTime
@@ -1512,23 +1630,23 @@ function Pull-NasChanges {
   }
 }
 
-function Handle-PathEvent($changeType, $fullPath, $oldFullPath) {
+function Handle-PathEvent($root, $changeType, $fullPath, $oldFullPath) {
   if ($Script:ApplyingRemoteChange) { return }
   Start-Sleep -Milliseconds 500
   try {
     if ($changeType -eq "Deleted") {
-      Sync-Delete $fullPath
+      Sync-Delete $root $fullPath
       return
     }
     if ($changeType -eq "Renamed" -and $oldFullPath) {
-      Sync-Delete $oldFullPath
+      Sync-Delete $root $oldFullPath
     }
     if (Test-Path -LiteralPath $fullPath -PathType Container) {
-      Sync-Folder $fullPath
+      Sync-Folder $root $fullPath
       return
     }
     if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-      Sync-File $fullPath
+      Sync-File $root $fullPath
     }
   } catch {
     Write-Host "[event failed] $changeType $fullPath $($_.Exception.Message)"
@@ -1542,36 +1660,34 @@ Write-Host "============================================="
 Write-Host ""
 
 $StoredConfig = Load-AgentConfig
-if ($StoredConfig -and $StoredConfig.deviceId -and $StoredConfig.agentToken -and $StoredConfig.syncFolder) {
-  $Script:SyncFolder = $StoredConfig.syncFolder
-  $Script:DeviceId = $StoredConfig.deviceId
-  $Script:AgentToken = $StoredConfig.agentToken
-  $DeviceName = $StoredConfig.deviceName
+$DeviceKey = Get-OrCreateDeviceKey
+$Lookup = Get-DeviceLookup $DeviceKey
 
-  if (-not $Background) {
-    Start-BackgroundAgent
-    Write-Host "NAS Sync Agent is running in the background."
-    Write-Host "Startup sync is enabled for this Windows account."
-    exit 0
-  }
-} else {
-  $Script:SyncFolder = Select-SyncFolder
-  $DeviceKey = Get-OrCreateDeviceKey
+if (-not $Background -and $Lookup -and $Lookup.exists -and -not $Lookup.canAddFolder) {
+  Write-Host ""
+  Write-Host "This PC is already linked to NAS as '$($Lookup.device.deviceName)'."
+  Write-Host "To add another folder, open that linked PC folder in NAS and use Add sync folder."
+  if ($StoredConfig) { Start-BackgroundAgent }
+  exit 0
+}
+
+if (-not $Background) {
+  $SelectedFolder = Select-SyncFolder
   $DefaultDeviceName = Get-SafeDeviceName $env:COMPUTERNAME
-  $ExistingDeviceName = Get-ExistingDeviceName $DeviceKey
-  if ($ExistingDeviceName) {
-    $DeviceName = $ExistingDeviceName
+  if ($Lookup -and $Lookup.exists -and $Lookup.device.deviceName) {
+    $DeviceName = $Lookup.device.deviceName
   } else {
     $DeviceName = Get-DeviceDisplayName $DefaultDeviceName
   }
-  $Summary = Get-FolderSummary $Script:SyncFolder
+
+  $Summary = Get-FolderSummary $SelectedFolder
   $TotalText = Format-Bytes $Summary.totalBytes
   $LimitText = Format-Bytes $MaxTotalBytes
 
   if ($Summary.totalBytes -gt $MaxTotalBytes) {
     Write-Host ""
     Write-Host "The selected folder is too large."
-    Write-Host "Selected folder: $Script:SyncFolder"
+    Write-Host "Selected folder: $SelectedFolder"
     Write-Host "Current size: $TotalText"
     Write-Host "Allowed size: $LimitText"
     throw "Folder size exceeds the sync limit."
@@ -1580,7 +1696,7 @@ if ($StoredConfig -and $StoredConfig.deviceId -and $StoredConfig.agentToken -and
   Write-Host "Server: $ServerBase"
   Write-Host "Device folder name: $DeviceName"
   Write-Host "Device key: $DeviceKey"
-  Write-Host "Folder: $Script:SyncFolder"
+  Write-Host "Folder: $SelectedFolder"
   Write-Host "Files: $($Summary.fileCount)"
   Write-Host "Folders: $($Summary.folderCount)"
   Write-Host "Size: $TotalText / $LimitText"
@@ -1591,33 +1707,49 @@ if ($StoredConfig -and $StoredConfig.deviceId -and $StoredConfig.agentToken -and
     clientDeviceKey = $DeviceKey
     deviceName = $DeviceName
     osType = "windows"
-    desktopPath = $Script:SyncFolder
-    syncRootPath = $Script:SyncFolder
+    desktopPath = $SelectedFolder
+    syncRootPath = $SelectedFolder
     syncRootSizeBytes = $Summary.totalBytes
     syncRootFileCount = $Summary.fileCount
     syncRootFolderCount = $Summary.folderCount
   } | ConvertTo-Json -Compress
 
-  $Register = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/register" -ContentType "application/json" -Body $RegisterBody
-  if (-not $Register.agentToken -or -not $Register.device.deviceId) { throw "Registration response was invalid." }
+  try {
+    $Register = Invoke-RestMethod -Method Post -Uri "$ServerBase/api/devices/agent/register" -ContentType "application/json" -Body $RegisterBody
+  } catch {
+    $status = $_.Exception.Response.StatusCode.value__
+    if ($status -eq 409) {
+      Write-Host "This PC is already linked. Use the linked PC folder in NAS to add another sync folder."
+      if ($StoredConfig) { Start-BackgroundAgent }
+      exit 0
+    }
+    throw
+  }
+  if (-not $Register.agentToken -or -not $Register.device.deviceId -or -not $Register.syncRoot.syncRootId) { throw "Registration response was invalid." }
 
   $Script:DeviceId = $Register.device.deviceId
   $Script:AgentToken = $Register.agentToken
+  $NewRoot = [PSCustomObject]@{
+    syncRootId = $Register.syncRoot.syncRootId
+    name = $Register.syncRoot.name
+    localPath = $SelectedFolder
+    linkedNasPath = $Register.syncRoot.linkedNasPath
+  }
+  $Roots = Add-OrUpdateConfigRoot $StoredConfig $NewRoot
 
   Save-AgentConfig @{
     serverBase = $ServerBase
     deviceId = $Script:DeviceId
     agentToken = $Script:AgentToken
     deviceName = $DeviceName
-    syncFolder = $Script:SyncFolder
-    linkedNasPath = $Register.device.linkedNasPath
+    syncRoots = $Roots
     savedAt = (Get-Date).ToUniversalTime().ToString("o")
   }
 
   Write-Host "Connected."
-  Write-Host "NAS folder: $($Register.device.linkedNasPath)"
+  Write-Host "NAS folder: $($Register.syncRoot.linkedNasPath)"
 
-  Initial-Sync
+  Initial-Sync $NewRoot
   Start-BackgroundAgent
   Write-Host ""
   Write-Host "NAS Sync Agent is now running in the background."
@@ -1625,22 +1757,39 @@ if ($StoredConfig -and $StoredConfig.deviceId -and $StoredConfig.agentToken -and
   exit 0
 }
 
-Pull-NasChanges
+if (-not $StoredConfig -or -not $StoredConfig.deviceId -or -not $StoredConfig.agentToken) {
+  Write-Host "NAS Sync Agent is not configured yet."
+  exit 1
+}
 
-$watcher = New-Object System.IO.FileSystemWatcher
-$watcher.Path = $Script:SyncFolder
-$watcher.IncludeSubdirectories = $true
-$watcher.EnableRaisingEvents = $true
-$watcher.NotifyFilter = [System.IO.NotifyFilters]'FileName, DirectoryName, LastWrite, Size'
+$Script:DeviceId = $StoredConfig.deviceId
+$Script:AgentToken = $StoredConfig.agentToken
+$Roots = @(Get-ConfigRoots $StoredConfig | Where-Object { $_.localPath -and (Test-Path -LiteralPath $_.localPath -PathType Container) })
 
+if ($Roots.Count -eq 0) {
+  Write-Host "No valid sync folders are configured."
+  exit 1
+}
+
+$watchers = @()
 $handlers = @()
-$handlers += Register-ObjectEvent $watcher Created -Action { Handle-PathEvent "Created" $Event.SourceEventArgs.FullPath $null }
-$handlers += Register-ObjectEvent $watcher Changed -Action { Handle-PathEvent "Changed" $Event.SourceEventArgs.FullPath $null }
-$handlers += Register-ObjectEvent $watcher Deleted -Action { Handle-PathEvent "Deleted" $Event.SourceEventArgs.FullPath $null }
-$handlers += Register-ObjectEvent $watcher Renamed -Action { Handle-PathEvent "Renamed" $Event.SourceEventArgs.FullPath $Event.SourceEventArgs.OldFullPath }
+foreach ($root in $Roots) {
+  Pull-NasChanges $root
+  $watcher = New-Object System.IO.FileSystemWatcher
+  $watcher.Path = $root.localPath
+  $watcher.IncludeSubdirectories = $true
+  $watcher.EnableRaisingEvents = $true
+  $watcher.NotifyFilter = [System.IO.NotifyFilters]'FileName, DirectoryName, LastWrite, Size'
+  $watchers += $watcher
+  $rootForHandler = $root
+  $handlers += Register-ObjectEvent $watcher Created -MessageData $rootForHandler -Action { Handle-PathEvent $Event.MessageData "Created" $Event.SourceEventArgs.FullPath $null }
+  $handlers += Register-ObjectEvent $watcher Changed -MessageData $rootForHandler -Action { Handle-PathEvent $Event.MessageData "Changed" $Event.SourceEventArgs.FullPath $null }
+  $handlers += Register-ObjectEvent $watcher Deleted -MessageData $rootForHandler -Action { Handle-PathEvent $Event.MessageData "Deleted" $Event.SourceEventArgs.FullPath $null }
+  $handlers += Register-ObjectEvent $watcher Renamed -MessageData $rootForHandler -Action { Handle-PathEvent $Event.MessageData "Renamed" $Event.SourceEventArgs.FullPath $Event.SourceEventArgs.OldFullPath }
+}
 
 Write-Host ""
-Write-Host "Realtime sync is running. Keep this window open."
+Write-Host "Realtime sync is running for $($Roots.Count) folder(s)."
 Write-Host "Press Ctrl+C or close this window to stop."
 Write-Host ""
 
@@ -1649,7 +1798,7 @@ try {
   while ($true) {
     Wait-Event -Timeout 2 | Out-Null
     if (((Get-Date) - $lastPull).TotalSeconds -ge $PullIntervalSeconds) {
-      Pull-NasChanges
+      foreach ($root in $Roots) { Pull-NasChanges $root }
       $lastPull = Get-Date
     }
   }
@@ -1657,7 +1806,9 @@ try {
   foreach ($handler in $handlers) {
     if ($handler) { Unregister-Event -SubscriptionId $handler.Id -ErrorAction SilentlyContinue }
   }
-  $watcher.Dispose()
+  foreach ($watcher in $watchers) {
+    if ($watcher) { $watcher.Dispose() }
+  }
 }
 `;
 };
@@ -1815,15 +1966,29 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
       d.ownerKey === pairing.ownerKey &&
       d.clientDeviceKey === clientDeviceKey
     );
+    const canAddFolder = !!(
+      device &&
+      pairing.mode === 'add-folder' &&
+      pairing.targetDeviceId &&
+      pairing.targetDeviceId === device.deviceId
+    );
 
     return res.json({
       success: true,
       exists: !!device,
+      mode: pairing.mode || 'install-device',
+      canAddFolder,
       device: device ? {
         deviceId: device.deviceId,
         deviceName: device.deviceName || device.name || '',
         name: device.name || device.deviceName || '',
-        linkedNasPath: device.linkedNasPath || ''
+        linkedNasPath: device.linkedNasPath || '',
+        syncRoots: normalizeDeviceSyncRoots(device).map(root => ({
+          syncRootId: root.syncRootId,
+          name: root.name,
+          localPath: root.localPath || '',
+          linkedNasPath: root.linkedNasPath || ''
+        }))
       } : null
     });
   } catch (err) {
@@ -1864,6 +2029,31 @@ router.post('/devices/agent/register', (req, res) => {
       )
       : null;
 
+    if (existingDevice && pairing.mode !== 'add-folder') {
+      return res.status(409).json({
+        code: 'DEVICE_ALREADY_REGISTERED',
+        error: 'This PC is already linked. Open the linked PC folder in NAS and use Add sync folder.',
+        device: {
+          deviceId: existingDevice.deviceId,
+          deviceName: existingDevice.deviceName || existingDevice.name || '',
+          linkedNasPath: existingDevice.linkedNasPath || '',
+          syncRoots: normalizeDeviceSyncRoots(existingDevice).map(root => ({
+            syncRootId: root.syncRootId,
+            name: root.name,
+            localPath: root.localPath || '',
+            linkedNasPath: root.linkedNasPath || ''
+          }))
+        }
+      });
+    }
+
+    if (pairing.mode === 'add-folder' && (!existingDevice || existingDevice.deviceId !== pairing.targetDeviceId)) {
+      return res.status(403).json({
+        code: 'ADD_FOLDER_DEVICE_MISMATCH',
+        error: 'This add-folder link belongs to a different registered PC.'
+      });
+    }
+
     let device = pairing.device || existingDevice;
 
     if (!device || !device.absolutePath || !fs.existsSync(device.absolutePath)) {
@@ -1896,13 +2086,21 @@ router.post('/devices/agent/register', (req, res) => {
       lastSeenAt: now
     };
 
+    const rootResult = addSyncRootToDevice(device, userSnapshot, syncRootPath, {
+      sizeBytes: Number(req.body?.syncRootSizeBytes || 0),
+      fileCount: Number(req.body?.syncRootFileCount || 0),
+      folderCount: Number(req.body?.syncRootFolderCount || 0)
+    });
+    device = {
+      ...rootResult.device,
+      agentTokenHash: device.agentTokenHash,
+      lastSeenAt: now,
+      status: 'connected'
+    };
+    const syncRoot = rootResult.syncRoot;
+
     // 폴더 안 meta 업데이트
-    if (device.absolutePath && fs.existsSync(device.absolutePath)) {
-      fs.writeFileSync(path.join(device.absolutePath, LINKED_DEVICE_META), JSON.stringify({
-        ...device,
-        agentTokenHash: device.agentTokenHash
-      }, null, 2));
-    }
+    writeLinkedDeviceMeta(device);
 
     updateLinkedDeviceRecord(device);
 
@@ -1916,14 +2114,15 @@ router.post('/devices/agent/register', (req, res) => {
       status: 'connected',
       message: '연동 감지!',
       agentToken,
-      device
+      device,
+      syncRoot
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || 'Agent 등록 실패' });
   }
 });
 
-const getValidatedAgentTarget = (deviceId, agentToken, relPathValue) => {
+const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdValue) => {
   const device = getAgentDeviceByToken(deviceId, agentToken);
 
   if (!device) {
@@ -1938,7 +2137,25 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue) => {
     throw err;
   }
 
-  const linkedRoot = path.resolve(device.absolutePath);
+  const syncRoots = normalizeDeviceSyncRoots(device);
+  const syncRootId = String(syncRootIdValue || '').trim();
+  const syncRoot = syncRootId
+    ? syncRoots.find(root => root.syncRootId === syncRootId)
+    : syncRoots[0];
+
+  if (!syncRoot || !syncRoot.absolutePath) {
+    const err = new Error('연동 루트를 찾을 수 없습니다.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (!isSameOrChildPath(device.absolutePath, syncRoot.absolutePath)) {
+    const err = new Error('잘못된 연동 루트입니다.');
+    err.status = 400;
+    throw err;
+  }
+
+  const linkedRoot = path.resolve(syncRoot.absolutePath);
   const relPath = normalizeAgentRelPath(relPathValue);
   const finalPath = path.resolve(linkedRoot, relPath);
 
@@ -1954,7 +2171,7 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue) => {
     throw err;
   }
 
-  return { device, linkedRoot, relPath, finalPath };
+  return { device, linkedRoot, syncRoot, relPath, finalPath };
 };
 
 const touchLinkedDevice = (device, linkedRoot) => {
@@ -1963,7 +2180,7 @@ const touchLinkedDevice = (device, linkedRoot) => {
   updateLinkedDeviceRecord(updated);
 
   try {
-    fs.writeFileSync(path.join(linkedRoot, LINKED_DEVICE_META), JSON.stringify(updated, null, 2));
+    writeLinkedDeviceMeta(updated);
   } catch (err) {}
 
   return updated;
@@ -1974,7 +2191,7 @@ router.post('/devices/agent/sync-folder', express.json(), (req, res) => {
   try {
     const deviceId = String(req.body?.deviceId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath);
+    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath, req.body?.syncRootId);
 
     if (!fs.existsSync(finalPath)) fs.mkdirSync(finalPath, { recursive: true });
     touchLinkedDevice(device, linkedRoot);
@@ -1991,7 +2208,7 @@ router.post('/devices/agent/sync-delete', express.json(), (req, res) => {
   try {
     const deviceId = String(req.body?.deviceId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath);
+    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath, req.body?.syncRootId);
 
     if (relPath === '.agent_trash' || relPath.startsWith('.agent_trash/')) {
       return res.status(400).json({ error: 'Agent trash 경로는 동기화 삭제할 수 없습니다.' });
@@ -2031,7 +2248,7 @@ router.post('/devices/agent/sync-file', agentUpload.single('file'), (req, res) =
       return res.status(400).json({ error: '업로드 파일이 없습니다.' });
     }
 
-    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath || req.file.originalname);
+    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath || req.file.originalname, req.body?.syncRootId);
 
     const parent = path.dirname(finalPath);
     if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
@@ -2090,6 +2307,7 @@ const listAgentManifestEntries = (linkedRoot) => {
 router.get('/devices/agent/manifest', (req, res) => {
   try {
     const deviceId = String(req.query.deviceId || '');
+    const syncRootId = String(req.query.syncRootId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
     const device = getAgentDeviceByToken(deviceId, agentToken);
 
@@ -2098,12 +2316,18 @@ router.get('/devices/agent/manifest', (req, res) => {
       return res.status(404).json({ error: '연동 폴더를 찾을 수 없습니다.' });
     }
 
-    const linkedRoot = path.resolve(device.absolutePath);
+    const syncRoot = normalizeDeviceSyncRoots(device).find(root => root.syncRootId === syncRootId) || normalizeDeviceSyncRoots(device)[0];
+    if (!syncRoot || !syncRoot.absolutePath || !fs.existsSync(syncRoot.absolutePath)) {
+      return res.status(404).json({ error: '연동 루트를 찾을 수 없습니다.' });
+    }
+
+    const linkedRoot = path.resolve(syncRoot.absolutePath);
     touchLinkedDevice(device, linkedRoot);
 
     return res.json({
       success: true,
       deviceId,
+      syncRootId: syncRoot.syncRootId,
       generatedAt: new Date().toISOString(),
       entries: listAgentManifestEntries(linkedRoot)
     });
@@ -2117,7 +2341,7 @@ router.get('/devices/agent/file', (req, res) => {
   try {
     const deviceId = String(req.query.deviceId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.query.relPath);
+    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.query.relPath, req.query.syncRootId);
 
     if (!fs.existsSync(finalPath) || !fs.statSync(finalPath).isFile()) {
       return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });

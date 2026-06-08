@@ -78,6 +78,14 @@ const NASContextMenu = ({
         }}>
           <ListItemIcon><FolderIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>열기</ListItemText>
         </MenuItem>,
+        contextMenu.type === 'linked-device' && (
+          <MenuItem key="addLinkedFolder" onClick={() => {
+            handleContextMenuClose();
+            setTimeout(() => handleCreateLinkedDeviceFolder(contextMenu.item?.fullPath || contextMenu.path || '/'), 10);
+          }}>
+            <ListItemIcon><DesktopWindowsIcon fontSize="small" color="info" /></ListItemIcon><ListItemText>연동 폴더 추가</ListItemText>
+          </MenuItem>
+        ),
         <Divider key="d2" />,
         <MenuItem key="downloadFolder" onClick={() => { handleContextMenuClose(); setTimeout(() => { const items = getItemsToProcess(contextMenu.item); items.forEach((it, i) => setTimeout(() => handleDownload(it), i * 500)); }, 10); }}>
           <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon><ListItemText>다운로드</ListItemText>
