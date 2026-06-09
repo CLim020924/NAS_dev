@@ -464,6 +464,56 @@ function promptText(title, message, defaultValue) {
   return (ps.stdout || '').trim();
 }
 
+function promptPassword(title, message) {
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = ${JSON.stringify(title)}
+$form.Size = New-Object System.Drawing.Size(420, 170)
+$form.StartPosition = "CenterScreen"
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+
+$label = New-Object System.Windows.Forms.Label
+$label.Text = ${JSON.stringify(message)}
+$label.Location = New-Object System.Drawing.Point(16, 18)
+$label.Size = New-Object System.Drawing.Size(370, 24)
+
+$textBox = New-Object System.Windows.Forms.TextBox
+$textBox.Location = New-Object System.Drawing.Point(18, 50)
+$textBox.Size = New-Object System.Drawing.Size(365, 24)
+$textBox.UseSystemPasswordChar = $true
+
+$ok = New-Object System.Windows.Forms.Button
+$ok.Text = "OK"
+$ok.Location = New-Object System.Drawing.Point(216, 92)
+$ok.Size = New-Object System.Drawing.Size(80, 30)
+$ok.Add_Click({ $form.Tag = $textBox.Text; $form.Close() })
+
+$cancel = New-Object System.Windows.Forms.Button
+$cancel.Text = "Cancel"
+$cancel.Location = New-Object System.Drawing.Point(304, 92)
+$cancel.Size = New-Object System.Drawing.Size(80, 30)
+$cancel.Add_Click({ $form.Tag = ""; $form.Close() })
+
+$form.Controls.Add($label)
+$form.Controls.Add($textBox)
+$form.Controls.Add($ok)
+$form.Controls.Add($cancel)
+$form.AcceptButton = $ok
+$form.CancelButton = $cancel
+$form.ShowDialog() | Out-Null
+[Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8
+Write-Output $form.Tag
+`;
+  const ps = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { encoding: 'utf8', windowsHide: false });
+  return (ps.stdout || '').trim();
+}
+
 function getFolderSummary(root) {
   let totalBytes = 0;
   let fileCount = 0;
@@ -666,6 +716,22 @@ async function register(pairingToken, clientDeviceKey, deviceName, selectedFolde
   });
 }
 
+async function loginRegister(loginId, password, clientDeviceKey, deviceName, selectedFolder, summary) {
+  return requestJson('POST', '/api/devices/agent/login-register', {
+    loginId,
+    password,
+    clientDeviceKey,
+    deviceName,
+    hostName: os.hostname() || 'Windows-PC',
+    osType: 'windows',
+    desktopPath: selectedFolder,
+    syncRootPath: selectedFolder,
+    syncRootSizeBytes: summary.totalBytes,
+    syncRootFileCount: summary.fileCount,
+    syncRootFolderCount: summary.folderCount
+  });
+}
+
 function mergeRoot(config, root) {
   const roots = getRoots(config).filter(existing => existing.syncRootId !== root.syncRootId && existing.localPath !== root.localPath);
   roots.push(root);
@@ -827,6 +893,51 @@ async function runBackground() {
   }, PULL_INTERVAL_MS);
 }
 
+async function runStandaloneLoginSetup() {
+  const clientDeviceKey = getDeviceKey();
+  const loginId = promptText('NAS Sync Agent', 'Enter your NAS account ID.', '');
+  if (!loginId) return;
+
+  const password = promptPassword('NAS Sync Agent', 'Enter your NAS account password.');
+  if (!password) return;
+
+  const deviceName = promptText(
+    'NAS Sync Agent',
+    'Enter the NAS root folder name for this PC.',
+    os.hostname() || 'Windows-PC'
+  );
+  if (!deviceName) return;
+
+  const selectedFolder = selectFolder();
+  if (!selectedFolder) return;
+
+  const summary = getFolderSummary(selectedFolder);
+  if (summary.totalBytes > MAX_TOTAL_BYTES) {
+    showMessage('NAS Sync Agent', 'The selected folder exceeds the 50GB sync limit.');
+    return;
+  }
+
+  const reg = await loginRegister(loginId, password, clientDeviceKey, deviceName, selectedFolder, summary);
+  const root = {
+    syncRootId: reg.syncRoot.syncRootId,
+    name: reg.syncRoot.name,
+    localPath: selectedFolder,
+    linkedNasPath: reg.syncRoot.linkedNasPath
+  };
+  const nextConfig = {
+    serverBase: SERVER_BASE,
+    deviceId: reg.device.deviceId,
+    agentToken: reg.agentToken,
+    deviceName: reg.device.deviceName || deviceName,
+    syncRoots: mergeRoot(loadConfig(), root),
+    savedAt: new Date().toISOString()
+  };
+  saveConfig(nextConfig);
+  await initialSync(root, nextConfig);
+  startBackground();
+  showMessage('NAS Sync Agent', `PC linked:\n${root.linkedNasPath}`);
+}
+
 async function runForeground() {
   const protocolAction = getProtocolAction();
   if (protocolAction === 'open') {
@@ -847,8 +958,13 @@ async function runForeground() {
   registerStartup();
   const pairingToken = getPairingToken();
   if (!pairingToken) {
-    startBackground();
-    showMessage('NAS Sync Agent', 'NAS Sync Agent is running in the system tray.');
+    const config = loadConfig();
+    if (config && config.deviceId && config.agentToken) {
+      startBackground();
+      showMessage('NAS Sync Agent', 'NAS Sync Agent is running in the system tray.');
+      return;
+    }
+    await runStandaloneLoginSetup();
     return;
   }
   const config = loadConfig();

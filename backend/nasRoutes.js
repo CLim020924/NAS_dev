@@ -40,6 +40,7 @@ const canceledSessions = new Set();
 // =========================================================
 const LINKED_DEVICE_META = '.msp-linked-device.json';
 const DEVICE_DATA_DIR = path.join(__dirname, 'data');
+const MEMBERS_FILE = path.join(DEVICE_DATA_DIR, 'members.json');
 const DEVICE_PAIRINGS_FILE = path.join(DEVICE_DATA_DIR, 'device_pairings.json');
 const LINKED_DEVICES_FILE = path.join(DEVICE_DATA_DIR, 'linked_devices.json');
 const UNLINKED_SYNC_ROOTS_FILE = path.join(DEVICE_DATA_DIR, 'unlinked_sync_roots.json');
@@ -138,6 +139,39 @@ const writeJsonArrayFile = (filePath, rows) => {
 
 const getDeviceOwnerKey = (user = {}) => {
   return String(user.userUid || user.loginId || user.id || user.username || 'unknown');
+};
+
+const getUserLoginId = (user = {}) => String(user.loginId || user.id || user.username || '').trim();
+
+const normalizeAgentUser = (user = {}) => {
+  const loginId = getUserLoginId(user);
+  return {
+    ...user,
+    id: loginId,
+    loginId,
+    username: user.username || loginId,
+    userUid: user.userUid || `usr_${crypto.createHash('sha256').update(loginId).digest('hex').slice(0, 32)}`,
+    displayName: user.displayName || user.nickname || user.username || loginId,
+    rootPath: user.rootPath || path.join('users', loginId)
+  };
+};
+
+const readApprovedUsersForAgent = () => {
+  try {
+    const rows = JSON.parse(fs.readFileSync(MEMBERS_FILE, 'utf8'));
+    return Array.isArray(rows) ? rows.map(normalizeAgentUser) : [];
+  } catch (err) {
+    return [];
+  }
+};
+
+const findAgentLoginUser = (loginId, password) => {
+  const safeLoginId = String(loginId || '').trim();
+  return readApprovedUsersForAgent().find(user => (
+    getUserLoginId(user) === safeLoginId &&
+    String(user.password || '') === String(password || '') &&
+    !user.disabled
+  ));
 };
 
 const createPairingToken = () => {
@@ -2301,6 +2335,108 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
 });
 
  
+
+// Agent standalone login + PC registration.
+// Used by the installed Windows app when launched directly without a browser pairing token.
+router.post('/devices/agent/login-register', express.json(), (req, res) => {
+  try {
+    ensureDeviceDataFiles();
+
+    const user = findAgentLoginUser(req.body?.loginId || req.body?.id, req.body?.password);
+    if (!user) return res.status(401).json({ error: 'NAS account login failed.' });
+
+    const clientDeviceKey = String(req.body?.clientDeviceKey || '').trim();
+    const syncRootPath = String(req.body?.syncRootPath || req.body?.desktopPath || '').trim();
+    const requestedDeviceName = String(req.body?.deviceName || '').trim();
+
+    if (!clientDeviceKey) return res.status(400).json({ error: 'PC device key is required.' });
+    if (!syncRootPath) return res.status(400).json({ error: 'Sync folder path is required.' });
+
+    const ownerKey = getDeviceOwnerKey(user);
+    const rawExistingDevice = readJsonArrayFile(LINKED_DEVICES_FILE).find(d =>
+      d.ownerKey === ownerKey &&
+      d.clientDeviceKey === clientDeviceKey
+    );
+    const existingDevice = getActiveLinkedDevice(rawExistingDevice);
+    const hasLiveSyncRoots = existingDevice && getLiveSyncRoots(existingDevice).length > 0;
+
+    if (existingDevice && hasLiveSyncRoots) {
+      return res.status(409).json({
+        code: 'DEVICE_ALREADY_REGISTERED',
+        error: 'This PC is already linked to this NAS account.',
+        device: {
+          deviceId: existingDevice.deviceId,
+          deviceName: existingDevice.deviceName || existingDevice.name || '',
+          linkedNasPath: existingDevice.linkedNasPath || '',
+          syncRoots: getLiveSyncRoots(existingDevice).map(root => ({
+            syncRootId: root.syncRootId,
+            name: root.name,
+            localPath: root.localPath || '',
+            linkedNasPath: root.linkedNasPath || ''
+          }))
+        }
+      });
+    }
+
+    let device = existingDevice || rawExistingDevice;
+    if (!device || !device.absolutePath || !fs.existsSync(device.absolutePath)) {
+      device = createLinkedDeviceFolder(user, '/', {
+        deviceId: createDeviceId(),
+        deviceName: requestedDeviceName || req.body?.hostName || 'Windows-PC',
+        osType: req.body?.osType || 'windows'
+      });
+    }
+
+    const agentToken = createAgentToken();
+    const now = new Date().toISOString();
+    const deviceName = device.deviceName || requestedDeviceName || req.body?.hostName || 'Windows-PC';
+
+    device = {
+      ...device,
+      deviceName,
+      name: device.name || deviceName,
+      originalDeviceName: device.originalDeviceName || requestedDeviceName || deviceName,
+      osType: req.body?.osType || device.osType || 'windows',
+      desktopPath: req.body?.desktopPath || device.desktopPath || '',
+      syncRootPath,
+      syncRootSizeBytes: Number(req.body?.syncRootSizeBytes || device.syncRootSizeBytes || 0),
+      syncRootFileCount: Number(req.body?.syncRootFileCount || device.syncRootFileCount || 0),
+      syncRootFolderCount: Number(req.body?.syncRootFolderCount || device.syncRootFolderCount || 0),
+      clientDeviceKey,
+      agentTokenHash: hashAgentToken(agentToken),
+      status: 'connected',
+      lastSeenAt: now
+    };
+
+    const rootResult = addSyncRootToDevice(device, user, syncRootPath, {
+      sizeBytes: Number(req.body?.syncRootSizeBytes || 0),
+      fileCount: Number(req.body?.syncRootFileCount || 0),
+      folderCount: Number(req.body?.syncRootFolderCount || 0)
+    });
+
+    device = {
+      ...rootResult.device,
+      agentTokenHash: device.agentTokenHash,
+      lastSeenAt: now,
+      status: 'connected'
+    };
+    const syncRoot = rootResult.syncRoot;
+
+    writeLinkedDeviceMeta(device);
+    updateLinkedDeviceRecord(device);
+
+    return res.json({
+      success: true,
+      status: 'connected',
+      message: 'Agent login and registration completed.',
+      agentToken,
+      device,
+      syncRoot
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Agent login registration failed.' });
+  }
+});
 
 // Agent가 pairingToken으로 실제 PC 등록
 router.post('/devices/agent/register', (req, res) => {
