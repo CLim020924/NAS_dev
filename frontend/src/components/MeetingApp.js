@@ -7,6 +7,8 @@ import {
   Chip,
   Divider,
   IconButton,
+  Menu,
+  MenuItem,
   Paper,
   Stack,
   TextField,
@@ -14,11 +16,13 @@ import {
   Typography
 } from '@mui/material';
 import CallEndIcon from '@mui/icons-material/CallEnd';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import GroupsIcon from '@mui/icons-material/Groups';
+import LinkIcon from '@mui/icons-material/Link';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import PresentToAllIcon from '@mui/icons-material/PresentToAll';
 import StopScreenShareIcon from '@mui/icons-material/StopScreenShare';
 import VideocamIcon from '@mui/icons-material/Videocam';
@@ -27,6 +31,7 @@ import { alpha, useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import axios from 'axios';
 import { normalizeRoomCode, useMeetingSession } from '../contexts/MeetingContext';
+import ChatInviteDialog from './ChatInviteDialog';
 
 const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEnabled = true, screenSharing = false, local = false, compact = false }) => {
   const videoRef = useRef(null);
@@ -88,9 +93,9 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
   const theme = useTheme();
   const compact = useMediaQuery('(max-width:900px), (max-height:650px)');
   const veryCompact = useMediaQuery('(max-width:620px), (max-height:520px)');
-  const [meetingInviteText, setMeetingInviteText] = useState('');
-  const [meetingInviting, setMeetingInviting] = useState(false);
   const [linkedConversation, setLinkedConversation] = useState(null);
+  const [inviteMenuAnchorEl, setInviteMenuAnchorEl] = useState(null);
+  const [chatInviteOpen, setChatInviteOpen] = useState(false);
   const session = useMeetingSession();
   const {
     roomCode,
@@ -161,45 +166,22 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
     refreshLinkedConversation();
   }, [refreshLinkedConversation]);
 
-  const inviteMeetingParticipants = async () => {
-    const invitees = meetingInviteText
-      .split(/[,\n]/)
-      .map((value) => value.trim())
-      .filter(Boolean);
+  const closeInviteMenu = () => setInviteMenuAnchorEl(null);
 
-    if (!conversationId || invitees.length === 0) return;
-    setMeetingInviting(true);
-    try {
-      if (linkedConversation?.type === 'group') {
-        await axios.post(
-          `/api/chat/group/${linkedConversation.conversationId}/invite`,
-          { invitees },
-          { withCredentials: true }
-        );
-      } else {
-        const directUserUid = linkedConversation?.otherUser?.userUid;
-        const res = await axios.post(
-          '/api/chat/group',
-          {
-            title: `${linkedConversation?.otherUser?.displayName || linkedConversation?.otherUser?.username || '회의'} 그룹`,
-            inviteeUids: [directUserUid].filter(Boolean),
-            invitees,
-          },
-          { withCredentials: true }
-        );
-        if (res.data?.conversation) {
-          setLinkedConversation(res.data.conversation);
-        }
-      }
-      setMeetingInviteText('');
-      if (linkedConversation?.type === 'group') {
-        refreshLinkedConversation();
-      }
-      alert('회의가 연결된 채팅방으로 초대를 보냈습니다.');
-    } catch (err) {
-      alert(err.response?.data?.error || '회의 초대에 실패했습니다.');
-    } finally {
-      setMeetingInviting(false);
+  const handleOpenChatInvite = () => {
+    closeInviteMenu();
+    if (!conversationId) {
+      alert('채팅방에서 시작한 회의에서만 친구 초대를 사용할 수 있습니다.');
+      return;
+    }
+    setChatInviteOpen(true);
+  };
+
+  const handleChatInviteComplete = (conversation) => {
+    if (conversation?.conversationId) {
+      setLinkedConversation(conversation);
+    } else {
+      refreshLinkedConversation();
     }
   };
 
@@ -231,6 +213,11 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
           )}
           <Chip size="small" color={active ? 'success' : 'default'} label={active ? `${remoteList.length + 1}명` : '대기'} sx={{ height: compact ? 24 : 26 }} />
           {screenSharing && !veryCompact && <Chip size="small" color="info" label="화면공유" />}
+          <Tooltip title="회의 메뉴">
+            <IconButton size="small" onClick={(event) => setInviteMenuAnchorEl(event.currentTarget)}>
+              <MoreVertIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Stack>
       </Box>
 
@@ -326,41 +313,24 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
         </Box>
 
         <Box sx={{ borderLeft: { lg: `1px solid ${theme.palette.divider}` }, borderTop: { xs: `1px solid ${theme.palette.divider}`, lg: 'none' }, p: compact ? 1 : 1.5, overflow: 'auto', bgcolor: 'background.paper', maxHeight: { xs: veryCompact ? 132 : 190, lg: 'none' } }}>
-          <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900, lineHeight: 1 }}>링크 초대</Typography>
-          <Box sx={{ display: 'flex', gap: 0.75, mt: 0.5, mb: compact ? 1 : 1.5 }}>
-            <TextField size="small" value={inviteLink} fullWidth InputProps={{ readOnly: true }} />
-            <IconButton onClick={copyInvite} aria-label="초대 링크 복사"><ContentCopyIcon fontSize="small" /></IconButton>
-          </Box>
-          {conversationId && (
-            <>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: compact ? 1 : 1.5 }}>
+            <Box sx={{ minWidth: 0 }}>
               <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900, lineHeight: 1 }}>
-                채팅방 초대
+                초대
               </Typography>
-              {linkedConversation && (
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
-                  {linkedConversation.title || '연결된 채팅방'} · 참가 {linkedConversation.participantUids?.length || 0}명
-                  {linkedConversation.pendingInviteUids?.length ? ` · 대기 ${linkedConversation.pendingInviteUids.length}명` : ''}
-                </Typography>
-              )}
-              <Box sx={{ display: 'flex', gap: 0.75, mb: compact ? 1 : 1.5 }}>
-                <TextField
-                  size="small"
-                  placeholder="아이디/닉네임 초대"
-                  value={meetingInviteText}
-                  onChange={(event) => setMeetingInviteText(event.target.value)}
-                  onKeyDown={(event) => event.key === 'Enter' && inviteMeetingParticipants()}
-                  fullWidth
-                />
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={inviteMeetingParticipants}
-                  disabled={meetingInviting || !meetingInviteText.trim()}
-                >
-                  초대
-                </Button>
-              </Box>
-            </>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                링크와 채팅방 초대는 메뉴에서 관리합니다.
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={(event) => setInviteMenuAnchorEl(event.currentTarget)} aria-label="회의 초대 메뉴">
+              <MoreVertIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          {linkedConversation && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: compact ? 1 : 1.5 }}>
+              {linkedConversation.title || '연결된 채팅방'} · 참가 {linkedConversation.participantUids?.length || 0}명
+              {linkedConversation.pendingInviteUids?.length ? ` · 대기 ${linkedConversation.pendingInviteUids.length}명` : ''}
+            </Typography>
           )}
 
           <Divider sx={{ my: compact ? 1 : 1.5 }} />
@@ -410,6 +380,42 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
           )}
         </Box>
       </Box>
+      <Menu
+        anchorEl={inviteMenuAnchorEl}
+        open={Boolean(inviteMenuAnchorEl)}
+        onClose={closeInviteMenu}
+      >
+        <MenuItem
+          onClick={() => {
+            closeInviteMenu();
+            copyInvite();
+          }}
+        >
+          <LinkIcon fontSize="small" sx={{ mr: 1 }} />
+          링크 복사
+        </MenuItem>
+        <MenuItem
+          onClick={handleOpenChatInvite}
+          disabled={!conversationId}
+        >
+          <PersonAddIcon fontSize="small" sx={{ mr: 1 }} />
+          친구/아이디 초대
+        </MenuItem>
+      </Menu>
+      {conversationId && (
+        <ChatInviteDialog
+          open={chatInviteOpen}
+          onClose={() => setChatInviteOpen(false)}
+          conversation={linkedConversation || {
+            conversationId,
+            type: 'direct',
+            title: '회의 채팅방',
+          }}
+          directUserUid={linkedConversation?.otherUser?.userUid || null}
+          defaultTitle={`${linkedConversation?.title || linkedConversation?.otherUser?.displayName || linkedConversation?.otherUser?.username || '회의'} 그룹`}
+          onComplete={handleChatInviteComplete}
+        />
+      )}
     </Box>
   );
 };
