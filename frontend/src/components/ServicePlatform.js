@@ -1,152 +1,156 @@
-import React from 'react';
-import { Box, Button, Chip, Container, Paper, Stack, Typography } from '@mui/material';
+import React, { useState } from 'react';
+import { Box, Button, IconButton, Paper, Tooltip, Typography } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import HistoryIcon from '@mui/icons-material/History';
 import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
 import SettingsIcon from '@mui/icons-material/Settings';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import VideocamIcon from '@mui/icons-material/Videocam';
+import CloseIcon from '@mui/icons-material/Close';
+import RemoveIcon from '@mui/icons-material/Remove';
+import CropSquareIcon from '@mui/icons-material/CropSquare';
 import { alpha, useTheme } from '@mui/material/styles';
+import { Rnd } from 'react-rnd';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import { useWindows } from '../contexts/WindowContext';
+import MeetingApp from './MeetingApp';
+
+const appOpenMode = () => localStorage.getItem('platform_app_open_mode') || 'window';
 
 function ServicePlatform() {
   const navigate = useNavigate();
   const theme = useTheme();
+  const [inlineApp, setInlineApp] = useState(null);
+  const {
+    openWindows,
+    setOpenWindows,
+    focusedContext,
+    focusWindow,
+    closeWindow,
+    toggleMinimize,
+    toggleMaximize,
+    openAppWindow
+  } = useWindows();
   const user = JSON.parse(localStorage.getItem('user')) || {};
   const canOpenBackup = user.role === 'MASTER' || user.Masters || user.globalAccess;
+  const appWindows = openWindows.filter((win) => win.winType === 'app');
 
-  const serviceCards = [
-    {
-      title: 'NAS 파일',
-      description: '저장소, PC 연동 폴더, 파일 창을 관리합니다.',
-      icon: FolderIcon,
-      color: theme.palette.primary.main,
-      action: '열기',
-      onClick: () => navigate('/nas')
-    },
-    {
-      title: 'PC 연동',
-      description: '설치된 Sync Agent와 연결된 폴더를 확인합니다.',
-      icon: DesktopWindowsIcon,
-      color: theme.palette.secondary.main,
-      action: 'NAS에서 설정',
-      onClick: () => navigate('/nas')
-    },
-    {
-      title: '설정',
-      description: '계정, 테마, 파일 표시 방식을 조정합니다.',
-      icon: SettingsIcon,
-      color: theme.palette.info.main,
-      action: '설정 열기',
-      onClick: () => navigate('/settings')
+  const openApp = (app) => {
+    const mode = appOpenMode();
+    if (mode !== 'window' && app.component) {
+      setInlineApp(app);
+      return;
     }
+    if (app.route && mode !== 'window') {
+      navigate(app.route);
+      return;
+    }
+    if (app.id === 'files') {
+      navigate(app.route || '/nas');
+      return;
+    }
+    if (app.route && !app.component) {
+      navigate(app.route);
+      return;
+    }
+    openAppWindow(app);
+  };
+
+  const apps = [
+    { id: 'files', title: '파일 관리자', icon: FolderIcon, route: '/nas', color: theme.palette.primary.main },
+    { id: 'pc-sync', title: 'PC 연동', icon: DesktopWindowsIcon, route: '/nas', color: theme.palette.secondary.main },
+    { id: 'meeting', title: '화상회의', icon: VideocamIcon, component: MeetingApp, color: theme.palette.info.main, width: 920, height: 640 },
+    { id: 'settings', title: '설정', icon: SettingsIcon, route: '/settings', color: theme.palette.text.secondary }
   ];
 
   if (canOpenBackup) {
-    serviceCards.push({
-      title: '백업 보관소',
-      description: '관리자용 백업 저장소로 이동합니다.',
-      icon: HistoryIcon,
-      color: theme.palette.error.main,
-      action: '백업 열기',
-      onClick: () => navigate('/nas/backup')
-    });
+    apps.push({ id: 'backup', title: '백업', icon: HistoryIcon, route: '/nas/backup', color: theme.palette.error.main });
+  }
+
+  const renderAppContent = (win) => {
+    if (win.appId === 'meeting') return <MeetingApp />;
+    return null;
+  };
+
+  if (inlineApp) {
+    return (
+      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
+        <Box sx={{ height: 54, px: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: 'background.paper', flexShrink: 0 }}>
+          <Typography sx={{ fontWeight: 900 }}>{inlineApp.title}</Typography>
+          <Button variant="text" onClick={() => setInlineApp(null)}>바탕화면</Button>
+        </Box>
+        <Box sx={{ flex: 1, minHeight: 0 }}>
+          {inlineApp.id === 'meeting' ? <MeetingApp /> : null}
+        </Box>
+      </Box>
+    );
   }
 
   return (
-    <Box sx={{ minHeight: '100%', bgcolor: 'background.default', overflow: 'auto' }}>
-      <Container maxWidth="lg" sx={{ py: { xs: 3, sm: 5 } }}>
-        <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', gap: 2, mb: 3, flexDirection: { xs: 'column', sm: 'row' } }}>
-          <Box>
-            <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900 }}>Workspace</Typography>
-            <Typography variant="h4" sx={{ fontWeight: 900, fontSize: { xs: '1.7rem', sm: '2.2rem' } }}>
-              {user.displayName || user.username || 'NAS'}님의 작업 허브
-            </Typography>
-            <Typography color="text.secondary" sx={{ mt: 1 }}>
-              파일 관리와 PC 연동을 한 화면에서 시작합니다.
-            </Typography>
-          </Box>
-          <Button variant="contained" size="large" endIcon={<ArrowForwardIcon />} onClick={() => navigate('/nas')}>
-            NAS 열기
-          </Button>
-        </Box>
+    <Box sx={{ height: '100%', overflow: 'hidden', position: 'relative', bgcolor: 'background.default', background: theme.palette.mode === 'dark' ? 'linear-gradient(180deg, #101418 0%, #151b22 100%)' : 'linear-gradient(180deg, #eef2f6 0%, #f8fafc 100%)' }}>
+      <Box sx={{ position: 'absolute', left: 16, top: 18, bottom: 18, width: 62, borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.86), border: `1px solid ${theme.palette.divider}`, display: 'flex', flexDirection: 'column', alignItems: 'center', py: 1, gap: 0.75, boxShadow: `0 18px 48px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.30 : 0.09)}` }}>
+        {apps.map((app) => {
+          const Icon = app.icon;
+          return (
+            <Tooltip key={app.id} title={app.title} placement="right">
+              <IconButton onClick={() => openApp(app)} sx={{ width: 44, height: 44, color: app.color, bgcolor: alpha(app.color, 0.08), '&:hover': { bgcolor: alpha(app.color, 0.16) } }}>
+                <Icon />
+              </IconButton>
+            </Tooltip>
+          );
+        })}
+      </Box>
 
-        <Paper
-          elevation={0}
-          sx={{
-            p: { xs: 2, sm: 3 },
-            border: `1px solid ${theme.palette.divider}`,
-            borderRadius: 2,
-            mb: 3,
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', md: '1.2fr 0.8fr' },
-            gap: 2.5,
-            bgcolor: 'background.paper'
-          }}
-        >
-          <Box>
-            <Chip size="small" label="Ready" color="success" sx={{ mb: 2, fontWeight: 800 }} />
-            <Typography variant="h5" sx={{ fontWeight: 900, mb: 1 }}>
-              파일을 열고, PC 폴더를 연결하고, 변경사항을 바로 관리하세요.
-            </Typography>
-            <Typography color="text.secondary" sx={{ maxWidth: 640 }}>
-              새 NAS 화면은 상단 작업바와 좌측 탐색을 중심으로 구성되어 파일 작업 중 필요한 버튼을 계속 찾지 않아도 됩니다.
-            </Typography>
-          </Box>
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-            {[
-              ['빠른 실행', '상단 작업바'],
-              ['모바일', '하단 액션'],
-              ['연동 PC', '계정별 표시'],
-              ['파일 창', '오버레이 유지']
-            ].map(([label, value]) => (
-              <Box key={label} sx={{ p: 1.5, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.06) }}>
-                <Typography variant="caption" color="text.secondary">{label}</Typography>
-                <Typography sx={{ fontWeight: 900 }}>{value}</Typography>
+      <Box sx={{ position: 'absolute', left: 100, top: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 92px)', gap: 2, width: { xs: 'calc(100% - 116px)', sm: 440 } }}>
+        {apps.map((app) => {
+          const Icon = app.icon;
+          return (
+            <Box key={`desktop_${app.id}`} onDoubleClick={() => openApp(app)} onClick={() => openApp(app)} sx={{ cursor: 'pointer', textAlign: 'center', color: 'text.primary' }}>
+              <Box sx={{ width: 58, height: 58, mx: 'auto', borderRadius: 2, display: 'grid', placeItems: 'center', color: app.color, bgcolor: alpha(theme.palette.background.paper, 0.82), border: `1px solid ${theme.palette.divider}`, boxShadow: `0 10px 28px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.22 : 0.08)}` }}>
+                <Icon sx={{ fontSize: 30 }} />
               </Box>
-            ))}
-          </Box>
-        </Paper>
+              <Typography variant="caption" sx={{ display: 'block', mt: 0.75, fontWeight: 800, lineHeight: 1.2 }}>{app.title}</Typography>
+            </Box>
+          );
+        })}
+      </Box>
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 2 }}>
-          {serviceCards.map(({ title, description, icon: Icon, color, action, onClick }) => (
-            <Paper
-              key={title}
-              elevation={0}
-              onClick={onClick}
-              sx={{
-                p: 2,
-                minHeight: 184,
-                borderRadius: 2,
-                border: `1px solid ${theme.palette.divider}`,
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-                transition: 'transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease',
-                '&:hover': {
-                  transform: 'translateY(-2px)',
-                  borderColor: alpha(color, 0.44),
-                  boxShadow: `0 18px 48px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.28 : 0.10)}`
-                }
-              }}
+      <AnimatePresence>
+        {appWindows.map((win) => {
+          const isActive = focusedContext === win.id;
+          return (
+            <Rnd
+              key={win.id}
+              style={{ display: win.isMinimized ? 'none' : 'block', zIndex: win.zIndex, position: 'absolute' }}
+              minWidth={420}
+              minHeight={320}
+              bounds="parent"
+              size={{ width: win.isMaximized ? '100%' : win.width, height: win.isMaximized ? '100%' : win.height }}
+              position={{ x: win.isMaximized ? 0 : win.x, y: win.isMaximized ? 0 : win.y }}
+              disableDragging={win.isMaximized}
+              enableResizing={!win.isMaximized}
+              dragHandleClassName="platform-window-header"
+              onMouseDown={() => focusWindow(win.id)}
+              onDragStop={(e, d) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, x: d.x, y: d.y } : w))}
+              onResizeStop={(e, direction, ref, delta, position) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, width: ref.style.width, height: ref.style.height, x: position.x, y: position.y } : w))}
             >
-              <Stack spacing={1.5}>
-                <Box sx={{ width: 46, height: 46, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.10), color }}>
-                  <Icon />
-                </Box>
-                <Box>
-                  <Typography sx={{ fontWeight: 900 }}>{title}</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{description}</Typography>
-                </Box>
-              </Stack>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 2 }}>
-                <Typography variant="button" sx={{ color, fontWeight: 900 }}>{action}</Typography>
-                <ArrowForwardIcon sx={{ color }} fontSize="small" />
-              </Box>
-            </Paper>
-          ))}
-        </Box>
-      </Container>
+              <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97 }} style={{ height: '100%', width: '100%' }}>
+                <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: win.isMaximized ? 0 : 2, border: `1px solid ${isActive ? alpha(theme.palette.primary.main, 0.62) : theme.palette.divider}`, boxShadow: `0 24px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.46 : 0.16)}` }}>
+                  <Box className="platform-window-header" sx={{ height: 46, px: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, cursor: win.isMaximized ? 'default' : 'move', bgcolor: isActive ? alpha(theme.palette.primary.main, 0.07) : 'background.paper' }}>
+                    <Typography sx={{ fontWeight: 900 }}>{win.name}</Typography>
+                    <Box onMouseDown={(e) => e.stopPropagation()}>
+                      <IconButton size="small" onClick={() => toggleMinimize(win.id)}><RemoveIcon fontSize="small" /></IconButton>
+                      <IconButton size="small" onClick={() => toggleMaximize(win.id)}><CropSquareIcon fontSize="small" /></IconButton>
+                      <IconButton size="small" color="error" onClick={() => closeWindow(win.id)}><CloseIcon fontSize="small" /></IconButton>
+                    </Box>
+                  </Box>
+                  <Box sx={{ flex: 1, minHeight: 0 }}>{renderAppContent(win)}</Box>
+                </Paper>
+              </motion.div>
+            </Rnd>
+          );
+        })}
+      </AnimatePresence>
     </Box>
   );
 }

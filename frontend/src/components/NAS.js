@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Divider, Chip} from '@mui/material';
+import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Divider, Chip, TextField, InputAdornment} from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rnd } from 'react-rnd';
@@ -26,6 +26,7 @@ import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import RemoveIcon from '@mui/icons-material/Remove';
 import CropSquareIcon from '@mui/icons-material/CropSquare';
 import FilterNoneIcon from '@mui/icons-material/FilterNone';
+import SearchIcon from '@mui/icons-material/Search';
 
 import { useWindows } from '../contexts/WindowContext';
 import { useTransfer } from '../contexts/TransferContext';
@@ -61,6 +62,7 @@ const NAS = () => {
   };
 
   const [desktopItems, setDesktopItems] = useState([]);
+  const [fileSearchQuery, setFileSearchQuery] = useState('');
 
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
   useEffect(() => {
@@ -72,6 +74,17 @@ const NAS = () => {
   const getDisplayName = (item) => {
     if (item.type !== 'file' || showExt) return item.name;
     return item.name.includes('.') ? item.name.substring(0, item.name.lastIndexOf('.')) : item.name;
+  };
+
+  const matchesFileSearch = (item) => {
+    const q = fileSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return [
+      item.name,
+      item.fullPath,
+      item.path,
+      item.type
+    ].filter(Boolean).some((value) => String(value).toLowerCase().includes(q));
   };
 
   const [closePrompt, setClosePrompt] = useState(null);
@@ -1883,6 +1896,7 @@ const NAS = () => {
   const linkedDeviceCount = desktopItems.filter(item => item.type === 'linked-device').length;
   const folderCount = desktopItems.filter(item => item.type === 'folder' || item.type === 'linked-device').length;
   const fileCount = desktopItems.filter(item => item.type === 'file').length;
+  const visibleDesktopItems = desktopItems.filter(matchesFileSearch);
   const desktopCardStyle = isMobile
     ? { textAlign: 'center', cursor: 'pointer', width: '100%', minWidth: 0, zIndex: 10 }
     : { textAlign: 'center', cursor: 'pointer', width: '100%', minWidth: 0, zIndex: 10 };
@@ -1903,6 +1917,20 @@ const NAS = () => {
         </Box>
 
         <Box sx={{ display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: 1 }}>
+          <TextField
+            size="small"
+            placeholder="파일 검색"
+            value={fileSearchQuery}
+            onChange={(e) => setFileSearchQuery(e.target.value)}
+            sx={{ width: 220 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              )
+            }}
+          />
           <Button variant="outlined" color="inherit" onClick={() => refreshPath(activeTargetPath)} startIcon={<StorageIcon />}>새로고침</Button>
           <Button variant="outlined" color="secondary" onClick={() => handleUploadClick(activeTargetPath)} startIcon={<UploadFileIcon />}>업로드</Button>
           <Button variant="outlined" color="info" onClick={() => handleCreateFileStart(activeTargetPath, focusedContext, activeTargetPath === '/' ? getAvailableDesktopSlot() : null)} startIcon={<NoteAddIcon />}>새 파일</Button>
@@ -1931,7 +1959,7 @@ const NAS = () => {
                 {rootLabel}
               </Button>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', px: 1, mt: 1, fontWeight: 900 }}>빠른 접근</Typography>
-              {desktopItems.map((item) => {
+              {visibleDesktopItems.map((item) => {
                 const safePath = ensureSlash(item.fullPath);
                 const isSelected = selectedItems.includes(safePath);
                 const Icon = item.type === 'linked-device' ? DesktopWindowsIcon : ((item.type === 'folder' || item.type === 'linked-device') ? FolderIcon : InsertDriveFileIcon);
@@ -1950,9 +1978,26 @@ const NAS = () => {
           <Box sx={{ px: { xs: 1.5, sm: 3 }, py: { xs: 1.25, sm: 2 }, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
             <Box>
               <Typography sx={{ fontWeight: 900, fontSize: { xs: '1rem', sm: '1.25rem' } }}>파일 작업공간</Typography>
-              <Typography variant="body2" color="text.secondary">{folderCount}개 폴더 · {fileCount}개 파일 · 선택 {selectedItems.length}개</Typography>
+              <Typography variant="body2" color="text.secondary">{fileSearchQuery.trim() ? `검색 결과 ${visibleDesktopItems.length}개` : `${folderCount}개 폴더 · ${fileCount}개 파일`} · 선택 {selectedItems.length}개</Typography>
             </Box>
             <Chip size="small" color={openWindows.length > 0 ? 'primary' : 'default'} variant={openWindows.length > 0 ? 'filled' : 'outlined'} label={`열린 창 ${openWindows.filter(w => !w.isMinimized).length}`} />
+          </Box>
+
+          <Box sx={{ display: { xs: 'block', sm: 'none' }, px: 1.5, pb: 1.25, flexShrink: 0 }}>
+            <TextField
+              size="small"
+              placeholder="파일 검색"
+              value={fileSearchQuery}
+              onChange={(e) => setFileSearchQuery(e.target.value)}
+              fullWidth
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                )
+              }}
+            />
           </Box>
 
           <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, '/', 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: '/', windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: '/', windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, minHeight: 0, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: 'grid', gridTemplateColumns: { xs: 'repeat(auto-fill, minmax(92px, 1fr))', sm: 'repeat(auto-fill, minmax(132px, 1fr))', lg: 'repeat(auto-fill, minmax(148px, 1fr))' }, alignContent: 'flex-start', gap: { xs: 1.25, sm: 1.75 }, px: { xs: 1.5, sm: 3 }, pb: { xs: 8, sm: 3 } }}>
@@ -1962,7 +2007,7 @@ const NAS = () => {
 
         </motion.div>
 
-        {desktopItems.map((item) => {
+        {visibleDesktopItems.map((item) => {
           const safePath = ensureSlash(item.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === 'desktop'); const isSelected = selectedItems.includes(safePath);
           return (
             <motion.div key={safePath} className="selectable-item" data-path={safePath} draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, item, 'desktop') }} onDragOver={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragOver(e, item.fullPath); }} onDragLeave={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragLeave(e, item.fullPath); }} onDrop={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDrop(e, item.fullPath, 'desktop'); }} onClick={(e) => handleItemClick(e, safePath, item)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} style={{ ...desktopCardStyle, cursor: isEditing ? 'default' : 'pointer', zIndex: isSelected ? 20 : (isEditing ? 15 : 10) }}>
@@ -2062,7 +2107,7 @@ const NAS = () => {
                         <TableContainer className="window-content-area" onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} onContextMenu={(e) => handleContextMenu(e, 'background', { path: win.currentPath, windowId: win.id })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if(e.target === e.currentTarget) setSelectedItems([]); }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, background: 'transparent', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
                           <Table stickyHeader size="small">
                             <TableBody>
-                              {win.files.map((file, idx) => {
+                              {win.files.filter(matchesFileSearch).map((file, idx) => {
                                 const safePath = ensureSlash(file.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === win.id); const isSelected = selectedItems.includes(safePath); const isDragTarget = dragOverTarget === safePath;
                                 return (
                                   <TableRow key={idx} className="selectable-item" data-path={safePath} hover draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, file, win.id) }} onDragOver={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragOver(e, file.fullPath) }} onDragLeave={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragLeave(e, file.fullPath) }} onDrop={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDrop(e, file.fullPath, win.id) }} onClick={(e) => handleItemClick(e, safePath, file)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (file.type === 'folder' || file.type === 'linked-device') ? fetchFiles(win.id, ensureSlash(file.fullPath)) : openFileWindow(file, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, file.type, { item: file, path: win.currentPath, windowId: win.id }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, file.type, { item: file, path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ cursor: isEditing ? 'default' : 'pointer', backgroundColor: isDragTarget ? alpha(theme.palette.warning.main, 0.14) : (isSelected ? alpha(theme.palette.primary.main, 0.10) : 'inherit'), borderLeft: isSelected ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent', outline: isDragTarget ? `2px dashed ${theme.palette.warning.main}` : 'none', '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.06) } }}>

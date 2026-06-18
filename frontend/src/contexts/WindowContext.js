@@ -258,6 +258,36 @@ export const WindowProvider = ({ children }) => {
     }
   }, [openWindows, topZIndex, normalizeNasPath, getPathLeafName]);
 
+  const openAppWindow = useCallback((app) => {
+    if (!app?.id) return;
+    const winId = `app_${app.id}`;
+    const existing = openWindows.find((w) => w.id === winId);
+    if (existing) {
+      focusWindow(winId);
+      return;
+    }
+
+    setOpenWindows(prev => [
+      ...prev,
+      {
+        id: winId,
+        appId: app.id,
+        name: app.title || app.name || '앱',
+        winType: 'app',
+        zIndex: topZIndex + 1,
+        width: app.width || 860,
+        height: app.height || 620,
+        x: app.x ?? 120 + (prev.length * 28),
+        y: app.y ?? 72 + (prev.length * 28),
+        isMinimized: false,
+        isMaximized: false,
+        payload: app.payload || {}
+      }
+    ]);
+    setTopZIndex(prev => prev + 1);
+    setFocusedContext(winId);
+  }, [openWindows, focusWindow, topZIndex]);
+
 
   return (
     <WindowContext.Provider value={{
@@ -265,7 +295,7 @@ export const WindowProvider = ({ children }) => {
       taskbarOrder, setTaskbarOrder, taskbarWindows, activeWindowId,
       focusedContext, setFocusedContext, // 새로 추가된 포커스 상태 내보내기
       focusWindow, closeWindow, toggleMinimize, toggleMaximize, toggleFullscreen, fetchFiles,
-      openFolderWindowByPath, openFileWindowByPath
+      openFolderWindowByPath, openFileWindowByPath, openAppWindow
     }}>
       {children}
     </WindowContext.Provider>

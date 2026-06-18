@@ -9,6 +9,7 @@ const Settings = () => {
   const { themeName, setThemeName } = useCustomTheme();
   const [activeTab, setActiveTab] = useState(0);
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
+  const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
   
   const [pendingUsers, setPendingUsers] = useState([]);
   const [users, setUsers] = useState([]);
@@ -230,6 +231,22 @@ const Settings = () => {
                 <Button variant={themeName === 'light' ? 'contained' : 'outlined'} onClick={() => setThemeName('light')}>밝음</Button>
                 <Button variant={themeName === 'dark' ? 'contained' : 'outlined'} onClick={() => setThemeName('dark')}>어두움</Button>
                 <Button variant={themeName === 'ocean' ? 'contained' : 'outlined'} onClick={() => setThemeName('ocean')}>오션</Button>
+              </Box>
+              <Box sx={{ mt: 4 }}>
+                <Typography variant="h6" sx={{ mb: 2 }}>앱 열기 방식</Typography>
+                <Select
+                  size="small"
+                  value={appOpenMode}
+                  onChange={(e) => {
+                    setAppOpenMode(e.target.value);
+                    localStorage.setItem('platform_app_open_mode', e.target.value);
+                    window.dispatchEvent(new Event('nas_settings_changed'));
+                  }}
+                  sx={{ minWidth: 220 }}
+                >
+                  <MenuItem value="window">창으로 열기</MenuItem>
+                  <MenuItem value="inline">현재 화면에서 열기</MenuItem>
+                </Select>
               </Box>
             </Box>
           )}
