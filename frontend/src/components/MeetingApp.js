@@ -16,7 +16,6 @@ import {
 import CallEndIcon from '@mui/icons-material/CallEnd';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import GroupsIcon from '@mui/icons-material/Groups';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
 import PresentToAllIcon from '@mui/icons-material/PresentToAll';
@@ -95,7 +94,7 @@ const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEna
   );
 };
 
-const MeetingApp = ({ inWindow = false, onOpenWindow = null, initialRoomCode = '', autoJoin = false }) => {
+const MeetingApp = ({ initialRoomCode = '', autoJoin = false }) => {
   const theme = useTheme();
   const currentUser = useMemo(() => {
     try {
@@ -498,11 +497,6 @@ const MeetingApp = ({ inWindow = false, onOpenWindow = null, initialRoomCode = '
           </Box>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
-          {!inWindow && onOpenWindow && (
-            <Button size="small" variant="outlined" startIcon={<OpenInNewIcon />} onClick={() => onOpenWindow({ roomCode, autoJoin: active })}>
-              창으로 띄우기
-            </Button>
-          )}
           <Chip size="small" color={active ? 'success' : 'default'} label={active ? `${remoteList.length + 1}명 연결` : '대기'} />
           {screenSharing && <Chip size="small" color="info" label="화면공유" />}
         </Stack>

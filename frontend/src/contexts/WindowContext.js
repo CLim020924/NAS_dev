@@ -266,15 +266,16 @@ export const WindowProvider = ({ children }) => {
   const openAppWindow = useCallback((app) => {
     if (!app?.id) return;
     const winId = `app_${app.id}`;
-    const existing = openWindows.find((w) => w.id === winId);
-    if (existing) {
-      focusWindow(winId);
-      return;
-    }
 
-    setOpenWindows(prev => [
-      ...prev,
-      {
+    setOpenWindows(prev => {
+      const existing = prev.find((w) => w.id === winId);
+      if (existing) {
+        return prev.map((w) => w.id === winId ? { ...w, isMinimized: false, zIndex: topZIndex + 1 } : w);
+      }
+
+      return [
+        ...prev,
+        {
         id: winId,
         appId: app.id,
         name: app.title || app.name || '앱',
@@ -288,10 +289,11 @@ export const WindowProvider = ({ children }) => {
         isMaximized: false,
         payload: app.payload || {}
       }
-    ]);
+      ];
+    });
     setTopZIndex(prev => prev + 1);
     setFocusedContext(winId);
-  }, [openWindows, focusWindow, topZIndex]);
+  }, [topZIndex]);
 
 
   return (

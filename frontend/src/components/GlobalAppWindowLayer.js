@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, IconButton, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, IconButton, Paper, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CropSquareIcon from '@mui/icons-material/CropSquare';
 import RemoveIcon from '@mui/icons-material/Remove';
@@ -8,6 +8,45 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Rnd } from 'react-rnd';
 import { useWindows } from '../contexts/WindowContext';
 import MeetingApp from './MeetingApp';
+
+class AppWindowErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('App window render failed', error, info);
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.windowId !== this.props.windowId && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <Box sx={{ height: '100%', p: 2, bgcolor: 'background.paper' }}>
+        <Alert
+          severity="error"
+          action={<Button color="inherit" size="small" onClick={() => this.setState({ error: null })}>다시 시도</Button>}
+        >
+          앱 창을 여는 중 오류가 발생했습니다. 창을 다시 열어주세요.
+        </Alert>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5, wordBreak: 'break-all' }}>
+          {this.state.error?.message || String(this.state.error)}
+        </Typography>
+      </Box>
+    );
+  }
+}
 
 const GlobalAppWindowLayer = () => {
   const theme = useTheme();
@@ -25,7 +64,7 @@ const GlobalAppWindowLayer = () => {
 
   const renderAppContent = (win) => {
     if (win.appId === 'meeting') {
-      return <MeetingApp inWindow initialRoomCode={win.payload?.roomCode} autoJoin={!!win.payload?.autoJoin} />;
+      return <MeetingApp initialRoomCode={win.payload?.roomCode} autoJoin={!!win.payload?.autoJoin} />;
     }
     return null;
   };
@@ -76,7 +115,11 @@ const GlobalAppWindowLayer = () => {
                       <IconButton size="small" color="error" onClick={() => handleClose(win)}><CloseIcon fontSize="small" /></IconButton>
                     </Box>
                   </Box>
-                  <Box sx={{ flex: 1, minHeight: 0 }}>{renderAppContent(win)}</Box>
+                  <Box sx={{ flex: 1, minHeight: 0 }}>
+                    <AppWindowErrorBoundary windowId={win.id}>
+                      {renderAppContent(win)}
+                    </AppWindowErrorBoundary>
+                  </Box>
                 </Paper>
               </motion.div>
             </Rnd>
