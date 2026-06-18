@@ -11,6 +11,7 @@ import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import SpaceDashboardIcon from '@mui/icons-material/SpaceDashboard';
 import axios from 'axios';
 import { useWindows } from '../contexts/WindowContext';
+import { alpha } from '@mui/material/styles';
 
 const TopBar = ({
   onOpenFriends,
@@ -75,7 +76,6 @@ const TopBar = ({
     }
   };
 
-  const isDesktop = location.pathname.startsWith('/platform');
   const isNAS = location.pathname.startsWith('/nas');
   const minimizedWindows = taskbarWindows.filter(Boolean).filter(w => w.isMinimized).slice().reverse();
   const minimizedFolders = minimizedWindows.filter((w) => w.winType === 'folder');
@@ -90,9 +90,14 @@ const TopBar = ({
 
   return (
     <>
-      <AppBar position="fixed" elevation={isDesktop ? 0 : 2} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, backgroundColor: (theme) => isDesktop ? 'rgba(0,0,0,0.2)' : theme.palette.background.paper, backdropFilter: isDesktop ? 'blur(10px)' : 'none', color: (theme) => isDesktop ? theme.palette.common.white : theme.palette.text.primary, borderBottom: (theme) => isDesktop ? 'none' : `1px solid ${theme.palette.divider}` }}>
-        <Toolbar size="small" sx={{ minHeight: '48px !important' }}>
-          <Typography variant="h6" onClick={() => navigate('/platform')} sx={{ fontWeight: 800, fontSize: '1.1rem', cursor: 'pointer', transition: 'opacity 0.2s', '&:hover': { opacity: 0.7 } }}> FileManager NAS+ </Typography>
+      <AppBar position="fixed" elevation={0} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.94), backdropFilter: 'blur(14px)', color: 'text.primary', borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
+        <Toolbar size="small" sx={{ minHeight: '48px !important', gap: 1 }}>
+          <Box onClick={() => navigate('/platform')} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
+            <Box sx={{ width: 28, height: 28, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: (theme) => alpha(theme.palette.primary.main, 0.10), color: 'primary.main', border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.18)}` }}>
+              <FolderIcon sx={{ fontSize: 18 }} />
+            </Box>
+            <Typography variant="h6" sx={{ fontWeight: 900, fontSize: '0.98rem', whiteSpace: 'nowrap' }}>NAS</Typography>
+          </Box>
           <Box
             sx={{
               ml: 2,
@@ -101,17 +106,17 @@ const TopBar = ({
               display: 'flex',
               alignItems: 'center',
               gap: 0.8,
-              borderRadius: 2,
-              backgroundColor: (theme) => isDesktop ? 'rgba(255,255,255,0.08)' : theme.palette.background.default,
-              border: (theme) => `1px solid ${isDesktop ? 'rgba(255,255,255,0.14)' : theme.palette.divider}`,
+              borderRadius: 1.5,
+              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.07),
+              border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.14)}`,
             }}
           >
-            <SpaceDashboardIcon sx={{ fontSize: 16, color: (theme) => isDesktop ? theme.palette.common.white : theme.palette.primary.main }} />
+            <SpaceDashboardIcon sx={{ fontSize: 16, color: 'primary.main' }} />
             <Typography
               variant="caption"
               sx={{
                 fontWeight: 800,
-                color: (theme) => isDesktop ? theme.palette.common.white : theme.palette.text.primary,
+                color: 'text.primary',
                 lineHeight: 1,
               }}
             >
@@ -134,8 +139,8 @@ const TopBar = ({
                 }}
                 sx={{
                   ml: 1,
-                  backgroundColor: isDesktop ? 'rgba(255,255,255,0.1)' : 'action.hover',
-                  color: isDesktop ? '#fff' : 'text.primary',
+                  backgroundColor: 'action.hover',
+                  color: 'text.primary',
                   cursor: 'pointer'
                 }}
               />
@@ -196,8 +201,8 @@ const TopBar = ({
                 }}
                 sx={{
                   ml: 1,
-                  backgroundColor: isDesktop ? 'rgba(255,255,255,0.1)' : 'action.hover',
-                  color: isDesktop ? '#fff' : 'text.primary',
+                  backgroundColor: 'action.hover',
+                  color: 'text.primary',
                   cursor: 'pointer'
                 }}
               />
@@ -258,8 +263,8 @@ const TopBar = ({
                 }}
                 sx={{
                   ml: 1,
-                  backgroundColor: isDesktop ? 'rgba(255,255,255,0.1)' : 'action.hover',
-                  color: isDesktop ? '#fff' : 'text.primary',
+                  backgroundColor: 'action.hover',
+                  color: 'text.primary',
                   cursor: 'pointer'
                 }}
               />
@@ -317,9 +322,9 @@ const TopBar = ({
               sx={{
                 mr: 1,
                 maxWidth: { xs: 180, sm: 360 },
-                backgroundColor: isDesktop ? 'rgba(37,99,235,0.9)' : 'primary.main',
+                backgroundColor: 'primary.main',
                 color: '#fff',
-                borderRadius: 2,
+                borderRadius: 1.5,
                 '& .MuiChip-label': {
                   display: 'block',
                   overflow: 'hidden',
@@ -332,7 +337,7 @@ const TopBar = ({
           )}
 
           <Box sx={{ display: 'flex', gap: 0.5 }}>
-            <IconButton onClick={onOpenNotifications} size="small" sx={{ color: isDesktop ? '#fff' : 'text.primary' }}>
+            <IconButton onClick={onOpenNotifications} size="small" sx={{ color: 'text.primary', bgcolor: 'action.hover' }}>
               <Badge
                 color="error"
                 badgeContent={unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
@@ -346,9 +351,9 @@ const TopBar = ({
               onClick={onOpenRooms}
               size="small"
               sx={{
-                color: isDesktop ? '#fff' : 'text.primary',
+                color: 'text.primary',
                 backgroundColor: chatSidebarMode === 'rooms'
-                  ? (isDesktop ? 'rgba(255,255,255,0.16)' : 'action.selected')
+                  ? 'action.selected'
                   : 'transparent',
               }}
             >
@@ -359,17 +364,17 @@ const TopBar = ({
               onClick={onOpenFriends}
               size="small"
               sx={{
-                color: isDesktop ? '#fff' : 'text.primary',
+                color: 'text.primary',
                 backgroundColor: chatSidebarMode === 'friends'
-                  ? (isDesktop ? 'rgba(255,255,255,0.16)' : 'action.selected')
+                  ? 'action.selected'
                   : 'transparent',
               }}
             >
               <ManageAccountsIcon fontSize="small" />
             </IconButton>
 
-            <IconButton onClick={() => navigate('/nas')} size="small" sx={{ color: isDesktop ? '#fff' : 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
-            <IconButton onClick={() => navigate('/settings')} size="small" sx={{ color: isDesktop ? '#fff' : 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
+            <IconButton onClick={() => navigate('/nas')} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
+            <IconButton onClick={() => navigate('/settings')} size="small" sx={{ color: 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
 
             <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} size="small">
               <Avatar sx={{ width: 28, height: 28, fontSize: '0.8rem', bgcolor: 'primary.main', fontWeight: 'bold' }}>
