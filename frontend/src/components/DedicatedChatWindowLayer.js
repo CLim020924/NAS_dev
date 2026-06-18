@@ -24,9 +24,11 @@ import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import ImageIcon from '@mui/icons-material/Image';
 import VideocamIcon from '@mui/icons-material/Videocam';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
+import ChatInviteDialog from './ChatInviteDialog';
 
 const formatMessageTime = (value) => {
   if (!value) return '';
@@ -121,6 +123,7 @@ const DedicatedChatWindowLayer = () => {
 
   const {
     currentUserUid,
+    conversations,
     drafts,
     setDraft,
     messagesByConversation,
@@ -140,6 +143,7 @@ const DedicatedChatWindowLayer = () => {
   const [nasPickerState, setNasPickerState] = useState({ open: false, conversationId: null });
   const [dragOverConversationId, setDragOverConversationId] = useState(null);
   const [savingMessageIds, setSavingMessageIds] = useState({});
+  const [inviteWindow, setInviteWindow] = useState(null);
 
   const windowChats = useMemo(() => {
     const raw = openWindows.filter((w) => w.winType === 'chat' && w.chatMode === 'window');
@@ -330,6 +334,24 @@ const DedicatedChatWindowLayer = () => {
         conversationId,
       },
     });
+  };
+
+  const handleInviteComplete = (win, conversation) => {
+    if (!win?.id || !conversation?.conversationId) return;
+    setOpenWindows((prev) =>
+      prev.map((item) =>
+        item.id === win.id
+          ? {
+              ...item,
+              chatConversationId: conversation.conversationId,
+              chatUsername: conversation.title || item.chatUsername || '그룹 채팅',
+              chatDisplayName: conversation.title || item.chatDisplayName || '그룹 채팅',
+              chatRole: conversation.type === 'group' ? 'GROUP' : item.chatRole,
+              chatUserUid: conversation.type === 'group' ? null : item.chatUserUid,
+            }
+          : item
+      )
+    );
   };
 
   const handleSaveReceived = async (conversationId, messageId) => {
@@ -607,6 +629,9 @@ const DedicatedChatWindowLayer = () => {
                     <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenMeeting(conversationId); }} title="화상회의 시작">
                       <VideocamIcon fontSize="small" />
                     </IconButton>
+                    <IconButton size="small" onClick={(e) => { e.stopPropagation(); setInviteWindow(win); }} title="인원 추가">
+                      <PersonAddIcon fontSize="small" />
+                    </IconButton>
                     <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleMinimize(win.id); }} title="최소화">
                       <RemoveIcon fontSize="small" />
                     </IconButton>
@@ -824,6 +849,24 @@ const DedicatedChatWindowLayer = () => {
         open={nasPickerState.open}
         onClose={() => setNasPickerState({ open: false, conversationId: null })}
         onConfirm={handleNasConfirm}
+      />
+      <ChatInviteDialog
+        open={!!inviteWindow}
+        onClose={() => setInviteWindow(null)}
+        conversation={
+          inviteWindow
+            ? (
+                conversations.find((item) => item.conversationId === inviteWindow.chatConversationId) || {
+                  conversationId: inviteWindow.chatConversationId,
+                  type: inviteWindow.chatRole === 'GROUP' ? 'group' : 'direct',
+                  title: inviteWindow.chatDisplayName || inviteWindow.chatUsername,
+                }
+              )
+            : null
+        }
+        directUserUid={inviteWindow?.chatUserUid || null}
+        defaultTitle={`${inviteWindow?.chatDisplayName || inviteWindow?.chatUsername || '채팅'} 그룹`}
+        onComplete={(conversation) => handleInviteComplete(inviteWindow, conversation)}
       />
     </Box>
   );

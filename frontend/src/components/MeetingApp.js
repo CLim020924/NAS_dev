@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Avatar,
@@ -90,6 +90,7 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
   const veryCompact = useMediaQuery('(max-width:620px), (max-height:520px)');
   const [meetingInviteText, setMeetingInviteText] = useState('');
   const [meetingInviting, setMeetingInviting] = useState(false);
+  const [linkedConversation, setLinkedConversation] = useState(null);
   const session = useMeetingSession();
   const {
     roomCode,
@@ -142,6 +143,24 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
     }
   };
 
+  const refreshLinkedConversation = useCallback(async () => {
+    if (!conversationId) {
+      setLinkedConversation(null);
+      return;
+    }
+    try {
+      const res = await axios.get('/api/chat/conversations', { withCredentials: true });
+      const conversations = Array.isArray(res.data?.conversations) ? res.data.conversations : [];
+      setLinkedConversation(conversations.find((item) => item.conversationId === conversationId) || null);
+    } catch (err) {
+      setLinkedConversation(null);
+    }
+  }, [conversationId]);
+
+  useEffect(() => {
+    refreshLinkedConversation();
+  }, [refreshLinkedConversation]);
+
   const inviteMeetingParticipants = async () => {
     const invitees = meetingInviteText
       .split(/[,\n]/)
@@ -151,12 +170,31 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
     if (!conversationId || invitees.length === 0) return;
     setMeetingInviting(true);
     try {
-      await axios.post(
-        `/api/chat/group/${conversationId}/invite`,
-        { invitees },
-        { withCredentials: true }
-      );
+      if (linkedConversation?.type === 'group') {
+        await axios.post(
+          `/api/chat/group/${linkedConversation.conversationId}/invite`,
+          { invitees },
+          { withCredentials: true }
+        );
+      } else {
+        const directUserUid = linkedConversation?.otherUser?.userUid;
+        const res = await axios.post(
+          '/api/chat/group',
+          {
+            title: `${linkedConversation?.otherUser?.displayName || linkedConversation?.otherUser?.username || '회의'} 그룹`,
+            inviteeUids: [directUserUid].filter(Boolean),
+            invitees,
+          },
+          { withCredentials: true }
+        );
+        if (res.data?.conversation) {
+          setLinkedConversation(res.data.conversation);
+        }
+      }
       setMeetingInviteText('');
+      if (linkedConversation?.type === 'group') {
+        refreshLinkedConversation();
+      }
       alert('회의가 연결된 채팅방으로 초대를 보냈습니다.');
     } catch (err) {
       alert(err.response?.data?.error || '회의 초대에 실패했습니다.');
@@ -288,35 +326,46 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
         </Box>
 
         <Box sx={{ borderLeft: { lg: `1px solid ${theme.palette.divider}` }, borderTop: { xs: `1px solid ${theme.palette.divider}`, lg: 'none' }, p: compact ? 1 : 1.5, overflow: 'auto', bgcolor: 'background.paper', maxHeight: { xs: veryCompact ? 132 : 190, lg: 'none' } }}>
-          <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900, lineHeight: 1 }}>Invite</Typography>
+          <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900, lineHeight: 1 }}>링크 초대</Typography>
           <Box sx={{ display: 'flex', gap: 0.75, mt: 0.5, mb: compact ? 1 : 1.5 }}>
             <TextField size="small" value={inviteLink} fullWidth InputProps={{ readOnly: true }} />
             <IconButton onClick={copyInvite} aria-label="초대 링크 복사"><ContentCopyIcon fontSize="small" /></IconButton>
           </Box>
           {conversationId && (
-            <Box sx={{ display: 'flex', gap: 0.75, mb: compact ? 1 : 1.5 }}>
-              <TextField
-                size="small"
-                placeholder="아이디/닉네임 초대"
-                value={meetingInviteText}
-                onChange={(event) => setMeetingInviteText(event.target.value)}
-                onKeyDown={(event) => event.key === 'Enter' && inviteMeetingParticipants()}
-                fullWidth
-              />
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={inviteMeetingParticipants}
-                disabled={meetingInviting || !meetingInviteText.trim()}
-              >
-                초대
-              </Button>
-            </Box>
+            <>
+              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900, lineHeight: 1 }}>
+                채팅방 초대
+              </Typography>
+              {linkedConversation && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+                  {linkedConversation.title || '연결된 채팅방'} · 참가 {linkedConversation.participantUids?.length || 0}명
+                  {linkedConversation.pendingInviteUids?.length ? ` · 대기 ${linkedConversation.pendingInviteUids.length}명` : ''}
+                </Typography>
+              )}
+              <Box sx={{ display: 'flex', gap: 0.75, mb: compact ? 1 : 1.5 }}>
+                <TextField
+                  size="small"
+                  placeholder="아이디/닉네임 초대"
+                  value={meetingInviteText}
+                  onChange={(event) => setMeetingInviteText(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && inviteMeetingParticipants()}
+                  fullWidth
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={inviteMeetingParticipants}
+                  disabled={meetingInviting || !meetingInviteText.trim()}
+                >
+                  초대
+                </Button>
+              </Box>
+            </>
           )}
 
           <Divider sx={{ my: compact ? 1 : 1.5 }} />
 
-          <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900 }}>Participants</Typography>
+          <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900 }}>회의 참가자</Typography>
           <Stack spacing={0.75} sx={{ mt: 0.75 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
               <GroupsIcon fontSize="small" color="primary" />
@@ -334,6 +383,31 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
               </Box>
             ))}
           </Stack>
+          {linkedConversation && (
+            <>
+              <Divider sx={{ my: compact ? 1 : 1.5 }} />
+              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900 }}>채팅방 인원</Typography>
+              <Stack spacing={0.75} sx={{ mt: 0.75 }}>
+                {(linkedConversation.participants || []).map((member) => (
+                  <Box key={member.userUid} sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                    <Avatar sx={{ width: 24, height: 24, fontSize: 12 }}>{(member.displayName || member.username || '?').slice(0, 1)}</Avatar>
+                    <Typography sx={{ fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {member.displayName || member.username || '참가자'}
+                    </Typography>
+                  </Box>
+                ))}
+                {(linkedConversation.pendingInvites || []).map((member) => (
+                  <Box key={member.userUid} sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, opacity: 0.72 }}>
+                    <Avatar sx={{ width: 24, height: 24, fontSize: 12 }}>{(member.displayName || member.username || '?').slice(0, 1)}</Avatar>
+                    <Typography sx={{ fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {member.displayName || member.username || '초대 대기'}
+                    </Typography>
+                    <Chip size="small" label="대기" sx={{ height: 20 }} />
+                  </Box>
+                ))}
+              </Stack>
+            </>
+          )}
         </Box>
       </Box>
     </Box>

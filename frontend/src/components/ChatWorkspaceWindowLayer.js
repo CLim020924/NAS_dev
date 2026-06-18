@@ -33,9 +33,11 @@ import GroupIcon from '@mui/icons-material/Group';
 import PersonIcon from '@mui/icons-material/Person';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import VideocamIcon from '@mui/icons-material/Videocam';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
+import ChatInviteDialog from './ChatInviteDialog';
 
 const WORKSPACE_WINDOW_ID = 'chat_workspace_main';
 
@@ -210,6 +212,7 @@ const ChatWorkspaceWindowLayer = () => {
   const [nasPickerState, setNasPickerState] = useState({ open: false, conversationId: null });
   const [dragOverConversationId, setDragOverConversationId] = useState(null);
   const [savingMessageIds, setSavingMessageIds] = useState({});
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!workspaceWin?.id) return;
@@ -340,6 +343,11 @@ const ChatWorkspaceWindowLayer = () => {
         conversationId: selectedConversationId,
       },
     });
+  };
+
+  const handleInviteComplete = (conversation) => {
+    if (!conversation?.conversationId) return;
+    handleSelectConversation(conversation.conversationId);
   };
 
   const handleSend = async () => {
@@ -858,9 +866,14 @@ const ChatWorkspaceWindowLayer = () => {
                           </Typography>
                         </Box>
                       </Box>
-                      <IconButton size="small" onClick={handleOpenMeeting} title="화상회의 시작">
-                        <VideocamIcon fontSize="small" />
-                      </IconButton>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+                        <IconButton size="small" onClick={handleOpenMeeting} title="화상회의 시작">
+                          <VideocamIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton size="small" onClick={() => setInviteDialogOpen(true)} title="인원 추가">
+                          <PersonAddIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
                     </Box>
 
                     <Box
@@ -1073,6 +1086,14 @@ const ChatWorkspaceWindowLayer = () => {
         open={nasPickerState.open}
         onClose={() => setNasPickerState({ open: false, conversationId: null })}
         onConfirm={handleNasConfirm}
+      />
+      <ChatInviteDialog
+        open={inviteDialogOpen}
+        onClose={() => setInviteDialogOpen(false)}
+        conversation={selectedConversation}
+        directUserUid={selectedConversation?.otherUser?.userUid || null}
+        defaultTitle={`${currentMeta?.title || '채팅'} 그룹`}
+        onComplete={handleInviteComplete}
       />
     </Box>
   );

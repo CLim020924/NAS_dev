@@ -326,11 +326,7 @@ const ChatRoomSidebar = ({
           onOpenWindow={() => openWorkspaceWindow(activeChat?.conversationId || null)}
           onConversationReady={(conversation) => {
             if (!conversation?.conversationId) return;
-            onActiveChatChange(
-              activeChat
-                ? { ...activeChat, conversationId: conversation.conversationId }
-                : activeChat
-            );
+            onActiveChatChange(toDockedChat(conversation));
           }}
         />
 

@@ -21,9 +21,11 @@ import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import ImageIcon from '@mui/icons-material/Image';
 import VideocamIcon from '@mui/icons-material/Videocam';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import { useChat } from '../contexts/ChatContext';
 import { useWindows } from '../contexts/WindowContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
+import ChatInviteDialog from './ChatInviteDialog';
 
 const formatMessageTime = (value) => {
   if (!value) return '';
@@ -85,6 +87,7 @@ const DockedChatPanel = ({
   const [attachMenuAnchorEl, setAttachMenuAnchorEl] = useState(null);
   const [nasPickerOpen, setNasPickerOpen] = useState(false);
   const [savingMessageIds, setSavingMessageIds] = useState({});
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
 
   useEffect(() => {
     if (deviceFolderInputRef.current) {
@@ -182,6 +185,11 @@ const DockedChatPanel = ({
         conversationId: finalConversationId
       }
     });
+  };
+
+  const handleInviteComplete = (conversation) => {
+    if (!conversation?.conversationId) return;
+    onConversationReady?.(conversation);
   };
 
   const handleSend = async () => {
@@ -488,6 +496,20 @@ const DockedChatPanel = ({
           >
             <VideocamIcon fontSize="small" />
           </IconButton>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              setInviteDialogOpen(true);
+            }}
+            title="인원 추가"
+            sx={{
+              border: `1px solid ${theme.palette.divider}`,
+              bgcolor: 'background.paper',
+            }}
+          >
+            <PersonAddIcon fontSize="small" />
+          </IconButton>
           <Avatar
             sx={{
               width: 28,
@@ -697,6 +719,20 @@ const DockedChatPanel = ({
         open={nasPickerOpen}
         onClose={() => setNasPickerOpen(false)}
         onConfirm={handleNasConfirm}
+      />
+      <ChatInviteDialog
+        open={inviteDialogOpen}
+        onClose={() => setInviteDialogOpen(false)}
+        conversation={{
+          conversationId,
+          type: activeChat.conversationType,
+          title: activeChat.title,
+          participantUids: activeChat.participantUids,
+          pendingInviteUids: activeChat.pendingInviteUids,
+        }}
+        directUserUid={activeChat.userUid}
+        defaultTitle={`${activeChat.title || activeChat.displayName || activeChat.username || '채팅'} 그룹`}
+        onComplete={handleInviteComplete}
       />
       </Box>
     </Paper>
