@@ -23,6 +23,13 @@ function ServicePlatform() {
   const canOpenBackup = user.role === 'MASTER' || user.Masters || user.globalAccess;
   const openApp = (app) => {
     const mode = appOpenMode();
+
+    if (app.id === 'meeting') {
+      openAppWindow(app);
+      setInlineApp(null);
+      return;
+    }
+
     if (mode !== 'window' && app.component) {
       setInlineApp(app);
       return;
