@@ -170,10 +170,6 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
 
   const handleOpenChatInvite = () => {
     closeInviteMenu();
-    if (!conversationId) {
-      alert('채팅방에서 시작한 회의에서만 친구 초대를 사용할 수 있습니다.');
-      return;
-    }
     setChatInviteOpen(true);
   };
 
@@ -186,7 +182,7 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
   };
 
   return (
-    <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: theme.palette.mode === 'dark' ? '#0f172a' : '#f8fafc', overflow: 'hidden' }}>
+    <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: theme.palette.mode === 'dark' ? '#0f172a' : '#f8fafc', overflowY: 'auto', overflowX: 'hidden' }}>
       <Box sx={{ px: compact ? 1.25 : 2, py: compact ? 1 : 1.5, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexShrink: 0, bgcolor: 'background.paper' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
           <Box sx={{ width: compact ? 30 : 38, height: compact ? 30 : 38, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: alpha(theme.palette.info.main, 0.12), color: 'info.main', flexShrink: 0 }}>
@@ -221,8 +217,8 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
         </Stack>
       </Box>
 
-      <Box sx={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: { xs: '1fr', lg: compact ? '1fr 238px' : '1fr 280px' }, overflow: 'hidden' }}>
-        <Box sx={{ p: compact ? 1 : 1.5, display: 'flex', flexDirection: 'column', gap: compact ? 1 : 1.25, overflow: 'hidden', minWidth: 0 }}>
+      <Box sx={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: { xs: '1fr', lg: compact ? '1fr 238px' : '1fr 280px' }, overflow: 'visible' }}>
+        <Box sx={{ p: compact ? 1 : 1.5, display: 'flex', flexDirection: 'column', gap: compact ? 1 : 1.25, overflow: 'visible', minWidth: 0, minHeight: { xs: 'auto', lg: 0 } }}>
           {error && <Alert severity="warning" onClose={() => setError('')}>{error}</Alert>}
 
           <Box
@@ -235,6 +231,7 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
               gridAutoRows: remoteList.length > 1 ? 'minmax(132px, 1fr)' : 'minmax(180px, 1fr)',
               alignContent: 'stretch',
               overflow: 'auto',
+              maxHeight: { xs: 'none', lg: '100%' },
               pr: 0.25
             }}
           >
@@ -312,7 +309,7 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
           </Paper>
         </Box>
 
-        <Box sx={{ borderLeft: { lg: `1px solid ${theme.palette.divider}` }, borderTop: { xs: `1px solid ${theme.palette.divider}`, lg: 'none' }, p: compact ? 1 : 1.5, overflow: 'auto', bgcolor: 'background.paper', maxHeight: { xs: veryCompact ? 132 : 190, lg: 'none' } }}>
+        <Box sx={{ borderLeft: { lg: `1px solid ${theme.palette.divider}` }, borderTop: { xs: `1px solid ${theme.palette.divider}`, lg: 'none' }, p: compact ? 1 : 1.5, overflow: 'auto', bgcolor: 'background.paper', maxHeight: { xs: 'none', lg: 'none' } }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: compact ? 1 : 1.5 }}>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900, lineHeight: 1 }}>
@@ -396,26 +393,23 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
         </MenuItem>
         <MenuItem
           onClick={handleOpenChatInvite}
-          disabled={!conversationId}
         >
           <PersonAddIcon fontSize="small" sx={{ mr: 1 }} />
           친구/아이디 초대
         </MenuItem>
       </Menu>
-      {conversationId && (
-        <ChatInviteDialog
-          open={chatInviteOpen}
-          onClose={() => setChatInviteOpen(false)}
-          conversation={linkedConversation || {
-            conversationId,
-            type: 'direct',
-            title: '회의 채팅방',
-          }}
-          directUserUid={linkedConversation?.otherUser?.userUid || null}
-          defaultTitle={`${linkedConversation?.title || linkedConversation?.otherUser?.displayName || linkedConversation?.otherUser?.username || '회의'} 그룹`}
-          onComplete={handleChatInviteComplete}
-        />
-      )}
+      <ChatInviteDialog
+        open={chatInviteOpen}
+        onClose={() => setChatInviteOpen(false)}
+        conversation={linkedConversation || (conversationId ? {
+          conversationId,
+          type: 'direct',
+          title: '회의 채팅방',
+        } : null)}
+        directUserUid={linkedConversation?.otherUser?.userUid || null}
+        defaultTitle={`${linkedConversation?.title || linkedConversation?.otherUser?.displayName || linkedConversation?.otherUser?.username || '회의'} 그룹`}
+        onComplete={handleChatInviteComplete}
+      />
     </Box>
   );
 };

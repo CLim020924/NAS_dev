@@ -37,6 +37,7 @@ const ChatInviteDialog = ({
   } = useChat();
 
   const isGroup = conversation?.type === 'group' || conversation?.conversationType === 'group';
+  const hasConversation = !!conversation?.conversationId;
   const [friendOptions, setFriendOptions] = useState([]);
   const [selectedInviteUids, setSelectedInviteUids] = useState([]);
   const [inviteText, setInviteText] = useState('');
@@ -96,7 +97,7 @@ const ChatInviteDialog = ({
 
     setSubmitting(true);
     try {
-      const updatedConversation = isGroup
+      const updatedConversation = isGroup && hasConversation
         ? await inviteToConversation(conversation.conversationId, {
             inviteeUids: selectedInviteUids,
             invitees: typedInvitees,
@@ -119,9 +120,9 @@ const ChatInviteDialog = ({
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>{isGroup ? '인원 추가' : '그룹 채팅으로 초대'}</DialogTitle>
+      <DialogTitle>{isGroup && hasConversation ? '인원 추가' : '그룹 채팅으로 초대'}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
-        {!isGroup && (
+        {(!isGroup || !hasConversation) && (
           <TextField
             label="채팅방 이름"
             value={roomTitle}
@@ -171,7 +172,7 @@ const ChatInviteDialog = ({
       <DialogActions>
         <Button onClick={onClose}>취소</Button>
         <Button variant="contained" onClick={handleSubmit} disabled={submitting}>
-          {isGroup ? '초대' : '그룹 만들기'}
+          {isGroup && hasConversation ? '초대' : '그룹 만들기'}
         </Button>
       </DialogActions>
     </Dialog>
