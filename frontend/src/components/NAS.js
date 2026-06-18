@@ -1905,6 +1905,23 @@ const NAS = ({ showWorkspace = true }) => {
   const handleContextMenu = (e, type, ctxData) => { e.preventDefault(); e.stopPropagation(); setFocusedContext(ctxData.windowId || 'desktop'); setContextMenu({ mouseX: e.clientX, mouseY: e.clientY, type, ...ctxData }); const safePath = ctxData.item ? ensureSlash(ctxData.item.fullPath) : null; if (safePath && !selectedItems.includes(safePath)) setSelectedItems([safePath]); };
   const handleItemClick = (e, safePath, item) => { e.stopPropagation(); if (isLongPressTriggered.current) return; if (e.ctrlKey || e.metaKey) setSelectedItems(prev => prev.includes(safePath) ? prev.filter(p => p !== safePath) : [...prev, safePath]); else setSelectedItems([safePath]); if (isMobile && !inlineEdit) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false); };
 
+  const navigateFileManagerPath = (path) => {
+    const safePath = ensureSlash(path || '/');
+    setFileManagerPath(safePath);
+    setFocusedContext('desktop');
+    setSelectedItems([]);
+    setInlineEdit(null);
+  };
+
+  const handleInlineBack = () => {
+    if (currentFileManagerPath === '/') return;
+    const segments = currentFileManagerPath.split('/').filter(Boolean);
+    segments.pop();
+    navigateFileManagerPath(segments.length ? `/${segments.join('/')}` : '/');
+  };
+
+  const fileManagerSegments = currentFileManagerPath.split('/').filter(Boolean);
+
   useShortcuts({ selectedItems, onRename: () => { const items = getSelectedItemsData(); if (items.length === 1) handleRenameStart(items[0], items[0].fullPath.substring(0, items[0].fullPath.lastIndexOf('/')) || '/'); }, onDelete: () => { const items = getSelectedItemsData(); if (items.length > 0) handleDelete(items, getActiveTargetPath()); }, onOpen: () => { const items = getSelectedItemsData(); if (items.length === 1) (items[0].type === 'folder' || items[0].type === 'linked-device') ? openFolderWindow(items[0]) : openFileWindow(items[0], false); }, onSelectAll: () => setSelectedItems((focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || [])).map(f => ensureSlash(f.fullPath))), onDeselectAll: () => { setSelectedItems([]); setInlineEdit(null); setContextMenu(null); }, onNewFolder: () => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null) });
 
   const activeWindow = openWindows.find(w => w.id === focusedContext);
@@ -1929,9 +1946,32 @@ const NAS = ({ showWorkspace = true }) => {
           </Box>
           <Box sx={{ minWidth: 0 }}>
             <Typography sx={{ fontWeight: 900, lineHeight: 1.15, fontSize: { xs: '0.98rem', sm: '1.08rem' } }}>{rootLabel}</Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {activeWindow?.winType === 'folder' ? activeWindow.currentPath : activeTargetPath}
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, mt: 0.2 }}>
+              {folderInlineMode && (
+                <IconButton size="small" onClick={handleInlineBack} disabled={currentFileManagerPath === '/'} sx={{ width: 24, height: 24 }}>
+                  <ArrowBackIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              )}
+              <Button size="small" variant="text" onClick={() => navigateFileManagerPath('/')} sx={{ minWidth: 0, px: 0.6, py: 0, fontSize: '0.74rem', color: 'text.secondary' }}>
+                {rootLabel}
+              </Button>
+              {folderInlineMode && fileManagerSegments.map((seg, idx) => {
+                const target = `/${fileManagerSegments.slice(0, idx + 1).join('/')}`;
+                return (
+                  <React.Fragment key={target}>
+                    <Typography variant="caption" color="text.secondary">/</Typography>
+                    <Button size="small" variant="text" onClick={() => navigateFileManagerPath(target)} sx={{ minWidth: 0, maxWidth: { xs: 88, sm: 160 }, px: 0.6, py: 0, fontSize: '0.74rem', color: idx === fileManagerSegments.length - 1 ? 'text.primary' : 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {seg}
+                    </Button>
+                  </React.Fragment>
+                );
+              })}
+              {!folderInlineMode && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {activeWindow?.winType === 'folder' ? activeWindow.currentPath : activeTargetPath}
+                </Typography>
+              )}
+            </Box>
           </Box>
         </Box>
 
@@ -2065,7 +2105,7 @@ const NAS = ({ showWorkspace = true }) => {
 
 
       <AnimatePresence>
-        {openWindows.filter((win) => win.winType !== 'chat').map((win) => {
+        {openWindows.filter((win) => win.winType === 'folder' || win.winType === 'file').map((win) => {
           
           const winStyles = win.isImmersive ? { width: '100vw', height: '100vh', x: 0, y: 0 } : (isMobile ? { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' } : { width: win.isMaximized ? '100%' : win.width, height: win.isMaximized ? '100%' : win.height, x: win.isMaximized ? 0 : win.x, y: win.isMaximized ? 0 : win.y });
           const isActive = focusedContext === win.id;
