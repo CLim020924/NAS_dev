@@ -99,9 +99,9 @@ const TreeNode = ({
     }
   }, [expanded, itemPath, hasFetched, isFolder]);
 
-  const hoverBg = theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)';
-  const selectedBg = 'rgba(25, 118, 210, 0.20)';
-  const currentBg = 'rgba(25, 118, 210, 0.10)';
+  const hoverBg = theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.05)';
+  const selectedBg = theme.palette.mode === 'dark' ? 'rgba(125,211,252,0.18)' : 'rgba(37,99,235,0.12)';
+  const currentBg = theme.palette.mode === 'dark' ? 'rgba(94,234,212,0.12)' : 'rgba(15,118,110,0.10)';
 
   const onClick = (e) => {
     e.stopPropagation();
@@ -143,14 +143,14 @@ const TreeNode = ({
         onContextMenu={onContextMenu}
         sx={{
           pl: level * 1.5 + 1,
-          py: 0.2,
+          py: 0.55,
           bgcolor: isSelected ? selectedBg : (isCurrentDir ? currentBg : 'transparent'),
-          borderRadius: '0 16px 16px 0',
+          borderRadius: 1,
           mr: 1,
           cursor: isEditing ? 'default' : 'pointer',
           color: theme.palette.text.primary,
           '&:hover': {
-            bgcolor: isSelected ? 'rgba(25, 118, 210, 0.30)' : (isEditing ? 'transparent' : hoverBg)
+            bgcolor: isSelected ? selectedBg : (isEditing ? 'transparent' : hoverBg)
           }
         }}
       >
@@ -158,7 +158,7 @@ const TreeNode = ({
           {isFolder ? (expanded ? <KeyboardArrowDown fontSize="small" /> : <KeyboardArrowRight fontSize="small" />) : null}
         </Box>
 
-        <ListItemIcon sx={{ minWidth: 26, color: isFolder ? '#fbbf24' : theme.palette.text.secondary }}>
+        <ListItemIcon sx={{ minWidth: 26, color: isFolder ? 'var(--nas-folder)' : 'var(--nas-file)' }}>
           {isFolder ? <FolderIcon sx={{ fontSize: 18 }} /> : <InsertDriveFileIcon sx={{ fontSize: 18 }} />}
         </ListItemIcon>
 
@@ -192,7 +192,7 @@ const TreeNode = ({
             {isAddingNew && inlineEdit && (
               <ListItem sx={{ pl: (level + 1) * 1.5 + 1, py: 0.2, color: theme.palette.text.primary }}>
                 <Box sx={{ width: 20 }} />
-                <ListItemIcon sx={{ minWidth: 26, color: inlineEdit.mode === 'new' ? '#fbbf24' : theme.palette.text.secondary }}>
+                <ListItemIcon sx={{ minWidth: 26, color: inlineEdit.mode === 'new' ? 'var(--nas-folder)' : 'var(--nas-file)' }}>
                   {inlineEdit.mode === 'new'
                     ? <FolderIcon sx={{ fontSize: 18 }} />
                     : <InsertDriveFileIcon sx={{ fontSize: 18 }} />}
@@ -250,9 +250,10 @@ const SidebarTree = ({
         width: '100%',
         height: '100%',
         overflow: 'auto',
-        bgcolor: theme.palette.mode === 'dark' ? '#0f172a' : '#fafafa',
+        bgcolor: theme.palette.background.default,
         color: theme.palette.text.primary,
-        py: 1
+        py: 1,
+        borderRight: `1px solid ${theme.palette.divider}`
       }}
     >
       <TreeNode

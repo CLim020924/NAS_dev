@@ -28,7 +28,16 @@ const NASContextMenu = ({
       onClose={handleContextMenuClose}
       anchorReference="anchorPosition"
       anchorPosition={contextMenu !== null ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
-      PaperProps={{ elevation: 8, sx: { width: 220, borderRadius: 2, p: 0.5 } }}
+      PaperProps={{
+        elevation: 0,
+        sx: {
+          width: { xs: 248, sm: 232 },
+          borderRadius: 2,
+          p: 0.75,
+          border: '1px solid',
+          borderColor: 'divider'
+        }
+      }}
       disableRestoreFocus 
     >
       {contextMenu.type === 'background' && [

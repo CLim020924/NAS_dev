@@ -1,11 +1,20 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Box, Button, TextField, Typography, Paper, 
-  Container, InputAdornment, IconButton 
+import {
+  Alert,
+  Box,
+  Button,
+  Container,
+  IconButton,
+  InputAdornment,
+  Paper,
+  Stack,
+  TextField,
+  Typography
 } from '@mui/material';
 import { AccountCircle, Lock, Visibility, VisibilityOff } from '@mui/icons-material';
+import { alpha, useTheme } from '@mui/material/styles';
 import { motion } from 'framer-motion';
 
 const Login = () => {
@@ -14,9 +23,10 @@ const Login = () => {
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
+  const theme = useTheme();
 
   const handleLogin = () => {
-    // 상대 경로 /api 를 사용하여 undefined 이슈를 원천 차단합니다.
+    setError('');
     axios.post('/api/login', { id, password }, { withCredentials: true })
       .then(response => {
         localStorage.setItem('user', JSON.stringify(response.data.user));
@@ -33,113 +43,112 @@ const Login = () => {
         minHeight: '100vh',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center',
-        // 세련된 그라데이션 배경 또는 OS 느낌의 배경 이미지
-        background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #93c5fd 100%)',
-        backgroundSize: 'cover',
+        bgcolor: 'background.default',
+        backgroundImage: theme.palette.mode === 'dark'
+          ? 'linear-gradient(180deg, rgba(125,211,252,0.08), transparent 42%)'
+          : 'linear-gradient(180deg, rgba(37,99,235,0.07), transparent 44%)',
+        px: 2,
+        py: { xs: 3, sm: 6 }
       }}
     >
-      <Container maxWidth="xs">
+      <Container maxWidth="xs" disableGutters>
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8 }}
+          transition={{ duration: 0.35 }}
         >
           <Paper
-            elevation={10}
+            elevation={0}
             sx={{
-              p: 4,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              borderRadius: 4,
-              // Glassmorphism 효과
-              background: 'rgba(255, 255, 255, 0.85)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255, 255, 255, 0.3)',
+              p: { xs: 3, sm: 4 },
+              borderRadius: 2,
+              border: `1px solid ${theme.palette.divider}`,
+              boxShadow: theme.palette.mode === 'dark'
+                ? '0 24px 70px rgba(0,0,0,0.34)'
+                : '0 24px 70px rgba(15,23,42,0.10)'
             }}
           >
-            <Box
-              component="img"
-              src="/logo192.png"
-              sx={{ width: 80, mb: 2, filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}
-            />
-            
-            <Typography variant="h4" sx={{ mb: 3, fontWeight: 'bold', color: '#1e3a8a' }}>
-              NAS Login
-            </Typography>
+            <Stack spacing={3}>
+              <Stack spacing={1.5} alignItems="center">
+                <Box
+                  component="img"
+                  src="/logo192.png"
+                  alt="NAS"
+                  sx={{
+                    width: 64,
+                    height: 64,
+                    objectFit: 'contain',
+                    borderRadius: 2,
+                    bgcolor: alpha(theme.palette.primary.main, 0.08),
+                    p: 1
+                  }}
+                />
+                <Box sx={{ textAlign: 'center' }}>
+                  <Typography variant="h5" sx={{ color: 'text.primary' }}>
+                    NAS
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    계정으로 저장소에 접속합니다
+                  </Typography>
+                </Box>
+              </Stack>
 
-            {error && (
-              <Typography color="error" variant="body2" sx={{ mb: 2 }}>
-                {error}
-              </Typography>
-            )}
+              {error && <Alert severity="error">{error}</Alert>}
 
-            <TextField
-              fullWidth
-              label="User ID"
-              margin="normal"
-              value={id}
-              onChange={(e) => setId(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <AccountCircle color="primary" />
-                  </InputAdornment>
-                ),
-              }}
-            />
+              <Stack spacing={2}>
+                <TextField
+                  fullWidth
+                  label="User ID"
+                  value={id}
+                  onChange={(e) => setId(e.target.value)}
+                  autoComplete="username"
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <AccountCircle color="primary" />
+                      </InputAdornment>
+                    )
+                  }}
+                />
 
-            <TextField
-              fullWidth
-              label="Password"
-              type={showPassword ? 'text' : 'password'}
-              margin="normal"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Lock color="primary" />
-                  </InputAdornment>
-                ),
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton onClick={() => setShowPassword(!showPassword)}>
-                      {showPassword ? <VisibilityOff /> : <Visibility />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-            />
+                <TextField
+                  fullWidth
+                  label="Password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  autoComplete="current-password"
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Lock color="primary" />
+                      </InputAdornment>
+                    ),
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 보기'}
+                          onClick={() => setShowPassword(!showPassword)}
+                          edge="end"
+                        >
+                          {showPassword ? <VisibilityOff /> : <Visibility />}
+                        </IconButton>
+                      </InputAdornment>
+                    )
+                  }}
+                />
+              </Stack>
 
-            <Button
-              fullWidth
-              variant="contained"
-              size="large"
-              onClick={handleLogin}
-              sx={{
-                mt: 4,
-                mb: 2,
-                borderRadius: 2,
-                py: 1.5,
-                fontSize: '1.1rem',
-                textTransform: 'none',
-                boxShadow: '0 4px 14px 0 rgba(0,118,255,0.39)',
-              }}
-            >
-              Sign In
-            </Button>
-
-            <Button
-              fullWidth
-              variant="text"
-              onClick={() => navigate('/signup')}
-              sx={{ textTransform: 'none' }}
-            >
-              Create an account
-            </Button>
+              <Stack spacing={1.25}>
+                <Button fullWidth variant="contained" size="large" onClick={handleLogin}>
+                  Sign In
+                </Button>
+                <Button fullWidth variant="text" onClick={() => navigate('/signup')}>
+                  Create an account
+                </Button>
+              </Stack>
+            </Stack>
           </Paper>
         </motion.div>
       </Container>

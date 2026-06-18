@@ -42,6 +42,23 @@ const NAS = () => {
   
   const currentUser = JSON.parse(localStorage.getItem('user')) || {};
   const isAdmin = currentUser.Masters || currentUser.Managers;
+  const folderColor = 'var(--nas-folder)';
+  const deviceColor = 'var(--nas-device)';
+  const fileColor = 'var(--nas-file)';
+  const desktopBackground = theme.palette.mode === 'dark'
+    ? 'linear-gradient(180deg, #101418 0%, #141a20 100%)'
+    : 'linear-gradient(180deg, #eef2f6 0%, #f8fafc 100%)';
+  const desktopIconBaseSx = {
+    color: 'text.primary',
+    p: 1,
+    borderRadius: 1.5,
+    border: '1px solid transparent',
+    transition: 'background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease',
+    '&:hover': {
+      backgroundColor: alpha(theme.palette.primary.main, 0.08),
+      borderColor: alpha(theme.palette.primary.main, 0.16)
+    }
+  };
 
   const [desktopItems, setDesktopItems] = useState([]);
 
@@ -225,8 +242,8 @@ const NAS = () => {
 
       selectionBox = document.createElement('div');
       selectionBox.style.position = 'fixed';
-      selectionBox.style.border = '1px solid rgba(59, 130, 246, 0.8)';
-      selectionBox.style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
+      selectionBox.style.border = '1px solid rgba(37, 99, 235, 0.55)';
+      selectionBox.style.backgroundColor = 'rgba(37, 99, 235, 0.10)';
       selectionBox.style.zIndex = '9999';
       selectionBox.style.pointerEvents = 'none';
       document.body.appendChild(selectionBox);
@@ -1862,9 +1879,9 @@ const NAS = () => {
 
   return (
     <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%', userSelect: 'none', '& .react-resizable-handle:hover': { backgroundColor: theme.palette.primary.main, opacity: 0.5 }}}>
-      <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, '/', 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: '/', windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: '/', windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: isMobile ? 'flex' : 'block', flexWrap: isMobile ? 'wrap' : 'nowrap', alignContent: 'flex-start', gap: isMobile ? 2 : 0, p: isMobile ? 2 : 0, background: theme.palette.mode === 'dark' ? 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)' : 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #93c5fd 100%)' }}>
+      <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, '/', 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: '/', windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: '/', windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: isMobile ? 'grid' : 'block', gridTemplateColumns: isMobile ? 'repeat(auto-fill, minmax(82px, 1fr))' : undefined, alignContent: 'flex-start', gap: isMobile ? 1.5 : 0, p: isMobile ? 1.5 : 0, background: desktopBackground }}>
         <motion.div onClick={(e) => { e.stopPropagation(); setSelectedItems(['system_root']); if (isMobile) openFolderWindow({ id: 'system_root', name: isAdmin ? '서버 전체 저장소' : '내 클라우드', path: '/' }); }} onDoubleClick={(e) => { e.stopPropagation(); if(!isMobile) openFolderWindow({ id: 'system_root', name: isAdmin ? '서버 전체 저장소' : '내 클라우드', path: '/' }); }} style={isMobile ? { textAlign: 'center', width: '80px', cursor: 'pointer', zIndex: 10 } : { position: 'absolute', left: 20, top: 20, textAlign: 'center', cursor: 'pointer', width: '100px', zIndex: 10 }}>
-          <Box sx={{ p: 1, borderRadius: '6px', border: selectedItems.includes('system_root') ? '1px solid rgba(255,255,255,0.4)' : '1px solid transparent', backgroundColor: selectedItems.includes('system_root') ? 'rgba(255, 255, 255, 0.15)' : 'transparent', color: 'white', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}><StorageIcon sx={{ fontSize: isMobile ? 40 : 60, color: isAdmin ? '#ef4444' : '#fde047' }} /><Typography variant="body2" sx={{ mt: 1, fontWeight: 'bold', fontSize: isMobile ? '0.75rem' : '0.875rem' }}>{isAdmin ? '전체 저장소' : '내 클라우드'}</Typography>
+          <Box sx={{ ...desktopIconBaseSx, borderColor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.28) : 'transparent', backgroundColor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.12) : 'transparent', boxShadow: selectedItems.includes('system_root') ? `0 0 0 1px ${alpha(theme.palette.primary.main, 0.08)}` : 'none' }}><StorageIcon sx={{ fontSize: isMobile ? 40 : 56, color: isAdmin ? theme.palette.error.main : theme.palette.primary.main }} /><Typography variant="body2" sx={{ mt: 1, fontWeight: 800, fontSize: isMobile ? '0.74rem' : '0.84rem', lineHeight: 1.2 }}>{isAdmin ? '전체 저장소' : '내 클라우드'}</Typography>
 </Box>
 
         </motion.div>
@@ -1873,11 +1890,11 @@ const NAS = () => {
           const safePath = ensureSlash(item.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === 'desktop'); const isSelected = selectedItems.includes(safePath); const pos = iconPositions[safePath] || { x: 0, y: 0 }; 
           return (
             <motion.div key={safePath} className="selectable-item" data-path={safePath}     draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, item, 'desktop') }} onDragOver={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragOver(e, item.fullPath); }} onDragLeave={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragLeave(e, item.fullPath); }} onDrop={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDrop(e, item.fullPath, 'desktop'); }} onClick={(e) => handleItemClick(e, safePath, item)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} style={isMobile ? { textAlign: 'center', cursor: isEditing ? 'default' : 'pointer', width: '80px', zIndex: isSelected ? 20 : (isEditing ? 15 : 10) } : { position: 'absolute', left: pos.x, top: pos.y, textAlign: 'center', cursor: isEditing ? 'default' : 'pointer', width: '100px', zIndex: isSelected ? 20 : (isEditing ? 15 : 10) }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
-                <Box sx={{ color: 'white', p: 1, borderRadius: '6px', border: dragOverTarget === safePath ? '2px dashed #fbbf24' : (isSelected ? '1px solid rgba(255,255,255,0.4)' : '1px solid transparent'), backgroundColor: dragOverTarget === safePath ? 'rgba(251, 191, 36, 0.2)' : (isSelected ? 'rgba(255, 255, 255, 0.15)' : 'transparent'), transition: 'all 0.1s ease-in-out', '&:hover': { backgroundColor: isSelected ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 255, 255, 0.08)' } }}>{item.type === 'linked-device' ? <DesktopWindowsIcon sx={{ fontSize: !isMobile ? 60 : 40, color: '#38bdf8' }} /> : ((item.type === 'folder' || item.type === 'linked-device') ? <FolderIcon sx={{ fontSize: !isMobile ? 60 : 40, color: '#fde047' }} /> : <InsertDriveFileIcon sx={{ fontSize: !isMobile ? 60 : 40, color: '#e2e8f0' }} />)}
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <Box sx={{ ...desktopIconBaseSx, border: dragOverTarget === safePath ? `2px dashed ${theme.palette.warning.main}` : (isSelected ? `1px solid ${alpha(theme.palette.primary.main, 0.32)}` : '1px solid transparent'), backgroundColor: dragOverTarget === safePath ? alpha(theme.palette.warning.main, 0.12) : (isSelected ? alpha(theme.palette.primary.main, 0.12) : 'transparent') }}>{item.type === 'linked-device' ? <DesktopWindowsIcon sx={{ fontSize: !isMobile ? 56 : 40, color: deviceColor }} /> : ((item.type === 'folder' || item.type === 'linked-device') ? <FolderIcon sx={{ fontSize: !isMobile ? 56 : 40, color: folderColor }} /> : <InsertDriveFileIcon sx={{ fontSize: !isMobile ? 56 : 40, color: fileColor }} />)}
 </Box>
 
-                {isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={true} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 'bold', color: 'white', textShadow: '1px 1px 3px rgba(0,0,0,0.8)', wordBreak: 'break-all', maxWidth: isMobile ? '80px' : '90px', lineHeight: 1.2, fontSize: isMobile ? '0.75rem' : '0.875rem' }}>{isSelected || isMobile ? getDisplayName(item) : (getDisplayName(item).length > 8 ? getDisplayName(item).substring(0, 8) + '...' : getDisplayName(item))}</Typography>}
+                {isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={true} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 700, color: 'text.primary', wordBreak: 'break-word', overflowWrap: 'anywhere', maxWidth: isMobile ? '82px' : '92px', lineHeight: 1.2, fontSize: isMobile ? '0.74rem' : '0.84rem' }}>{isSelected || isMobile ? getDisplayName(item) : (getDisplayName(item).length > 8 ? getDisplayName(item).substring(0, 8) + '...' : getDisplayName(item))}</Typography>}
               
 </Box>
 
@@ -1885,7 +1902,7 @@ const NAS = () => {
           );
         })}
         {/* 🔥 바탕화면: 새 파일/새 폴더 입력창 표시 (아이콘 동적 변경) */}
-        {inlineEdit && (inlineEdit.mode === 'new' || inlineEdit.mode === 'newFile') && inlineEdit.windowId === 'desktop' && (<motion.div style={isMobile ? { textAlign: 'center', width: '80px', zIndex: 15 } : { position: 'absolute', left: inlineEdit.spawnPosition?.x || 200, top: inlineEdit.spawnPosition?.y || 200, textAlign: 'center', width: '100px', zIndex: 15 }}><Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>{inlineEdit.mode === 'new' ? <FolderIcon sx={{ fontSize: isMobile ? 40 : 60, color: '#fde047' }} /> : <InsertDriveFileIcon sx={{ fontSize: isMobile ? 40 : 60, color: '#e2e8f0' }} />}<InlineInput defaultValue={inlineEdit.name} isDesktop={true} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} />
+        {inlineEdit && (inlineEdit.mode === 'new' || inlineEdit.mode === 'newFile') && inlineEdit.windowId === 'desktop' && (<motion.div style={isMobile ? { textAlign: 'center', width: '82px', zIndex: 15 } : { position: 'absolute', left: inlineEdit.spawnPosition?.x || 200, top: inlineEdit.spawnPosition?.y || 200, textAlign: 'center', width: '100px', zIndex: 15 }}><Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>{inlineEdit.mode === 'new' ? <FolderIcon sx={{ fontSize: isMobile ? 40 : 56, color: folderColor }} /> : <InsertDriveFileIcon sx={{ fontSize: isMobile ? 40 : 56, color: fileColor }} />}<InlineInput defaultValue={inlineEdit.name} isDesktop={true} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} />
 </Box>
 </motion.div>)}
       
@@ -1893,11 +1910,11 @@ const NAS = () => {
 
 
       {/* 🔥 [버튼 3대장] 파일, 폴더, 업로드 버튼 배치! */}
-      <Box sx={{ position: isMobile ? 'fixed' : 'absolute', bottom: isMobile ? 20 : 30, right: isMobile ? 15 : 30, display: (openWindows.some(w => w.isImmersive) || (isMobile && openWindows.find(w => w.id === focusedContext)?.winType === 'file')) ? 'none' : 'flex', gap: isMobile ? 1 : 2, zIndex: 1200 }}>
+      <Box sx={{ position: isMobile ? 'fixed' : 'absolute', bottom: isMobile ? 14 : 30, right: isMobile ? 12 : 30, display: (openWindows.some(w => w.isImmersive) || (isMobile && openWindows.find(w => w.id === focusedContext)?.winType === 'file')) ? 'none' : 'flex', gap: isMobile ? 1 : 1.25, zIndex: 1200, p: isMobile ? 0.75 : 0, borderRadius: isMobile ? 999 : 0, bgcolor: isMobile ? alpha(theme.palette.background.paper, 0.92) : 'transparent', border: isMobile ? `1px solid ${theme.palette.divider}` : 'none', boxShadow: isMobile ? theme.shadows[8] : 'none' }}>
         <input type="file" multiple ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileUpload} />
-        <Button variant="contained" color="secondary" size={isMobile ? "small" : "medium"} onClick={() => handleUploadClick(getActiveTargetPath())} sx={{ minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1 }}><UploadFileIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "업로드"}</Button>
-        <Button variant="contained" color="info" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFileStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ bgcolor: '#0ea5e9', minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1, '&:hover':{ bgcolor: '#0284c7' } }}><NoteAddIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 파일"}</Button>
-        <Button variant="contained" color="primary" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ minWidth: isMobile ? '40px' : 'auto', fontWeight: 'bold', boxShadow: 6, borderRadius: isMobile ? '50%' : 2, p: isMobile ? 1.5 : 1 }}><CreateNewFolderIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 폴더"}</Button>
+        <Button variant="contained" color="secondary" size={isMobile ? "small" : "medium"} onClick={() => handleUploadClick(getActiveTargetPath())} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="업로드"><UploadFileIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "업로드"}</Button>
+        <Button variant="contained" color="info" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFileStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="새 파일"><NoteAddIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 파일"}</Button>
+        <Button variant="contained" color="primary" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="새 폴더"><CreateNewFolderIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 폴더"}</Button>
       
 </Box>
 
@@ -1916,15 +1933,15 @@ const NAS = () => {
               onMouseDown={() => focusWindow(win.id)} onDragStop={(e, d) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, x: d.x, y: d.y } : w))} onResizeStop={(e, direction, ref, delta, position) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, width: ref.style.width, height: ref.style.height, x: position.x, y: position.y } : w))} dragHandleClassName="window-header-drag-handle" bounds="parent" 
             >
               <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} style={{ height: '100%', width: '100%' }}>
-                <Paper elevation={isActive ? 24 : 8} sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderRadius: (isMobile || win.isMaximized || win.isImmersive) ? 0 : 2, overflow: 'hidden', border: isActive ? `3px solid ${theme.palette.primary.main}` : `1px solid ${theme.palette.divider}`, boxShadow: isActive ? `0 0 25px ${alpha(theme.palette.primary.main, 0.4)}` : theme.shadows[10], transition: 'border 0.2s ease, box-shadow 0.2s ease' }}>
+                <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderRadius: (isMobile || win.isMaximized || win.isImmersive) ? 0 : 2, overflow: 'hidden', bgcolor: 'background.paper', border: isActive ? `1px solid ${alpha(theme.palette.primary.main, 0.62)}` : `1px solid ${theme.palette.divider}`, boxShadow: isActive ? `0 22px 60px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.45 : 0.16)}` : `0 14px 44px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.34 : 0.10)}`, transition: 'border 0.2s ease, box-shadow 0.2s ease' }}>
                   {win.isImmersive && <Box onMouseEnter={() => setHoveredHeader(win.id)} sx={{ position: 'absolute', top: 0, left: 0, right: 0, height: '30px', zIndex: 99998, cursor: 'default' }} />}
-                  <Box className="window-header-drag-handle" onMouseEnter={() => setHoveredHeader(win.id)} onMouseLeave={() => setHoveredHeader(null)} sx={{ display: 'flex', position: win.isImmersive ? 'absolute' : 'relative', top: win.isImmersive ? (hoveredHeader === win.id ? 0 : '-70px') : 0, left: 0, right: 0, width: '100%', transition: 'top 0.35s cubic-bezier(0.4, 0, 0.2, 1)', zIndex: 100000, p: 1, background: isActive ? alpha(theme.palette.primary.main, 0.08) : theme.palette.background.default, borderBottom: `1px solid ${theme.palette.divider}`, justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, cursor: win.isMaximized ? 'default' : 'move' }}>
+                  <Box className="window-header-drag-handle" onMouseEnter={() => setHoveredHeader(win.id)} onMouseLeave={() => setHoveredHeader(null)} sx={{ display: 'flex', position: win.isImmersive ? 'absolute' : 'relative', top: win.isImmersive ? (hoveredHeader === win.id ? 0 : '-70px') : 0, left: 0, right: 0, width: '100%', transition: 'top 0.35s cubic-bezier(0.4, 0, 0.2, 1)', zIndex: 100000, px: isMobile ? 1 : 1.25, py: isMobile ? 0.75 : 1, background: isActive ? alpha(theme.palette.primary.main, 0.08) : theme.palette.background.paper, borderBottom: `1px solid ${theme.palette.divider}`, justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, cursor: win.isMaximized || isMobile ? 'default' : 'move', minHeight: isMobile ? 52 : 48 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, overflow: 'hidden' }}>
                       {win.winType === 'folder' ? (
                         <>
                           <IconButton size="small" onClick={() => toggleSidebar(win.id)} color={isActive ? "primary" : "inherit"} onMouseDown={(e) => e.stopPropagation()}><MenuIcon /></IconButton>
                           <IconButton size="small" onClick={() => handleUp(win)} disabled={win.currentPath === win.basePath} color="inherit" onMouseDown={(e) => e.stopPropagation()}><ArrowBackIcon /></IconButton>
-                          <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', ml: 1 }} onMouseDown={(e) => e.stopPropagation()}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto', ml: isMobile ? 0.5 : 1, minWidth: 0 }} onMouseDown={(e) => e.stopPropagation()}>
                             <Typography onClick={() => fetchFiles(win.id, win.basePath)} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800, whiteSpace: 'nowrap' }}>{win.name}</Typography>
                             {getRelativeSegments(win.currentPath, win.basePath).map((seg, idx, arr) => (<React.Fragment key={idx}><Typography sx={{ mx: 0.5, color: 'text.secondary' }}>/</Typography><Typography onClick={() => fetchFiles(win.id, (win.basePath === '/' ? '' : win.basePath.replace(/\/$/, '')) + '/' + arr.slice(0, idx + 1).join('/'))} sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' }, fontWeight: 800, whiteSpace: 'nowrap' }}>{seg}</Typography></React.Fragment>))}
                             {win.type === 'linked-device' && (
@@ -1959,24 +1976,24 @@ const NAS = () => {
                       <>
                         <AnimatePresence>
                           {win.sidebarOpen && !isMobile && (
-                            <motion.div initial={{ x: -220 }} animate={{ x: 0 }} exit={{ x: -220 }} transition={{ type: 'tween', duration: 0.2 }} style={{ width: 220, height: '100%', backgroundColor: theme.palette.background.default, borderRight: `1px solid ${theme.palette.divider}`, zIndex: 10 }}>
+                            <motion.div initial={{ x: -220 }} animate={{ x: 0 }} exit={{ x: -220 }} transition={{ type: 'tween', duration: 0.2 }} style={{ width: 232, height: '100%', backgroundColor: theme.palette.background.default, borderRight: `1px solid ${theme.palette.divider}`, zIndex: 10 }}>
                               <SidebarTree win={win} fetchFiles={fetchFiles} theme={theme} openFileWindow={openFileWindow} handleContextMenu={handleContextMenu} handleItemClick={handleItemClick} selectedItems={selectedItems} inlineEdit={inlineEdit} handleInlineSubmit={handleInlineSubmit} setInlineEdit={setInlineEdit} />
                             </motion.div>
                           )}
                         </AnimatePresence>
-                        <TableContainer className="window-content-area" onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} onContextMenu={(e) => handleContextMenu(e, 'background', { path: win.currentPath, windowId: win.id })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if(e.target === e.currentTarget) setSelectedItems([]); }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, background: 'transparent' }}>
+                        <TableContainer className="window-content-area" onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} onContextMenu={(e) => handleContextMenu(e, 'background', { path: win.currentPath, windowId: win.id })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if(e.target === e.currentTarget) setSelectedItems([]); }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, background: 'transparent', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
                           <Table stickyHeader size="small">
                             <TableBody>
                               {win.files.map((file, idx) => {
                                 const safePath = ensureSlash(file.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === win.id); const isSelected = selectedItems.includes(safePath); const isDragTarget = dragOverTarget === safePath;
                                 return (
-                                  <TableRow key={idx} className="selectable-item" data-path={safePath} hover draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, file, win.id) }} onDragOver={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragOver(e, file.fullPath) }} onDragLeave={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragLeave(e, file.fullPath) }} onDrop={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDrop(e, file.fullPath, win.id) }} onClick={(e) => handleItemClick(e, safePath, file)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (file.type === 'folder' || file.type === 'linked-device') ? fetchFiles(win.id, ensureSlash(file.fullPath)) : openFileWindow(file, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, file.type, { item: file, path: win.currentPath, windowId: win.id }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, file.type, { item: file, path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ cursor: isEditing ? 'default' : 'pointer', backgroundColor: isDragTarget ? alpha(theme.palette.warning.main, 0.2) : (isSelected ? alpha(theme.palette.primary.main, 0.1) : 'inherit'), border: isDragTarget ? `2px dashed ${theme.palette.warning.main}` : 'none' }}>
-                                    <TableCell sx={{ display: 'flex', alignItems: 'center', py: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>{file.type === 'linked-device' ? <DesktopWindowsIcon sx={{ mr: 1.5, color: '#38bdf8' }} /> : ((file.type === 'folder' || file.type === 'linked-device') ? <FolderIcon sx={{ mr: 1.5, color: '#fbbf24' }} /> : <InsertDriveFileIcon sx={{ mr: 1.5, color: theme.palette.text.secondary }} />)}{isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={false} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography>{getDisplayName(file)}</Typography>}</TableCell>
+                                  <TableRow key={idx} className="selectable-item" data-path={safePath} hover draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, file, win.id) }} onDragOver={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragOver(e, file.fullPath) }} onDragLeave={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragLeave(e, file.fullPath) }} onDrop={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDrop(e, file.fullPath, win.id) }} onClick={(e) => handleItemClick(e, safePath, file)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (file.type === 'folder' || file.type === 'linked-device') ? fetchFiles(win.id, ensureSlash(file.fullPath)) : openFileWindow(file, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, file.type, { item: file, path: win.currentPath, windowId: win.id }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, file.type, { item: file, path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ cursor: isEditing ? 'default' : 'pointer', backgroundColor: isDragTarget ? alpha(theme.palette.warning.main, 0.14) : (isSelected ? alpha(theme.palette.primary.main, 0.10) : 'inherit'), borderLeft: isSelected ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent', outline: isDragTarget ? `2px dashed ${theme.palette.warning.main}` : 'none', '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.06) } }}>
+                                    <TableCell sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: isMobile ? 1.35 : 1.2, minHeight: isMobile ? 52 : 44, borderBottom: `1px solid ${theme.palette.divider}` }}>{file.type === 'linked-device' ? <DesktopWindowsIcon sx={{ color: deviceColor, flexShrink: 0 }} /> : ((file.type === 'folder' || file.type === 'linked-device') ? <FolderIcon sx={{ color: folderColor, flexShrink: 0 }} /> : <InsertDriveFileIcon sx={{ color: fileColor, flexShrink: 0 }} />)}{isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={false} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography sx={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', fontWeight: isSelected ? 700 : 500 }}>{getDisplayName(file)}</Typography>}</TableCell>
                                   </TableRow>
                                 );
                               })}
                               {/* 🔥 창 안쪽: 새 파일/새 폴더 입력창 표시 */}
-                              {inlineEdit && (inlineEdit.mode === 'new' || inlineEdit.mode === 'newFile') && inlineEdit.windowId === win.id && (<TableRow><TableCell sx={{ display: 'flex', alignItems: 'center', py: 1.5, borderBottom: `1px solid ${theme.palette.divider}` }}>{inlineEdit.mode === 'new' ? <FolderIcon sx={{ mr: 1.5, color: '#fbbf24' }} /> : <InsertDriveFileIcon sx={{ mr: 1.5, color: theme.palette.text.secondary }} />}<InlineInput defaultValue={inlineEdit.name} isDesktop={false} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /></TableCell></TableRow>)}
+                              {inlineEdit && (inlineEdit.mode === 'new' || inlineEdit.mode === 'newFile') && inlineEdit.windowId === win.id && (<TableRow><TableCell sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1.2, borderBottom: `1px solid ${theme.palette.divider}` }}>{inlineEdit.mode === 'new' ? <FolderIcon sx={{ color: folderColor, flexShrink: 0 }} /> : <InsertDriveFileIcon sx={{ color: fileColor, flexShrink: 0 }} />}<InlineInput defaultValue={inlineEdit.name} isDesktop={false} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /></TableCell></TableRow>)}
                             </TableBody>
                           </Table>
                         </TableContainer>
@@ -2020,7 +2037,7 @@ const NAS = () => {
         PaperProps={{
           elevation: 24,
           sx: {
-            borderRadius: 4,
+            borderRadius: 2,
             overflow: 'hidden',
             bgcolor: 'background.paper'
           }
@@ -2028,26 +2045,25 @@ const NAS = () => {
       >
         <DialogTitle sx={{
           p: 0,
-          background: theme.palette.mode === 'dark'
-            ? 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(30,41,59,0.98))'
-            : 'linear-gradient(135deg, rgba(37,99,235,0.96), rgba(14,165,233,0.96))',
-          color: 'white'
+          background: theme.palette.mode === 'dark' ? '#171c22' : '#ffffff',
+          color: 'text.primary',
+          borderBottom: `1px solid ${theme.palette.divider}`
         }}>
           <Box sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
             <Box sx={{
               width: 58,
               height: 58,
-              borderRadius: 3,
-              bgcolor: 'rgba(255,255,255,0.16)',
+              borderRadius: 2,
+              bgcolor: alpha(theme.palette.primary.main, 0.09),
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               flexShrink: 0,
-              boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.18)'
+              boxShadow: `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.14)}`
             }}>
               {fileInfo.data?.isDirectory || fileInfo.item?.type === 'folder'
-                ? <FolderIcon sx={{ fontSize: 38, color: '#fde047' }} />
-                : <InsertDriveFileIcon sx={{ fontSize: 38, color: '#e0f2fe' }} />
+                ? <FolderIcon sx={{ fontSize: 38, color: folderColor }} />
+                : <InsertDriveFileIcon sx={{ fontSize: 38, color: fileColor }} />
               }
             </Box>
             <Box sx={{ minWidth: 0 }}>
@@ -2139,11 +2155,11 @@ const NAS = () => {
       </Dialog>
 
       {/* 🔥 폴더 다운로드 다이얼로그 */}
-      <Dialog open={!!folderDownload} onClose={() => setFolderDownload(null)} PaperProps={{ elevation: 24, sx: { borderRadius: 3, p: 1 } }}>
+      <Dialog open={!!folderDownload} onClose={() => setFolderDownload(null)} PaperProps={{ elevation: 0, sx: { borderRadius: 2, p: 1, border: `1px solid ${theme.palette.divider}` } }}>
         <DialogTitle sx={{ fontWeight: 800, textAlign: 'center' }}>폴더 다운로드</DialogTitle>
         <DialogContent sx={{ textAlign: 'center' }}>
           <DialogContentText sx={{ mb: 3 }}>
-            <strong style={{ color: '#3b82f6' }}>'{folderDownload?.name}'</strong> 폴더를 압축합니다.<br/>원하시는 압축 포맷을 선택해 주세요.
+            <strong style={{ color: theme.palette.primary.main }}>'{folderDownload?.name}'</strong> 폴더를 압축합니다.<br/>원하시는 압축 포맷을 선택해 주세요.
           </DialogContentText>
           <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
             <Button variant="contained" color="primary" onClick={() => executeFolderDownload('zip')} sx={{ fontWeight: 'bold' }}>.ZIP (권장)</Button>

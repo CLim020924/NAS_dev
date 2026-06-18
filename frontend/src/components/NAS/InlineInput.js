@@ -45,16 +45,16 @@ const InlineInput = ({ defaultValue, onSubmit, onCancel, isDesktop }) => {
       style={{
         width: isDesktop ? '100px' : '100%',
         textAlign: isDesktop ? 'center' : 'left',
-        padding: '2px 4px',
-        border: `2px solid #3b82f6`,
+        padding: isDesktop ? '5px 6px' : '6px 8px',
+        border: `1px solid #2563eb`,
         outline: 'none',
         backgroundColor: '#fff',
-        color: '#000',
-        borderRadius: '4px',
+        color: '#151922',
+        borderRadius: '6px',
         marginTop: isDesktop ? '4px' : '0',
         fontSize: '0.85rem',
-        fontWeight: 'bold',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+        fontWeight: 700,
+        boxShadow: '0 6px 18px rgba(15,23,42,0.14)'
       }}
     />
   );
