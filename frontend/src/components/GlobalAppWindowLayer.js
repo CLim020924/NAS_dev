@@ -4,6 +4,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import CropSquareIcon from '@mui/icons-material/CropSquare';
 import RemoveIcon from '@mui/icons-material/Remove';
 import { alpha, useTheme } from '@mui/material/styles';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Rnd } from 'react-rnd';
 import { useWindows } from '../contexts/WindowContext';
@@ -50,6 +51,7 @@ class AppWindowErrorBoundary extends React.Component {
 
 const GlobalAppWindowLayer = () => {
   const theme = useTheme();
+  const compactWindow = useMediaQuery('(max-width:700px), (max-height:560px)');
   const {
     openWindows,
     setOpenWindows,
@@ -93,13 +95,16 @@ const GlobalAppWindowLayer = () => {
                 position: 'absolute',
                 pointerEvents: 'auto'
               }}
-              minWidth={420}
-              minHeight={320}
+              minHeight={compactWindow ? 280 : 320}
               bounds="parent"
-              size={{ width: win.isMaximized ? '100%' : win.width, height: win.isMaximized ? '100%' : win.height }}
-              position={{ x: win.isMaximized ? 0 : win.x, y: win.isMaximized ? 0 : win.y }}
-              disableDragging={win.isMaximized}
-              enableResizing={!win.isMaximized}
+              minWidth={compactWindow ? 280 : 420}
+              size={{
+                width: win.isMaximized ? '100%' : (compactWindow ? 'calc(100% - 16px)' : win.width),
+                height: win.isMaximized ? '100%' : (compactWindow ? 'calc(100% - 16px)' : win.height)
+              }}
+              position={{ x: win.isMaximized ? 0 : (compactWindow ? 8 : win.x), y: win.isMaximized ? 0 : (compactWindow ? 8 : win.y) }}
+              disableDragging={win.isMaximized || compactWindow}
+              enableResizing={!win.isMaximized && !compactWindow}
               dragHandleClassName="platform-window-header"
               onMouseDown={() => focusWindow(win.id)}
               onDragStop={(e, d) => setOpenWindows((prev) => prev.map((w) => w.id === win.id ? { ...w, x: d.x, y: d.y } : w))}

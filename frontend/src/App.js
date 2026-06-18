@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { ThemeProvider as MUIThemeProvider, createTheme, CssBaseline, Box, Toolbar } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import socketIOClient from 'socket.io-client';
+import './App.css';
 
 import ServicePlatform from './components/ServicePlatform';
 import TopBar from './components/TopBar';

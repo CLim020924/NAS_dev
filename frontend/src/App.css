@@ -36,3 +36,21 @@ img {
     top: 0 !important;
   }
 }
+
+@media (max-width: 900px) {
+  html {
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 600px) {
+  html {
+    font-size: 13px;
+  }
+}
+
+@media (max-height: 620px) {
+  html {
+    font-size: 13.5px;
+  }
+}
