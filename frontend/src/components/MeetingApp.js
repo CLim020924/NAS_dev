@@ -16,6 +16,7 @@ import {
 import CallEndIcon from '@mui/icons-material/CallEnd';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import GroupsIcon from '@mui/icons-material/Groups';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
 import PresentToAllIcon from '@mui/icons-material/PresentToAll';
@@ -94,7 +95,7 @@ const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEna
   );
 };
 
-const MeetingApp = () => {
+const MeetingApp = ({ inWindow = false, onOpenWindow = null, initialRoomCode = '', autoJoin = false }) => {
   const theme = useTheme();
   const currentUser = useMemo(() => {
     try {
@@ -106,8 +107,8 @@ const MeetingApp = () => {
 
   const queryRoom = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
-    return normalizeRoomCode(params.get('meeting'));
-  }, []);
+    return normalizeRoomCode(initialRoomCode || params.get('meeting'));
+  }, [initialRoomCode]);
 
   const [roomCode, setRoomCode] = useState(() => queryRoom || makeRoomCode());
   const [joinCode, setJoinCode] = useState(queryRoom || '');
@@ -120,6 +121,7 @@ const MeetingApp = () => {
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [screenSharing, setScreenSharing] = useState(false);
+  const autoJoinStartedRef = useRef(false);
 
   const peersRef = useRef(new Map());
   const pendingIceRef = useRef(new Map());
@@ -329,6 +331,12 @@ const MeetingApp = () => {
     joinMeeting(joinCode || roomCode);
   };
 
+  useEffect(() => {
+    if (!autoJoin || autoJoinStartedRef.current) return;
+    autoJoinStartedRef.current = true;
+    joinMeeting(roomCode);
+  }, [autoJoin, joinMeeting, roomCode]);
+
   const toggleAudio = () => {
     const next = !audioEnabled;
     localStreamRef.current?.getAudioTracks().forEach((track) => {
@@ -478,7 +486,7 @@ const MeetingApp = () => {
   const previewStream = displayStream || localStream;
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.paper' }}>
+    <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: 'background.paper', overflow: 'auto' }}>
       <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
           <Box sx={{ width: 38, height: 38, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(theme.palette.info.main, 0.12), color: 'info.main' }}>
@@ -490,13 +498,18 @@ const MeetingApp = () => {
           </Box>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
+          {!inWindow && onOpenWindow && (
+            <Button size="small" variant="outlined" startIcon={<OpenInNewIcon />} onClick={() => onOpenWindow({ roomCode, autoJoin: active })}>
+              창으로 띄우기
+            </Button>
+          )}
           <Chip size="small" color={active ? 'success' : 'default'} label={active ? `${remoteList.length + 1}명 연결` : '대기'} />
           {screenSharing && <Chip size="small" color="info" label="화면공유" />}
         </Stack>
       </Box>
 
-      <Box sx={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 280px' }, overflow: 'hidden' }}>
-        <Box sx={{ p: { xs: 1.5, sm: 2 }, display: 'flex', flexDirection: 'column', gap: 1.5, overflow: 'hidden' }}>
+      <Box sx={{ flex: 1, minHeight: { xs: 'auto', md: 0 }, display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 280px' }, overflow: { xs: 'visible', md: 'hidden' } }}>
+        <Box sx={{ p: { xs: 1.5, sm: 2 }, display: 'flex', flexDirection: 'column', gap: 1.5, overflow: { xs: 'visible', md: 'hidden' } }}>
           {error && <Alert severity="warning" onClose={() => setError('')}>{error}</Alert>}
 
           <Box

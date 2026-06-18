@@ -9,6 +9,7 @@ import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import SpaceDashboardIcon from '@mui/icons-material/SpaceDashboard';
+import VideocamIcon from '@mui/icons-material/Videocam';
 import axios from 'axios';
 import { useWindows } from '../contexts/WindowContext';
 import { alpha } from '@mui/material/styles';
@@ -30,7 +31,9 @@ const TopBar = ({
   const [anchorEl, setAnchorEl] = useState(null);
   const [folderMenuAnchorEl, setFolderMenuAnchorEl] = useState(null);
   const [fileMenuAnchorEl, setFileMenuAnchorEl] = useState(null);
+  const [appMenuAnchorEl, setAppMenuAnchorEl] = useState(null);
   const [chatMenuAnchorEl, setChatMenuAnchorEl] = useState(null);
+  const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
 
   const [profileOpen, setProfileOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -41,6 +44,16 @@ const TopBar = ({
     const handleStorageChange = () => setUser(JSON.parse(localStorage.getItem('user')) || { username: 'USER', role: 'USER' });
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  useEffect(() => {
+    const handleSettingsChange = () => setAppOpenMode(localStorage.getItem('platform_app_open_mode') || 'window');
+    window.addEventListener('nas_settings_changed', handleSettingsChange);
+    window.addEventListener('storage', handleSettingsChange);
+    return () => {
+      window.removeEventListener('nas_settings_changed', handleSettingsChange);
+      window.removeEventListener('storage', handleSettingsChange);
+    };
   }, []);
 
   const getPageTitle = (path) => {
@@ -76,15 +89,14 @@ const TopBar = ({
     }
   };
 
-  const isNAS = location.pathname.startsWith('/nas');
-  const minimizedWindows = taskbarWindows.filter(Boolean).filter(w => w.isMinimized).slice().reverse();
-  const minimizedFolders = minimizedWindows.filter((w) => w.winType === 'folder');
-  const minimizedFiles = minimizedWindows.filter((w) => w.winType === 'file');
-  const minimizedChats = minimizedWindows.filter((w) => w.winType === 'chat');
+  const taskWindows = taskbarWindows.filter(Boolean).slice().reverse();
+  const minimizedFolders = appOpenMode === 'window' ? taskWindows.filter((w) => w.winType === 'folder') : [];
+  const minimizedFiles = taskWindows.filter((w) => w.winType === 'file');
+  const minimizedApps = taskWindows.filter((w) => w.winType === 'app');
+  const minimizedChats = taskWindows.filter((w) => w.winType === 'chat');
 
   const restoreMinimizedWindow = (win) => {
     if (!win) return;
-    navigate('/nas');
     focusWindow(win.id);
   };
 
@@ -124,10 +136,10 @@ const TopBar = ({
             </Typography>
           </Box>
 
-          {isNAS && minimizedFolders.length > 0 && (
+          {minimizedFolders.length > 0 && (
             <>
               <Chip
-                label={minimizedFolders.length === 1 ? (minimizedFolders[0]?.name || '숨긴 폴더') : `숨긴 폴더 ${minimizedFolders.length}`}
+                label={minimizedFolders.length === 1 ? (minimizedFolders[0]?.name || '열린 폴더') : `열린 폴더 ${minimizedFolders.length}`}
                 size="small"
                 icon={<FolderIcon sx={{ fontSize: 16 }} />}
                 onClick={(e) => {
@@ -186,10 +198,10 @@ const TopBar = ({
             </>
           )}
 
-          {isNAS && minimizedFiles.length > 0 && (
+          {minimizedFiles.length > 0 && (
             <>
               <Chip
-                label={minimizedFiles.length === 1 ? (minimizedFiles[0]?.name || '숨긴 파일') : `숨긴 파일 ${minimizedFiles.length}`}
+                label={minimizedFiles.length === 1 ? (minimizedFiles[0]?.name || '열린 파일') : `열린 파일 ${minimizedFiles.length}`}
                 size="small"
                 icon={<InsertDriveFileIcon sx={{ fontSize: 16 }} />}
                 onClick={(e) => {
@@ -248,10 +260,72 @@ const TopBar = ({
             </>
           )}
 
-          {isNAS && minimizedChats.length > 0 && (
+          {minimizedApps.length > 0 && (
             <>
               <Chip
-                label={minimizedChats.length === 1 ? (minimizedChats[0]?.name || '숨긴 채팅창') : `숨긴 채팅창 ${minimizedChats.length}`}
+                label={minimizedApps.length === 1 ? (minimizedApps[0]?.name || '실행 중인 앱') : `실행 앱 ${minimizedApps.length}`}
+                size="small"
+                icon={<VideocamIcon sx={{ fontSize: 16 }} />}
+                onClick={(e) => {
+                  if (minimizedApps.length === 1) {
+                    restoreMinimizedWindow(minimizedApps[0]);
+                  } else {
+                    setAppMenuAnchorEl(e.currentTarget);
+                  }
+                }}
+                sx={{
+                  ml: 1,
+                  backgroundColor: 'action.hover',
+                  color: 'text.primary',
+                  cursor: 'pointer'
+                }}
+              />
+              {minimizedApps.length > 1 && (
+                <Menu
+                  anchorEl={appMenuAnchorEl}
+                  open={Boolean(appMenuAnchorEl)}
+                  onClose={() => setAppMenuAnchorEl(null)}
+                  PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 260, borderRadius: 2 } }}
+                >
+                  {minimizedApps.map((win) => (
+                    <MenuItem
+                      key={win.id}
+                      onClick={() => {
+                        setAppMenuAnchorEl(null);
+                        restoreMinimizedWindow(win);
+                      }}
+                      sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
+                    >
+                      <VideocamIcon fontSize="small" sx={{ mt: 0.2, color: 'info.main' }} />
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                          {win.name}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{
+                            display: 'block',
+                            maxWidth: 180,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
+                          }}
+                        >
+                          실행 중
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </Menu>
+              )}
+            </>
+          )}
+
+          {minimizedChats.length > 0 && (
+            <>
+              <Chip
+                label={minimizedChats.length === 1 ? (minimizedChats[0]?.name || '열린 채팅') : `열린 채팅 ${minimizedChats.length}`}
                 size="small"
                 icon={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
                 onClick={(e) => {

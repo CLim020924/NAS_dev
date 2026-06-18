@@ -14,6 +14,7 @@ import ChatRoomSidebar from './components/ChatRoomSidebar';
 import NotificationSidebar from './components/NotificationSidebar';
 import DedicatedChatWindowLayer from './components/DedicatedChatWindowLayer';
 import ChatWorkspaceWindowLayer from './components/ChatWorkspaceWindowLayer';
+import GlobalAppWindowLayer from './components/GlobalAppWindowLayer';
 
 import { WindowProvider } from './contexts/WindowContext';
 import { TransferProvider } from './contexts/TransferContext';
@@ -91,6 +92,7 @@ const PersistentMainRoutes = () => {
       >
         <NAS showWorkspace={isNasRoute} />
       </Box>
+      <GlobalAppWindowLayer />
     </Box>
   );
 };

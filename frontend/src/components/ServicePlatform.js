@@ -1,16 +1,11 @@
 import React, { useState } from 'react';
-import { Box, Button, IconButton, Paper, Tooltip, Typography } from '@mui/material';
+import { Box, Button, IconButton, Tooltip, Typography } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import HistoryIcon from '@mui/icons-material/History';
 import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
 import SettingsIcon from '@mui/icons-material/Settings';
 import VideocamIcon from '@mui/icons-material/Videocam';
-import CloseIcon from '@mui/icons-material/Close';
-import RemoveIcon from '@mui/icons-material/Remove';
-import CropSquareIcon from '@mui/icons-material/CropSquare';
 import { alpha, useTheme } from '@mui/material/styles';
-import { Rnd } from 'react-rnd';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useWindows } from '../contexts/WindowContext';
 import MeetingApp from './MeetingApp';
@@ -22,19 +17,10 @@ function ServicePlatform() {
   const theme = useTheme();
   const [inlineApp, setInlineApp] = useState(null);
   const {
-    openWindows,
-    setOpenWindows,
-    focusedContext,
-    focusWindow,
-    closeWindow,
-    toggleMinimize,
-    toggleMaximize,
     openAppWindow
   } = useWindows();
   const user = JSON.parse(localStorage.getItem('user')) || {};
   const canOpenBackup = user.role === 'MASTER' || user.Masters || user.globalAccess;
-  const appWindows = openWindows.filter((win) => win.winType === 'app');
-
   const openApp = (app) => {
     const mode = appOpenMode();
     if (mode !== 'window' && app.component) {
@@ -67,11 +53,6 @@ function ServicePlatform() {
     apps.push({ id: 'backup', title: '백업', icon: HistoryIcon, route: '/nas/backup', color: theme.palette.error.main });
   }
 
-  const renderAppContent = (win) => {
-    if (win.appId === 'meeting') return <MeetingApp />;
-    return null;
-  };
-
   if (inlineApp) {
     return (
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
@@ -80,7 +61,14 @@ function ServicePlatform() {
           <Button variant="text" onClick={() => setInlineApp(null)}>바탕화면</Button>
         </Box>
         <Box sx={{ flex: 1, minHeight: 0 }}>
-          {inlineApp.id === 'meeting' ? <MeetingApp /> : null}
+          {inlineApp.id === 'meeting' ? (
+            <MeetingApp
+              onOpenWindow={(payload) => {
+                openAppWindow({ ...inlineApp, payload });
+                setInlineApp(null);
+              }}
+            />
+          ) : null}
         </Box>
       </Box>
     );
@@ -114,43 +102,6 @@ function ServicePlatform() {
           );
         })}
       </Box>
-
-      <AnimatePresence>
-        {appWindows.map((win) => {
-          const isActive = focusedContext === win.id;
-          return (
-            <Rnd
-              key={win.id}
-              style={{ display: win.isMinimized ? 'none' : 'block', zIndex: win.zIndex, position: 'absolute' }}
-              minWidth={420}
-              minHeight={320}
-              bounds="parent"
-              size={{ width: win.isMaximized ? '100%' : win.width, height: win.isMaximized ? '100%' : win.height }}
-              position={{ x: win.isMaximized ? 0 : win.x, y: win.isMaximized ? 0 : win.y }}
-              disableDragging={win.isMaximized}
-              enableResizing={!win.isMaximized}
-              dragHandleClassName="platform-window-header"
-              onMouseDown={() => focusWindow(win.id)}
-              onDragStop={(e, d) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, x: d.x, y: d.y } : w))}
-              onResizeStop={(e, direction, ref, delta, position) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, width: ref.style.width, height: ref.style.height, x: position.x, y: position.y } : w))}
-            >
-              <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97 }} style={{ height: '100%', width: '100%' }}>
-                <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: win.isMaximized ? 0 : 2, border: `1px solid ${isActive ? alpha(theme.palette.primary.main, 0.62) : theme.palette.divider}`, boxShadow: `0 24px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.46 : 0.16)}` }}>
-                  <Box className="platform-window-header" sx={{ height: 46, px: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, cursor: win.isMaximized ? 'default' : 'move', bgcolor: isActive ? alpha(theme.palette.primary.main, 0.07) : 'background.paper' }}>
-                    <Typography sx={{ fontWeight: 900 }}>{win.name}</Typography>
-                    <Box onMouseDown={(e) => e.stopPropagation()}>
-                      <IconButton size="small" onClick={() => toggleMinimize(win.id)}><RemoveIcon fontSize="small" /></IconButton>
-                      <IconButton size="small" onClick={() => toggleMaximize(win.id)}><CropSquareIcon fontSize="small" /></IconButton>
-                      <IconButton size="small" color="error" onClick={() => closeWindow(win.id)}><CloseIcon fontSize="small" /></IconButton>
-                    </Box>
-                  </Box>
-                  <Box sx={{ flex: 1, minHeight: 0 }}>{renderAppContent(win)}</Box>
-                </Paper>
-              </motion.div>
-            </Rnd>
-          );
-        })}
-      </AnimatePresence>
     </Box>
   );
 }
