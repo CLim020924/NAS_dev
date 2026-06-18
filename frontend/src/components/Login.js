@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -23,6 +23,7 @@ const Login = () => {
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const theme = useTheme();
 
   const handleLogin = () => {
@@ -30,7 +31,9 @@ const Login = () => {
     axios.post('/api/login', { id, password }, { withCredentials: true })
       .then(response => {
         localStorage.setItem('user', JSON.stringify(response.data.user));
-        navigate('/platform');
+        window.dispatchEvent(new Event('nas:user-updated'));
+        const next = searchParams.get('next');
+        navigate(next || '/platform');
       })
       .catch(err => {
         setError(err.response?.data?.error || '로그인 정보가 올바르지 않습니다.');

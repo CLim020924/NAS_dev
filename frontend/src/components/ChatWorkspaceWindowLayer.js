@@ -32,6 +32,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import GroupIcon from '@mui/icons-material/Group';
 import PersonIcon from '@mui/icons-material/Person';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import VideocamIcon from '@mui/icons-material/Videocam';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
@@ -158,6 +159,9 @@ const toChatMeta = (conversation) => {
   };
 };
 
+const getConversationMeetingCode = (conversationId) =>
+  `CHAT-${String(conversationId || '').replace(/[^a-zA-Z0-9]/g, '').slice(-24).toUpperCase() || Date.now().toString(36).toUpperCase()}`;
+
 const ChatWorkspaceWindowLayer = () => {
   const theme = useTheme();
   const messageViewportRef = useRef(null);
@@ -174,6 +178,7 @@ const ChatWorkspaceWindowLayer = () => {
     toggleMaximize,
     openFolderWindowByPath,
     openFileWindowByPath,
+    openAppWindow,
   } = useWindows();
 
   const {
@@ -320,6 +325,21 @@ const ChatWorkspaceWindowLayer = () => {
           : w
       )
     );
+  };
+
+  const handleOpenMeeting = () => {
+    if (!selectedConversationId) return;
+    openAppWindow({
+      id: 'meeting',
+      title: '화상회의',
+      width: 920,
+      height: 640,
+      payload: {
+        roomCode: getConversationMeetingCode(selectedConversationId),
+        autoJoin: true,
+        conversationId: selectedConversationId,
+      },
+    });
   };
 
   const handleSend = async () => {
@@ -838,6 +858,9 @@ const ChatWorkspaceWindowLayer = () => {
                           </Typography>
                         </Box>
                       </Box>
+                      <IconButton size="small" onClick={handleOpenMeeting} title="화상회의 시작">
+                        <VideocamIcon fontSize="small" />
+                      </IconButton>
                     </Box>
 
                     <Box

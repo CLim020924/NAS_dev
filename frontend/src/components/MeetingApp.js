@@ -111,7 +111,7 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
 
   const remoteList = useMemo(() => Object.values(remotePeers), [remotePeers]);
   const previewStream = displayStream || localStream;
-  const inviteLink = `${window.location.origin}/platform?meeting=${roomCode}`;
+  const inviteLink = `${window.location.origin}/meeting/${encodeURIComponent(roomCode)}`;
 
   useEffect(() => {
     const normalized = normalizeRoomCode(initialRoomCode);

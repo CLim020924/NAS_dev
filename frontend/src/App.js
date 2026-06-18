@@ -15,6 +15,7 @@ import NotificationSidebar from './components/NotificationSidebar';
 import DedicatedChatWindowLayer from './components/DedicatedChatWindowLayer';
 import ChatWorkspaceWindowLayer from './components/ChatWorkspaceWindowLayer';
 import GlobalAppWindowLayer from './components/GlobalAppWindowLayer';
+import MeetingInvitePage from './components/MeetingInvitePage';
 
 import { WindowProvider } from './contexts/WindowContext';
 import { TransferProvider } from './contexts/TransferContext';
@@ -287,13 +288,14 @@ function AppContent() {
     <MUIThemeProvider theme={theme}>
       <CssBaseline />
       <BrowserRouter>
+        <MeetingProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/meeting/:roomCode" element={<MeetingInvitePage />} />
           <Route path="/*" element={
             <PrivateRoute>
               <TransferProvider>
-                <MeetingProvider>
                 <Box sx={{ display: 'flex', height: '100vh', flexDirection: 'column', overflow: 'hidden' }}>
                 <TopBar
                   onOpenNotifications={() => setNotificationsOpen(true)}
@@ -334,11 +336,11 @@ function AppContent() {
                   <PersistentMainRoutes />
                 </Box>
                 </Box>
-                </MeetingProvider>
               </TransferProvider>
             </PrivateRoute>
           } />
         </Routes>
+        </MeetingProvider>
       </BrowserRouter>
     </MUIThemeProvider>
   );

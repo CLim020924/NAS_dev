@@ -20,6 +20,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import ImageIcon from '@mui/icons-material/Image';
+import VideocamIcon from '@mui/icons-material/Videocam';
 import { useChat } from '../contexts/ChatContext';
 import { useWindows } from '../contexts/WindowContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
@@ -49,6 +50,9 @@ const buildManifestFromFiles = (files = []) => {
   }));
 };
 
+const getConversationMeetingCode = (conversationId) =>
+  `CHAT-${String(conversationId || '').replace(/[^a-zA-Z0-9]/g, '').slice(-24).toUpperCase() || Date.now().toString(36).toUpperCase()}`;
+
 const DockedChatPanel = ({
   sidebarWidth = 360,
   activeChat = null,
@@ -56,7 +60,7 @@ const DockedChatPanel = ({
   onConversationReady = () => {},
 }) => {
   const theme = useTheme();
-  const { openFolderWindowByPath, openFileWindowByPath } = useWindows();
+  const { openFolderWindowByPath, openFileWindowByPath, openAppWindow } = useWindows();
   const messageListRef = useRef(null);
   const deviceFilesInputRef = useRef(null);
   const deviceFolderInputRef = useRef(null);
@@ -149,6 +153,36 @@ const DockedChatPanel = ({
   if (!activeChat) return null;
 
   const closeAttachMenu = () => setAttachMenuAnchorEl(null);
+
+  const handleOpenMeeting = async () => {
+    let finalConversationId = conversationId;
+
+    if (!finalConversationId && activeChat?.userUid) {
+      const conversation = await ensureDirectConversation(activeChat.userUid);
+      finalConversationId = conversation?.conversationId || null;
+      if (finalConversationId) {
+        setRuntimeConversationId(finalConversationId);
+        onConversationReady?.(conversation);
+      }
+    }
+
+    if (!finalConversationId) {
+      alert('채팅방이 준비된 뒤 회의를 시작할 수 있습니다.');
+      return;
+    }
+
+    openAppWindow({
+      id: 'meeting',
+      title: '화상회의',
+      width: 920,
+      height: 640,
+      payload: {
+        roomCode: getConversationMeetingCode(finalConversationId),
+        autoJoin: true,
+        conversationId: finalConversationId
+      }
+    });
+  };
 
   const handleSend = async () => {
     const value = drafts[draftKey] || '';
@@ -440,6 +474,20 @@ const DockedChatPanel = ({
           >
             window
           </Button>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenMeeting();
+            }}
+            title="화상회의 시작"
+            sx={{
+              border: `1px solid ${theme.palette.divider}`,
+              bgcolor: 'background.paper',
+            }}
+          >
+            <VideocamIcon fontSize="small" />
+          </IconButton>
           <Avatar
             sx={{
               width: 28,

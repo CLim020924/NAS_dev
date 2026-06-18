@@ -6,15 +6,29 @@ export const normalizeRoomCode = (value) => String(value || '').trim().toUpperCa
 
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 const MeetingContext = createContext(null);
+const GUEST_STORAGE_KEY = 'nas_meeting_guest';
+
+const readGuestProfile = () => {
+  try {
+    const raw = sessionStorage.getItem(GUEST_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+};
+
+const normalizeGuestName = (value) => String(value || '').trim().slice(0, 32);
 
 export const MeetingProvider = ({ children }) => {
-  const currentUser = useMemo(() => {
+  const [guestProfile, setGuestProfileState] = useState(() => readGuestProfile());
+  const readSignedInUser = useCallback(() => {
     try {
       return JSON.parse(localStorage.getItem('user')) || {};
     } catch (err) {
       return {};
     }
   }, []);
+  const [signedInUser, setSignedInUser] = useState(() => readSignedInUser());
 
   const [roomCode, setRoomCodeState] = useState(() => makeRoomCode());
   const [joinCode, setJoinCode] = useState('');
@@ -36,7 +50,48 @@ export const MeetingProvider = ({ children }) => {
   const activeRef = useRef(false);
   const joinedRef = useRef(false);
 
+  useEffect(() => {
+    const refreshSignedInUser = () => setSignedInUser(readSignedInUser());
+    window.addEventListener('storage', refreshSignedInUser);
+    window.addEventListener('nas:user-updated', refreshSignedInUser);
+    return () => {
+      window.removeEventListener('storage', refreshSignedInUser);
+      window.removeEventListener('nas:user-updated', refreshSignedInUser);
+    };
+  }, [readSignedInUser]);
+
+  const currentUser = useMemo(() => {
+    if (signedInUser?.userUid || signedInUser?.loginId || signedInUser?.username) return signedInUser;
+    if (!guestProfile?.nickname) return {};
+    return {
+      userUid: guestProfile.guestId,
+      loginId: guestProfile.guestId,
+      username: guestProfile.nickname,
+      displayName: `(guest) ${guestProfile.nickname}`,
+      role: 'GUEST',
+      isGuest: true
+    };
+  }, [guestProfile, signedInUser]);
+
   const displayName = currentUser.displayName || currentUser.nickname || currentUser.username || currentUser.loginId || '나';
+
+  const setGuestProfile = useCallback((nickname) => {
+    const safeName = normalizeGuestName(nickname);
+    if (!safeName) return null;
+    const profile = {
+      guestId: `guest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      nickname: safeName,
+      createdAt: new Date().toISOString()
+    };
+    sessionStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(profile));
+    setGuestProfileState(profile);
+    return profile;
+  }, []);
+
+  const clearGuestProfile = useCallback(() => {
+    sessionStorage.removeItem(GUEST_STORAGE_KEY);
+    setGuestProfileState(null);
+  }, []);
 
   const setRoomCode = useCallback((value) => {
     const normalized = normalizeRoomCode(value);
@@ -397,6 +452,9 @@ export const MeetingProvider = ({ children }) => {
     videoEnabled,
     screenSharing,
     currentUser,
+    guestProfile,
+    setGuestProfile,
+    clearGuestProfile,
     displayName,
     startMeeting,
     joinMeeting,
@@ -407,9 +465,9 @@ export const MeetingProvider = ({ children }) => {
     startScreenShare,
     stopScreenShare
   }), [
-    active, audioEnabled, currentUser, displayName, displayStream, error, joinCode, joining, joinMeeting,
+    active, audioEnabled, clearGuestProfile, currentUser, displayName, displayStream, error, guestProfile, joinCode, joining, joinMeeting,
     joinTypedMeeting, leaveMeeting, localStream, remotePeers, roomCode, screenSharing, setRoomCode,
-    startMeeting, startScreenShare, stopScreenShare, toggleAudio, toggleVideo, videoEnabled
+    setGuestProfile, startMeeting, startScreenShare, stopScreenShare, toggleAudio, toggleVideo, videoEnabled
   ]);
 
   return (

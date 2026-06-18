@@ -23,6 +23,7 @@ import AddIcon from '@mui/icons-material/Add';
 import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import ImageIcon from '@mui/icons-material/Image';
+import VideocamIcon from '@mui/icons-material/Videocam';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
@@ -44,6 +45,9 @@ const getAttachmentItemIcon = (item = {}) => {
   }
   return <InsertDriveFileIcon sx={{ fontSize: 18, color: 'text.secondary' }} />;
 };
+
+const getConversationMeetingCode = (conversationId) =>
+  `CHAT-${String(conversationId || '').replace(/[^a-zA-Z0-9]/g, '').slice(-24).toUpperCase() || Date.now().toString(36).toUpperCase()}`;
 
 const buildManifestFromFiles = (files = []) => {
   return files.map((file) => ({
@@ -112,6 +116,7 @@ const DedicatedChatWindowLayer = () => {
     toggleMaximize,
     openFolderWindowByPath,
     openFileWindowByPath,
+    openAppWindow,
   } = useWindows();
 
   const {
@@ -310,6 +315,21 @@ const DedicatedChatWindowLayer = () => {
     }
 
     await openFileWindowByPath(target.relativePath, target.name || null, false);
+  };
+
+  const handleOpenMeeting = (conversationId) => {
+    if (!conversationId) return;
+    openAppWindow({
+      id: 'meeting',
+      title: '화상회의',
+      width: 920,
+      height: 640,
+      payload: {
+        roomCode: getConversationMeetingCode(conversationId),
+        autoJoin: true,
+        conversationId,
+      },
+    });
   };
 
   const handleSaveReceived = async (conversationId, messageId) => {
@@ -584,6 +604,9 @@ const DedicatedChatWindowLayer = () => {
                   </Box>
 
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+                    <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenMeeting(conversationId); }} title="화상회의 시작">
+                      <VideocamIcon fontSize="small" />
+                    </IconButton>
                     <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleMinimize(win.id); }} title="최소화">
                       <RemoveIcon fontSize="small" />
                     </IconButton>
