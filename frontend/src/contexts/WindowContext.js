@@ -7,9 +7,14 @@ export const WindowProvider = ({ children }) => {
   const [openWindows, setOpenWindows] = useState([]);
   const [topZIndex, setTopZIndex] = useState(100);
   const [taskbarOrder, setTaskbarOrder] = useState([]);
+  const [fileManagerPath, setFileManagerPath] = useState(() => localStorage.getItem('nas_file_manager_path') || '/');
   
   // [추가] 현재 선택된(포커스된) 대상을 추적합니다. 기본값은 바탕화면('desktop')
   const [focusedContext, setFocusedContext] = useState('desktop');
+
+  useEffect(() => {
+    localStorage.setItem('nas_file_manager_path', fileManagerPath || '/');
+  }, [fileManagerPath]);
 
   useEffect(() => {
     setTaskbarOrder(prev => {
@@ -293,6 +298,7 @@ export const WindowProvider = ({ children }) => {
     <WindowContext.Provider value={{
       openWindows, setOpenWindows, topZIndex, setTopZIndex,
       taskbarOrder, setTaskbarOrder, taskbarWindows, activeWindowId,
+      fileManagerPath, setFileManagerPath,
       focusedContext, setFocusedContext, // 새로 추가된 포커스 상태 내보내기
       focusWindow, closeWindow, toggleMinimize, toggleMaximize, toggleFullscreen, fetchFiles,
       openFolderWindowByPath, openFileWindowByPath, openAppWindow

@@ -4,9 +4,18 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import axios from 'axios';
 import { useCustomTheme } from '../contexts/ThemeContext';
+import { useWindows } from '../contexts/WindowContext';
 
 const Settings = () => {
   const { themeName, setThemeName } = useCustomTheme();
+  const {
+    openWindows,
+    setOpenWindows,
+    focusedContext,
+    setFocusedContext,
+    fileManagerPath,
+    openFolderWindowByPath
+  } = useWindows();
   const [activeTab, setActiveTab] = useState(0);
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
@@ -51,6 +60,30 @@ const Settings = () => {
 
   const handleApprove = (id) => axios.post('/api/users/approve', { id }, { withCredentials: true }).then(() => window.location.reload());
   const handleReject = (id) => axios.post('/api/users/reject', { id }, { withCredentials: true }).then(() => setPendingUsers(prev => prev.filter(p => (p.userUid || p.id) !== id)));
+
+  const handleAppOpenModeChange = (nextMode) => {
+    if (nextMode === appOpenMode) return;
+
+    if (appOpenMode === 'window' && nextMode === 'inline') {
+      const openFolderWindows = openWindows.filter((win) => win.winType === 'folder');
+      if (openFolderWindows.length > 0) {
+        const ok = window.confirm('현재 열려 있는 폴더 창이 모두 닫힙니다. 계속하시겠습니까?');
+        if (!ok) return;
+        setOpenWindows((prev) => prev.filter((win) => win.winType !== 'folder'));
+        if (openFolderWindows.some((win) => win.id === focusedContext)) {
+          setFocusedContext('desktop');
+        }
+      }
+    }
+
+    if (appOpenMode === 'inline' && nextMode === 'window') {
+      openFolderWindowByPath(fileManagerPath || '/', fileManagerPath === '/' ? '내 클라우드' : null);
+    }
+
+    setAppOpenMode(nextMode);
+    localStorage.setItem('platform_app_open_mode', nextMode);
+    window.dispatchEvent(new Event('nas_settings_changed'));
+  };
   
   // 🔥 백엔드 융단폭격 저장 로직!
   const handleSaveChanges = async () => {
@@ -237,11 +270,7 @@ const Settings = () => {
                 <Select
                   size="small"
                   value={appOpenMode}
-                  onChange={(e) => {
-                    setAppOpenMode(e.target.value);
-                    localStorage.setItem('platform_app_open_mode', e.target.value);
-                    window.dispatchEvent(new Event('nas_settings_changed'));
-                  }}
+                  onChange={(e) => handleAppOpenModeChange(e.target.value)}
                   sx={{ minWidth: 220 }}
                 >
                   <MenuItem value="window">창으로 열기</MenuItem>

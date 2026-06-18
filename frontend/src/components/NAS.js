@@ -32,7 +32,7 @@ import { useWindows } from '../contexts/WindowContext';
 import { useTransfer } from '../contexts/TransferContext';
 import useShortcuts from '../hooks/useShortcuts';
 
-const NAS = () => {
+const NAS = ({ showWorkspace = true }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const fileInputRef = useRef(null);
@@ -63,12 +63,16 @@ const NAS = () => {
 
   const [desktopItems, setDesktopItems] = useState([]);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
+  const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
 
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
   useEffect(() => {
-    const handleStorageChange = () => setShowExt(localStorage.getItem('nas_show_extensions') === 'true');
-    window.addEventListener('nas_settings_changed', handleStorageChange);
-    return () => window.removeEventListener('nas_settings_changed', handleStorageChange);
+    const handleSettingsChange = () => {
+      setShowExt(localStorage.getItem('nas_show_extensions') === 'true');
+      setAppOpenMode(localStorage.getItem('platform_app_open_mode') || 'window');
+    };
+    window.addEventListener('nas_settings_changed', handleSettingsChange);
+    return () => window.removeEventListener('nas_settings_changed', handleSettingsChange);
   }, []);
 
   const getDisplayName = (item) => {
@@ -100,8 +104,10 @@ const NAS = () => {
   const [dragOverTarget, setDragOverTarget] = useState(null);
   const [iconPositions, setIconPositions] = useState(() => JSON.parse(localStorage.getItem('msp_icon_positions') || '{}'));
   
-  const { openWindows, setOpenWindows, topZIndex, setTopZIndex, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles } = useWindows();
+  const { openWindows, setOpenWindows, topZIndex, setTopZIndex, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles, fileManagerPath, setFileManagerPath } = useWindows();
   const { startUpload } = useTransfer();
+  const folderInlineMode = appOpenMode === 'inline';
+  const currentFileManagerPath = folderInlineMode ? ensureSlash(fileManagerPath || '/') : '/';
 
   const desktopItemsRef = useRef(desktopItems); desktopItemsRef.current = desktopItems;
   const openWindowsRef = useRef(openWindows); openWindowsRef.current = openWindows;
@@ -340,7 +346,7 @@ const NAS = () => {
     };
     window.addEventListener('keydown', handleEscAndHover);
     return () => window.removeEventListener('keydown', handleEscAndHover);
-  }, [setOpenWindows]);
+  }, [setOpenWindows, folderInlineMode, fileManagerPath]);
 
   const handleCloseSnackbar = () => setSnackbar(prev => ({ ...prev, open: false }));
 
@@ -371,21 +377,23 @@ const NAS = () => {
   };
 
 
-  const loadDesktopItems = useCallback(async () => {
-    try { const response = await axios.get(`/api/files?path=/&t=${Date.now()}`, { withCredentials: true }); setDesktopItems(response.data || []); } catch (err) { showError('바탕화면 로드', err); }
-  }, [isMobile]);
+  const loadDesktopItems = useCallback(async (pathOverride = null) => {
+    const targetPath = ensureSlash(pathOverride || currentFileManagerPath || '/');
+    try { const response = await axios.get(`/api/files?path=${encodeURIComponent(targetPath)}&t=${Date.now()}`, { withCredentials: true }); setDesktopItems(response.data || []); } catch (err) { showError('파일관리자 로드', err); }
+  }, [currentFileManagerPath]);
   useEffect(() => { loadDesktopItems(); }, [loadDesktopItems]);
 
   useEffect(() => {
     const syncInterval = setInterval(async () => {
       if (inlineEditRef.current || contextMenuRef.current) return;
-      try { const res = await axios.get(`/api/files?path=/&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(desktopItemsRef.current)) setDesktopItems(res.data || []); } catch(e) {}
+      const listPath = ensureSlash(folderInlineMode ? (fileManagerPath || '/') : '/');
+      try { const res = await axios.get(`/api/files?path=${encodeURIComponent(listPath)}&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(desktopItemsRef.current)) setDesktopItems(res.data || []); } catch(e) {}
       openWindowsRef.current.forEach(async (win) => {
         if (win.winType === 'folder') { try { const res = await axios.get(`/api/files?path=${encodeURIComponent(win.currentPath)}&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(win.files)) setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, files: res.data || [] } : w)); } catch(e) {} }
       });
     }, 3000); 
     return () => clearInterval(syncInterval);
-  }, [setOpenWindows]);
+  }, [setOpenWindows, folderInlineMode, fileManagerPath]);
 
   useEffect(() => {
     if (desktopItems.length === 0) return; 
@@ -399,7 +407,7 @@ const NAS = () => {
     });
   }, [desktopItems]);
 
-  const refreshPath = (path) => { const safePath = ensureSlash(path); if (safePath === '/') loadDesktopItems(); openWindows.forEach(w => { if (w.winType === 'folder' && w.currentPath === safePath) setTimeout(() => fetchFiles(w.id, safePath), 50); }); window.dispatchEvent(new CustomEvent('nas_tree_refresh')); };
+  const refreshPath = (path) => { const safePath = ensureSlash(path); if (safePath === currentFileManagerPath || safePath === '/') loadDesktopItems(); openWindows.forEach(w => { if (w.winType === 'folder' && w.currentPath === safePath) setTimeout(() => fetchFiles(w.id, safePath), 50); }); window.dispatchEvent(new CustomEvent('nas_tree_refresh')); };
 
   useEffect(() => {
     const handleTransferCompleted = (event) => {
@@ -411,7 +419,7 @@ const NAS = () => {
     return () => window.removeEventListener('nas_transfer_completed', handleTransferCompleted);
   }, [openWindows]);
 
-  const getActiveTargetPath = () => { if (!focusedContext || focusedContext === 'desktop') return '/'; const activeWin = openWindows.find(w => w.id === focusedContext); if (!activeWin) return '/'; return activeWin.winType === 'folder' ? activeWin.currentPath : ensureSlash(activeWin.fullPath.substring(0, activeWin.fullPath.lastIndexOf('/'))); };
+  const getActiveTargetPath = () => { if (!focusedContext || focusedContext === 'desktop') return currentFileManagerPath; const activeWin = openWindows.find(w => w.id === focusedContext); if (!activeWin) return currentFileManagerPath; return activeWin.winType === 'folder' ? activeWin.currentPath : ensureSlash(activeWin.fullPath.substring(0, activeWin.fullPath.lastIndexOf('/'))); };
   const getSelectedItemsData = useCallback(() => { let currentFiles = focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || []); const activeWin = openWindows.find(w => w.id === focusedContext); if (activeWin && activeWin.winType === 'folder') { currentFiles = [...currentFiles, { fullPath: activeWin.currentPath, name: activeWin.currentPath === '/' ? activeWin.name : activeWin.currentPath.split('/').pop(), type: 'folder' }]; } return selectedItems.map(path => { const found = currentFiles.find(f => ensureSlash(f.fullPath) === path); if (found) return found; const name = path === '/' ? 'Root' : path.split('/').pop(); return { fullPath: path, name, type: name.includes('.') ? 'file' : 'folder' }; }); }, [selectedItems, focusedContext, desktopItems, openWindows]);
   const getItemsToProcess = (clickedItem) => selectedItems.includes(ensureSlash(clickedItem.fullPath)) && selectedItems.length > 1 ? getSelectedItemsData() : [clickedItem];
 
@@ -455,7 +463,16 @@ const NAS = () => {
     if (item.type === 'linked-device') {
       requestLinkedDeviceAgentOpen(item);
     }
-    const winId = `desk_${item.name}`; const targetPath = ensureSlash(item.path || item.fullPath);
+    const targetPath = ensureSlash(item.path || item.fullPath || '/');
+    if (folderInlineMode) {
+      setFileManagerPath(targetPath);
+      setFocusedContext('desktop');
+      setSelectedItems([]);
+      setInlineEdit(null);
+      return;
+    }
+
+    const winId = `desk_${item.name}`;
     if (!openWindows.find(w => w.id === winId && w.id !== 'system_root')) {
       const newWinId = item.id === 'system_root' ? 'system_root' : winId; if(openWindows.find(w => w.id === newWinId)) return focusWindow(newWinId);
       setOpenWindows(prev => [...prev, { ...item, id: newWinId, winType: 'folder', basePath: targetPath, currentPath: targetPath, files: [], isLoaded: false, zIndex: topZIndex + 1, sidebarOpen: !isMobile, width: 900, height: 650, x: 100 + (prev.length * 30), y: 50 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
@@ -1902,7 +1919,9 @@ const NAS = () => {
     : { textAlign: 'center', cursor: 'pointer', width: '100%', minWidth: 0, zIndex: 10 };
 
   return (
-    <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%', userSelect: 'none', bgcolor: 'background.default', '& .react-resizable-handle:hover': { backgroundColor: theme.palette.primary.main, opacity: 0.5 }}}>
+    <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%', userSelect: 'none', bgcolor: showWorkspace ? 'background.default' : 'transparent', pointerEvents: showWorkspace ? 'auto' : 'none', '& .react-resizable-handle:hover': { backgroundColor: theme.palette.primary.main, opacity: 0.5 }}}>
+      {showWorkspace && (
+        <>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, px: { xs: 1.5, sm: 2.5 }, py: 1.25, minHeight: { xs: 62, sm: 68 }, bgcolor: 'background.paper', borderBottom: `1px solid ${theme.palette.divider}`, flexShrink: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
           <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(theme.palette.primary.main, 0.10), border: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`, flexShrink: 0 }}>
@@ -2000,7 +2019,7 @@ const NAS = () => {
             />
           </Box>
 
-          <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, '/', 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: '/', windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: '/', windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, minHeight: 0, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: 'grid', gridTemplateColumns: { xs: 'repeat(auto-fill, minmax(92px, 1fr))', sm: 'repeat(auto-fill, minmax(132px, 1fr))', lg: 'repeat(auto-fill, minmax(148px, 1fr))' }, alignContent: 'flex-start', gap: { xs: 1.25, sm: 1.75 }, px: { xs: 1.5, sm: 3 }, pb: { xs: 8, sm: 3 } }}>
+          <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, currentFileManagerPath, 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, minHeight: 0, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: 'grid', gridTemplateColumns: { xs: 'repeat(auto-fill, minmax(92px, 1fr))', sm: 'repeat(auto-fill, minmax(132px, 1fr))', lg: 'repeat(auto-fill, minmax(148px, 1fr))' }, alignContent: 'flex-start', gap: { xs: 1.25, sm: 1.75 }, px: { xs: 1.5, sm: 3 }, pb: { xs: 8, sm: 3 } }}>
         <motion.div onClick={(e) => { e.stopPropagation(); setSelectedItems(['system_root']); if (isMobile) openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); }} onDoubleClick={(e) => { e.stopPropagation(); if(!isMobile) openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); }} style={desktopCardStyle}>
           <Box sx={{ ...desktopIconBaseSx, minHeight: { xs: 108, sm: 128 }, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.background.paper, 0.72), borderColor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.34) : theme.palette.divider, boxShadow: `0 10px 30px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.24 : 0.07)}` }}><StorageIcon sx={{ fontSize: isMobile ? 40 : 50, color: isAdmin ? theme.palette.error.main : theme.palette.primary.main }} /><Typography variant="body2" sx={{ mt: 1, fontWeight: 800, fontSize: isMobile ? '0.74rem' : '0.86rem', lineHeight: 1.2 }}>{rootLabel}</Typography>
 </Box>
@@ -2030,10 +2049,12 @@ const NAS = () => {
 </Box>
 </Box>
 </Box>
+</>
+)}
 
 
       {/* 🔥 [버튼 3대장] 파일, 폴더, 업로드 버튼 배치! */}
-      <Box sx={{ position: 'fixed', bottom: 14, right: 12, display: (!isMobile || openWindows.some(w => w.isImmersive) || (isMobile && openWindows.find(w => w.id === focusedContext)?.winType === 'file')) ? 'none' : 'flex', gap: 1, zIndex: 1200, p: 0.75, borderRadius: 999, bgcolor: alpha(theme.palette.background.paper, 0.92), border: `1px solid ${theme.palette.divider}`, boxShadow: theme.shadows[8] }}>
+      <Box sx={{ position: 'fixed', bottom: 14, right: 12, display: (!showWorkspace || !isMobile || openWindows.some(w => w.isImmersive) || (isMobile && openWindows.find(w => w.id === focusedContext)?.winType === 'file')) ? 'none' : 'flex', gap: 1, zIndex: 1200, p: 0.75, borderRadius: 999, bgcolor: alpha(theme.palette.background.paper, 0.92), border: `1px solid ${theme.palette.divider}`, boxShadow: theme.shadows[8] }}>
         <input type="file" multiple ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileUpload} />
         <Button variant="contained" color="secondary" size={isMobile ? "small" : "medium"} onClick={() => handleUploadClick(getActiveTargetPath())} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="업로드"><UploadFileIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "업로드"}</Button>
         <Button variant="contained" color="info" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFileStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="새 파일"><NoteAddIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 파일"}</Button>
@@ -2051,7 +2072,7 @@ const NAS = () => {
 
           return (
             <Rnd 
-              key={win.id} style={{ display: win.isMinimized ? 'none' : 'block', zIndex: win.isImmersive ? 99999 : win.zIndex, position: win.isImmersive ? 'fixed' : 'absolute', top: win.isImmersive ? 0 : 'auto', left: win.isImmersive ? 0 : 'auto' }} disableDragging={isMobile || win.isMaximized || win.isImmersive} enableResizing={!isMobile && !win.isMaximized && !win.isImmersive} 
+              key={win.id} style={{ display: win.isMinimized ? 'none' : 'block', zIndex: win.isImmersive ? 99999 : win.zIndex, position: win.isImmersive ? 'fixed' : 'absolute', top: win.isImmersive ? 0 : 'auto', left: win.isImmersive ? 0 : 'auto', pointerEvents: 'auto' }} disableDragging={isMobile || win.isMaximized || win.isImmersive} enableResizing={!isMobile && !win.isMaximized && !win.isImmersive} 
               minWidth={300} minHeight={350} size={isMobile ? { width: '100%', height: '100%' } : { width: winStyles.width, height: winStyles.height }} position={isMobile ? { x: 0, y: 0 } : { x: winStyles.x, y: winStyles.y }} 
               onMouseDown={() => focusWindow(win.id)} onDragStop={(e, d) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, x: d.x, y: d.y } : w))} onResizeStop={(e, direction, ref, delta, position) => setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, width: ref.style.width, height: ref.style.height, x: position.x, y: position.y } : w))} dragHandleClassName="window-header-drag-handle" bounds="parent" 
             >

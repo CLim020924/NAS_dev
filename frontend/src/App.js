@@ -69,19 +69,6 @@ const PersistentMainRoutes = () => {
 
   return (
     <Box sx={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
-      <Box
-        sx={{
-          position: isNasRoute ? 'relative' : 'absolute',
-          inset: isNasRoute ? 'auto' : 0,
-          left: isNasRoute ? 'auto' : '-100000px',
-          width: '100%',
-          height: '100%',
-          overflow: 'hidden'
-        }}
-      >
-        <NAS />
-      </Box>
-
       {!isNasRoute && (
         <Routes>
           <Route path="/platform" element={<ServicePlatform />} />
@@ -90,6 +77,20 @@ const PersistentMainRoutes = () => {
           <Route path="*" element={<Navigate to="/platform" replace />} />
         </Routes>
       )}
+
+      <Box
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          overflow: 'hidden',
+          zIndex: isNasRoute ? 0 : 30,
+          pointerEvents: isNasRoute ? 'auto' : 'none'
+        }}
+      >
+        <NAS showWorkspace={isNasRoute} />
+      </Box>
     </Box>
   );
 };
