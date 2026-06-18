@@ -548,6 +548,45 @@ app.post('/api/users/approve', (req, res) => {
 
 // 🔥 [소켓] 접속 중인 유저 기기 명부
 const activeUsers = new Map();
+const meetingRooms = new Map();
+
+const normalizeMeetingRoomId = (value) =>
+  String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 40);
+
+const getMeetingParticipant = (socket, fallback = {}) => ({
+  socketId: socket.id,
+  userUid: socket.userUid || fallback.userUid || fallback.id || socket.id,
+  loginId: socket.loginId || fallback.loginId || fallback.username || '',
+  displayName: fallback.displayName || fallback.nickname || fallback.username || socket.loginId || '참가자',
+  audioEnabled: fallback.audioEnabled !== false,
+  videoEnabled: fallback.videoEnabled !== false,
+  screenSharing: !!fallback.screenSharing
+});
+
+const leaveMeetingRoom = (socket, roomId) => {
+  const normalizedRoomId = normalizeMeetingRoomId(roomId || socket.meetingRoomId);
+  if (!normalizedRoomId) return;
+
+  const room = meetingRooms.get(normalizedRoomId);
+  if (!room) {
+    socket.leave(`meeting:${normalizedRoomId}`);
+    if (socket.meetingRoomId === normalizedRoomId) socket.meetingRoomId = '';
+    return;
+  }
+
+  room.participants.delete(socket.id);
+  socket.leave(`meeting:${normalizedRoomId}`);
+  socket.to(`meeting:${normalizedRoomId}`).emit('meeting:peer-left', {
+    roomId: normalizedRoomId,
+    socketId: socket.id
+  });
+
+  if (room.participants.size === 0) {
+    meetingRooms.delete(normalizedRoomId);
+  }
+
+  if (socket.meetingRoomId === normalizedRoomId) socket.meetingRoomId = '';
+};
 
 io.on('connection', (socket) => {
   const cookies = socket.handshake.headers.cookie;
@@ -617,8 +656,75 @@ io.on('connection', (socket) => {
       io.emit('membersChanged'); 
     } catch(e){}
   }
+
+  socket.on('meeting:join', ({ roomId, user = {} } = {}) => {
+    const normalizedRoomId = normalizeMeetingRoomId(roomId);
+    if (!normalizedRoomId) {
+      socket.emit('meeting:error', { message: '회의 코드가 올바르지 않습니다.' });
+      return;
+    }
+
+    if (socket.meetingRoomId && socket.meetingRoomId !== normalizedRoomId) {
+      leaveMeetingRoom(socket, socket.meetingRoomId);
+    }
+
+    const room = meetingRooms.get(normalizedRoomId) || { participants: new Map(), createdAt: nowIso() };
+    const participant = getMeetingParticipant(socket, user);
+    const existingParticipants = [...room.participants.values()].filter((item) => item.socketId !== socket.id);
+
+    room.participants.set(socket.id, participant);
+    meetingRooms.set(normalizedRoomId, room);
+    socket.meetingRoomId = normalizedRoomId;
+    socket.join(`meeting:${normalizedRoomId}`);
+
+    socket.emit('meeting:participants', {
+      roomId: normalizedRoomId,
+      participants: existingParticipants
+    });
+
+    socket.to(`meeting:${normalizedRoomId}`).emit('meeting:peer-joined', {
+      roomId: normalizedRoomId,
+      participant
+    });
+  });
+
+  socket.on('meeting:signal', ({ roomId, targetSocketId, signal } = {}) => {
+    const normalizedRoomId = normalizeMeetingRoomId(roomId);
+    if (!normalizedRoomId || !targetSocketId || !signal) return;
+
+    io.to(targetSocketId).emit('meeting:signal', {
+      roomId: normalizedRoomId,
+      fromSocketId: socket.id,
+      signal
+    });
+  });
+
+  socket.on('meeting:media-state', ({ roomId, audioEnabled, videoEnabled, screenSharing } = {}) => {
+    const normalizedRoomId = normalizeMeetingRoomId(roomId || socket.meetingRoomId);
+    const room = meetingRooms.get(normalizedRoomId);
+    if (!room || !room.participants.has(socket.id)) return;
+
+    const participant = room.participants.get(socket.id);
+    const nextParticipant = {
+      ...participant,
+      audioEnabled: audioEnabled !== false,
+      videoEnabled: videoEnabled !== false,
+      screenSharing: !!screenSharing
+    };
+
+    room.participants.set(socket.id, nextParticipant);
+    socket.to(`meeting:${normalizedRoomId}`).emit('meeting:peer-media-state', {
+      roomId: normalizedRoomId,
+      participant: nextParticipant
+    });
+  });
+
+  socket.on('meeting:leave', ({ roomId } = {}) => {
+    leaveMeetingRoom(socket, roomId);
+  });
   
   socket.on('disconnect', () => { 
+    leaveMeetingRoom(socket);
     if (socket.userId) {
       // 🚨 내가 다른 기기로 접속해서 강제로 끊긴 게 아니라, 진짜 창을 닫아서 끊긴 경우에만 장부에서 삭제
       if (activeUsers.get(socket.userId) === socket.id) {
