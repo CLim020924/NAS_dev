@@ -572,3 +572,5 @@ export const useChat = () => {
   }
   return ctx;
 };
+
+export const useOptionalChat = () => useContext(ChatContext);

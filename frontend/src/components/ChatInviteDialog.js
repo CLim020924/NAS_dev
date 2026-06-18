@@ -13,7 +13,7 @@ import {
   useTheme,
 } from '@mui/material';
 import axios from 'axios';
-import { useChat } from '../contexts/ChatContext';
+import { useOptionalChat } from '../contexts/ChatContext';
 
 const parseInvitees = (value) =>
   String(value || '')
@@ -30,11 +30,7 @@ const ChatInviteDialog = ({
   onComplete = () => {},
 }) => {
   const theme = useTheme();
-  const {
-    createGroupConversation,
-    inviteToConversation,
-    loadConversations,
-  } = useChat();
+  const chat = useOptionalChat();
 
   const isGroup = conversation?.type === 'group' || conversation?.conversationType === 'group';
   const hasConversation = !!conversation?.conversationId;
@@ -97,18 +93,41 @@ const ChatInviteDialog = ({
 
     setSubmitting(true);
     try {
-      const updatedConversation = isGroup && hasConversation
-        ? await inviteToConversation(conversation.conversationId, {
+      let updatedConversation = null;
+      if (isGroup && hasConversation) {
+        if (chat?.inviteToConversation) {
+          updatedConversation = await chat.inviteToConversation(conversation.conversationId, {
             inviteeUids: selectedInviteUids,
             invitees: typedInvitees,
-          })
-        : await createGroupConversation({
+          });
+        } else {
+          const res = await axios.post(
+            `/api/chat/group/${conversation.conversationId}/invite`,
+            { inviteeUids: selectedInviteUids, invitees: typedInvitees },
+            { withCredentials: true }
+          );
+          updatedConversation = res.data?.conversation || null;
+        }
+      } else if (chat?.createGroupConversation) {
+        updatedConversation = await chat.createGroupConversation({
+          title: roomTitle || defaultTitle || '그룹 채팅',
+          inviteeUids,
+          invitees: typedInvitees,
+        });
+      } else {
+        const res = await axios.post(
+          '/api/chat/group',
+          {
             title: roomTitle || defaultTitle || '그룹 채팅',
             inviteeUids,
             invitees: typedInvitees,
-          });
+          },
+          { withCredentials: true }
+        );
+        updatedConversation = res.data?.conversation || null;
+      }
 
-      await loadConversations({ silent: true });
+      await chat?.loadConversations?.({ silent: true });
       onComplete(updatedConversation);
       onClose();
     } catch (err) {
