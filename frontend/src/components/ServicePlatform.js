@@ -24,12 +24,6 @@ function ServicePlatform() {
   const openApp = (app) => {
     const mode = appOpenMode();
 
-    if (app.id === 'meeting') {
-      openAppWindow(app);
-      setInlineApp(null);
-      return;
-    }
-
     if (mode !== 'window' && app.component) {
       setInlineApp(app);
       return;
@@ -70,6 +64,7 @@ function ServicePlatform() {
         <Box sx={{ flex: 1, minHeight: 0 }}>
           {inlineApp.id === 'meeting' ? (
             <MeetingApp
+              inWindow={false}
               onOpenWindow={(payload) => {
                 openAppWindow({ ...inlineApp, payload });
                 setInlineApp(null);

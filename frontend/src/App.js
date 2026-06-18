@@ -19,6 +19,7 @@ import GlobalAppWindowLayer from './components/GlobalAppWindowLayer';
 import { WindowProvider } from './contexts/WindowContext';
 import { TransferProvider } from './contexts/TransferContext';
 import { ChatProvider } from './contexts/ChatContext';
+import { MeetingProvider } from './contexts/MeetingContext';
 import { CustomThemeProvider, useCustomTheme } from './contexts/ThemeContext';
 import useNotifications from './notifications/useNotifications';
 
@@ -292,6 +293,7 @@ function AppContent() {
           <Route path="/*" element={
             <PrivateRoute>
               <TransferProvider>
+                <MeetingProvider>
                 <Box sx={{ display: 'flex', height: '100vh', flexDirection: 'column', overflow: 'hidden' }}>
                 <TopBar
                   onOpenNotifications={() => setNotificationsOpen(true)}
@@ -332,6 +334,7 @@ function AppContent() {
                   <PersistentMainRoutes />
                 </Box>
                 </Box>
+                </MeetingProvider>
               </TransferProvider>
             </PrivateRoute>
           } />

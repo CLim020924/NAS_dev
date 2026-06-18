@@ -64,7 +64,7 @@ const GlobalAppWindowLayer = () => {
 
   const renderAppContent = (win) => {
     if (win.appId === 'meeting') {
-      return <MeetingApp initialRoomCode={win.payload?.roomCode} autoJoin={!!win.payload?.autoJoin} />;
+      return <MeetingApp inWindow initialRoomCode={win.payload?.roomCode} autoJoin={!!win.payload?.autoJoin} />;
     }
     return null;
   };

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import {
   Alert,
   Avatar,
@@ -18,16 +18,13 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import GroupsIcon from '@mui/icons-material/Groups';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PresentToAllIcon from '@mui/icons-material/PresentToAll';
 import StopScreenShareIcon from '@mui/icons-material/StopScreenShare';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import VideocamOffIcon from '@mui/icons-material/VideocamOff';
 import { alpha, useTheme } from '@mui/material/styles';
-import socket from '../socket';
-
-const makeRoomCode = () => Math.random().toString(36).slice(2, 8).toUpperCase();
-const normalizeRoomCode = (value) => String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 40);
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+import { normalizeRoomCode, useMeetingSession } from '../contexts/MeetingContext';
 
 const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEnabled = true, screenSharing = false, local = false }) => {
   const videoRef = useRef(null);
@@ -70,18 +67,7 @@ const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEna
         </Box>
       )}
 
-      <Stack
-        direction="row"
-        spacing={0.75}
-        alignItems="center"
-        sx={{
-          position: 'absolute',
-          left: 10,
-          right: 10,
-          bottom: 10,
-          minWidth: 0
-        }}
-      >
+      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ position: 'absolute', left: 10, right: 10, bottom: 10, minWidth: 0 }}>
         <Chip
           size="small"
           label={`${label || '참가자'}${local ? ' · 나' : ''}`}
@@ -94,68 +80,51 @@ const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEna
   );
 };
 
-const MeetingApp = ({ initialRoomCode = '', autoJoin = false }) => {
+const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, onOpenWindow = null }) => {
   const theme = useTheme();
-  const currentUser = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem('user')) || {};
-    } catch (err) {
-      return {};
-    }
-  }, []);
-
-  const queryRoom = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return normalizeRoomCode(initialRoomCode || params.get('meeting'));
-  }, [initialRoomCode]);
-
-  const [roomCode, setRoomCode] = useState(() => queryRoom || makeRoomCode());
-  const [joinCode, setJoinCode] = useState(queryRoom || '');
-  const [active, setActive] = useState(false);
-  const [joining, setJoining] = useState(false);
-  const [error, setError] = useState('');
-  const [localStream, setLocalStream] = useState(null);
-  const [displayStream, setDisplayStream] = useState(null);
-  const [remotePeers, setRemotePeers] = useState({});
-  const [audioEnabled, setAudioEnabled] = useState(true);
-  const [videoEnabled, setVideoEnabled] = useState(true);
-  const [screenSharing, setScreenSharing] = useState(false);
-  const autoJoinStartedRef = useRef(false);
-
-  const peersRef = useRef(new Map());
-  const pendingIceRef = useRef(new Map());
-  const localStreamRef = useRef(null);
-  const cameraVideoTrackRef = useRef(null);
-  const roomCodeRef = useRef(roomCode);
-  const activeRef = useRef(false);
-  const joinedRef = useRef(false);
-
-  const inviteLink = `${window.location.origin}/platform?meeting=${roomCode}`;
-  const displayName = currentUser.displayName || currentUser.nickname || currentUser.username || currentUser.loginId || '나';
-
-  useEffect(() => {
-    roomCodeRef.current = roomCode;
-  }, [roomCode]);
-
-  const participantPayload = useCallback(() => ({
-    userUid: currentUser.userUid,
-    loginId: currentUser.loginId || currentUser.id,
-    username: currentUser.username || currentUser.loginId || currentUser.id,
-    displayName,
+  const session = useMeetingSession();
+  const {
+    roomCode,
+    setRoomCode,
+    joinCode,
+    setJoinCode,
+    active,
+    joining,
+    error,
+    setError,
+    localStream,
+    displayStream,
+    remotePeers,
     audioEnabled,
     videoEnabled,
-    screenSharing
-  }), [audioEnabled, currentUser, displayName, screenSharing, videoEnabled]);
+    screenSharing,
+    displayName,
+    startMeeting,
+    joinMeeting,
+    joinTypedMeeting,
+    leaveMeeting,
+    toggleAudio,
+    toggleVideo,
+    startScreenShare,
+    stopScreenShare
+  } = session;
 
-  const emitMediaState = useCallback((next = {}) => {
-    socket.emit('meeting:media-state', {
-      roomId: roomCodeRef.current,
-      audioEnabled,
-      videoEnabled,
-      screenSharing,
-      ...next
-    });
-  }, [audioEnabled, screenSharing, videoEnabled]);
+  const remoteList = useMemo(() => Object.values(remotePeers), [remotePeers]);
+  const previewStream = displayStream || localStream;
+  const inviteLink = `${window.location.origin}/platform?meeting=${roomCode}`;
+
+  useEffect(() => {
+    const normalized = normalizeRoomCode(initialRoomCode);
+    if (normalized && normalized !== roomCode && !active) {
+      setRoomCode(normalized);
+    }
+  }, [active, initialRoomCode, roomCode, setRoomCode]);
+
+  useEffect(() => {
+    if (autoJoin && !active && !joining) {
+      joinMeeting(initialRoomCode || roomCode);
+    }
+  }, [active, autoJoin, initialRoomCode, joinMeeting, joining, roomCode]);
 
   const copyInvite = async () => {
     try {
@@ -165,328 +134,9 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false }) => {
     }
   };
 
-  const getLocalMedia = useCallback(async () => {
-    if (localStreamRef.current) return localStreamRef.current;
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('이 브라우저는 카메라/마이크 접근을 지원하지 않습니다.');
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    localStreamRef.current = stream;
-    cameraVideoTrackRef.current = stream.getVideoTracks()[0] || null;
-    setLocalStream(stream);
-    setAudioEnabled(true);
-    setVideoEnabled(true);
-    return stream;
-  }, []);
-
-  const updateRemotePeer = useCallback((socketId, updater) => {
-    setRemotePeers((prev) => {
-      const current = prev[socketId] || { socketId };
-      return { ...prev, [socketId]: { ...current, ...updater(current) } };
-    });
-  }, []);
-
-  const removePeer = useCallback((socketId) => {
-    const peer = peersRef.current.get(socketId);
-    if (peer) peer.close();
-    peersRef.current.delete(socketId);
-    pendingIceRef.current.delete(socketId);
-    setRemotePeers((prev) => {
-      const next = { ...prev };
-      delete next[socketId];
-      return next;
-    });
-  }, []);
-
-  const createPeerConnection = useCallback((targetSocketId, participant = {}) => {
-    const existing = peersRef.current.get(targetSocketId);
-    if (existing) return existing;
-
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const stream = localStreamRef.current;
-
-    if (stream) {
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-    }
-
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      socket.emit('meeting:signal', {
-        roomId: roomCodeRef.current,
-        targetSocketId,
-        signal: { type: 'ice', candidate: event.candidate }
-      });
-    };
-
-    pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      updateRemotePeer(targetSocketId, () => ({
-        ...participant,
-        socketId: targetSocketId,
-        stream: remoteStream
-      }));
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
-        updateRemotePeer(targetSocketId, () => ({ connectionState: pc.connectionState }));
-      }
-    };
-
-    peersRef.current.set(targetSocketId, pc);
-    updateRemotePeer(targetSocketId, () => ({
-      ...participant,
-      socketId: targetSocketId,
-      audioEnabled: participant.audioEnabled !== false,
-      videoEnabled: participant.videoEnabled !== false,
-      screenSharing: !!participant.screenSharing
-    }));
-    return pc;
-  }, [updateRemotePeer]);
-
-  const flushPendingIce = useCallback(async (socketId, pc) => {
-    const pending = pendingIceRef.current.get(socketId) || [];
-    pendingIceRef.current.delete(socketId);
-    for (const candidate of pending) {
-      try {
-        await pc.addIceCandidate(candidate);
-      } catch (err) {
-        console.warn('ICE candidate apply failed', err);
-      }
-    }
-  }, []);
-
-  const createOfferForPeer = useCallback(async (participant) => {
-    if (!participant?.socketId || !localStreamRef.current) return;
-    const pc = createPeerConnection(participant.socketId, participant);
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    socket.emit('meeting:signal', {
-      roomId: roomCodeRef.current,
-      targetSocketId: participant.socketId,
-      signal: pc.localDescription
-    });
-  }, [createPeerConnection]);
-
-  const leaveMeeting = useCallback(() => {
-    socket.emit('meeting:leave', { roomId: roomCodeRef.current });
-    joinedRef.current = false;
-    activeRef.current = false;
-    setActive(false);
-    setJoining(false);
-    setRemotePeers({});
-    peersRef.current.forEach((peer) => peer.close());
-    peersRef.current.clear();
-    pendingIceRef.current.clear();
-
-    if (displayStream) {
-      displayStream.getTracks().forEach((track) => track.stop());
-      setDisplayStream(null);
-    }
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = null;
-      cameraVideoTrackRef.current = null;
-      setLocalStream(null);
-    }
-
-    setScreenSharing(false);
-  }, [displayStream]);
-
-  const joinMeeting = useCallback(async (requestedCode = roomCode) => {
-    const nextRoomCode = normalizeRoomCode(requestedCode);
-    if (!nextRoomCode) return;
-
-    try {
-      setError('');
-      setJoining(true);
-      setRoomCode(nextRoomCode);
-      roomCodeRef.current = nextRoomCode;
-      await getLocalMedia();
-      activeRef.current = true;
-      joinedRef.current = true;
-      setActive(true);
-      socket.emit('meeting:join', {
-        roomId: nextRoomCode,
-        user: participantPayload()
-      });
-    } catch (err) {
-      setError(err.message || '회의를 시작할 수 없습니다.');
-      leaveMeeting();
-    } finally {
-      setJoining(false);
-    }
-  }, [getLocalMedia, leaveMeeting, participantPayload, roomCode]);
-
-  const startMeeting = () => {
-    const nextRoomCode = normalizeRoomCode(roomCode) || makeRoomCode();
-    joinMeeting(nextRoomCode);
-  };
-
-  const joinTypedMeeting = () => {
-    joinMeeting(joinCode || roomCode);
-  };
-
-  useEffect(() => {
-    if (!autoJoin || autoJoinStartedRef.current) return;
-    autoJoinStartedRef.current = true;
-    joinMeeting(roomCode);
-  }, [autoJoin, joinMeeting, roomCode]);
-
-  const toggleAudio = () => {
-    const next = !audioEnabled;
-    localStreamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = next;
-    });
-    setAudioEnabled(next);
-    emitMediaState({ audioEnabled: next });
-  };
-
-  const toggleVideo = () => {
-    if (screenSharing) return;
-    const next = !videoEnabled;
-    localStreamRef.current?.getVideoTracks().forEach((track) => {
-      track.enabled = next;
-    });
-    setVideoEnabled(next);
-    emitMediaState({ videoEnabled: next });
-  };
-
-  const stopScreenShare = useCallback(async () => {
-    const cameraTrack = cameraVideoTrackRef.current;
-    peersRef.current.forEach((peer) => {
-      const sender = peer.getSenders().find((item) => item.track?.kind === 'video');
-      if (sender && cameraTrack) sender.replaceTrack(cameraTrack);
-    });
-    if (displayStream) {
-      displayStream.getTracks().forEach((track) => track.stop());
-      setDisplayStream(null);
-    }
-    setScreenSharing(false);
-    setVideoEnabled(cameraTrack?.enabled !== false);
-    emitMediaState({ screenSharing: false, videoEnabled: cameraTrack?.enabled !== false });
-  }, [displayStream, emitMediaState]);
-
-  const startScreenShare = async () => {
-    try {
-      if (!navigator.mediaDevices?.getDisplayMedia) {
-        throw new Error('이 브라우저는 화면공유를 지원하지 않습니다.');
-      }
-      if (!active) await joinMeeting(roomCode);
-
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const screenTrack = stream.getVideoTracks()[0];
-      if (!screenTrack) return;
-
-      peersRef.current.forEach((peer) => {
-        const sender = peer.getSenders().find((item) => item.track?.kind === 'video');
-        if (sender) sender.replaceTrack(screenTrack);
-      });
-
-      screenTrack.onended = () => {
-        stopScreenShare();
-      };
-
-      setDisplayStream(stream);
-      setScreenSharing(true);
-      setVideoEnabled(true);
-      emitMediaState({ screenSharing: true, videoEnabled: true });
-    } catch (err) {
-      setError(err.message || '화면공유를 시작할 수 없습니다.');
-    }
-  };
-
-  useEffect(() => {
-    const handleParticipants = ({ roomId, participants = [] }) => {
-      if (roomId !== roomCodeRef.current || !activeRef.current) return;
-      participants.forEach((participant) => {
-        createOfferForPeer(participant);
-      });
-    };
-
-    const handlePeerJoined = ({ roomId, participant }) => {
-      if (roomId !== roomCodeRef.current || !activeRef.current) return;
-      if (participant?.socketId) {
-        updateRemotePeer(participant.socketId, () => participant);
-      }
-    };
-
-    const handleSignal = async ({ roomId, fromSocketId, signal }) => {
-      if (roomId !== roomCodeRef.current || !activeRef.current || !signal || !fromSocketId) return;
-
-      try {
-        const pc = createPeerConnection(fromSocketId);
-
-        if (signal.type === 'offer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal));
-          await flushPendingIce(fromSocketId, pc);
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit('meeting:signal', {
-            roomId,
-            targetSocketId: fromSocketId,
-            signal: pc.localDescription
-          });
-        } else if (signal.type === 'answer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal));
-          await flushPendingIce(fromSocketId, pc);
-        } else if (signal.type === 'ice' && signal.candidate) {
-          const candidate = new RTCIceCandidate(signal.candidate);
-          if (pc.remoteDescription) {
-            await pc.addIceCandidate(candidate);
-          } else {
-            const pending = pendingIceRef.current.get(fromSocketId) || [];
-            pending.push(candidate);
-            pendingIceRef.current.set(fromSocketId, pending);
-          }
-        }
-      } catch (err) {
-        console.warn('Meeting signal failed', err);
-      }
-    };
-
-    const handlePeerLeft = ({ socketId }) => removePeer(socketId);
-    const handleMediaState = ({ participant }) => {
-      if (!participant?.socketId) return;
-      updateRemotePeer(participant.socketId, () => participant);
-    };
-    const handleError = ({ message }) => setError(message || '회의 연결 중 오류가 발생했습니다.');
-
-    socket.on('meeting:participants', handleParticipants);
-    socket.on('meeting:peer-joined', handlePeerJoined);
-    socket.on('meeting:signal', handleSignal);
-    socket.on('meeting:peer-left', handlePeerLeft);
-    socket.on('meeting:peer-media-state', handleMediaState);
-    socket.on('meeting:error', handleError);
-
-    return () => {
-      socket.off('meeting:participants', handleParticipants);
-      socket.off('meeting:peer-joined', handlePeerJoined);
-      socket.off('meeting:signal', handleSignal);
-      socket.off('meeting:peer-left', handlePeerLeft);
-      socket.off('meeting:peer-media-state', handleMediaState);
-      socket.off('meeting:error', handleError);
-    };
-  }, [createOfferForPeer, createPeerConnection, flushPendingIce, removePeer, updateRemotePeer]);
-
-  useEffect(() => () => {
-    if (joinedRef.current) {
-      socket.emit('meeting:leave', { roomId: roomCodeRef.current });
-    }
-    peersRef.current.forEach((peer) => peer.close());
-    peersRef.current.clear();
-    localStreamRef.current?.getTracks().forEach((track) => track.stop());
-  }, []);
-
-  const remoteList = Object.values(remotePeers);
-  const previewStream = displayStream || localStream;
-
   return (
     <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: 'background.paper', overflow: 'auto' }}>
-      <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+      <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
           <Box sx={{ width: 38, height: 38, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(theme.palette.info.main, 0.12), color: 'info.main' }}>
             <VideocamIcon />
@@ -497,6 +147,11 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false }) => {
           </Box>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
+          {!inWindow && onOpenWindow && (
+            <Button size="small" variant="outlined" startIcon={<OpenInNewIcon />} onClick={() => onOpenWindow({ roomCode, autoJoin: active })}>
+              창으로 열기
+            </Button>
+          )}
           <Chip size="small" color={active ? 'success' : 'default'} label={active ? `${remoteList.length + 1}명 연결` : '대기'} />
           {screenSharing && <Chip size="small" color="info" label="화면공유" />}
         </Stack>
@@ -539,19 +194,7 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false }) => {
             ))}
           </Box>
 
-          <Paper
-            elevation={0}
-            sx={{
-              borderRadius: 2,
-              border: `1px solid ${theme.palette.divider}`,
-              p: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 1,
-              flexWrap: 'wrap'
-            }}
-          >
+          <Paper elevation={0} sx={{ borderRadius: 2, border: `1px solid ${theme.palette.divider}`, p: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
             <Stack direction="row" spacing={0.75}>
               <Tooltip title={audioEnabled ? '마이크 끄기' : '마이크 켜기'}>
                 <span>
