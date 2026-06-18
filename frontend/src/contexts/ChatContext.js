@@ -118,6 +118,52 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
     return conversation;
   }, [upsertConversation]);
 
+  const createGroupConversation = useCallback(async ({ title = '', inviteeUids = [], invitees = [] } = {}) => {
+    const res = await axios.post(
+      '/api/chat/group',
+      { title, inviteeUids, invitees },
+      { withCredentials: true }
+    );
+
+    const conversation = res.data?.conversation || null;
+    if (conversation) upsertConversation(conversation);
+    return conversation;
+  }, [upsertConversation]);
+
+  const inviteToConversation = useCallback(async (conversationId, { inviteeUids = [], invitees = [] } = {}) => {
+    if (!conversationId) return null;
+
+    const res = await axios.post(
+      `/api/chat/group/${conversationId}/invite`,
+      { inviteeUids, invitees },
+      { withCredentials: true }
+    );
+
+    const conversation = res.data?.conversation || null;
+    if (conversation) upsertConversation(conversation);
+    return conversation;
+  }, [upsertConversation]);
+
+  const respondConversationInvite = useCallback(async (conversationId, accept) => {
+    if (!conversationId) return null;
+
+    const res = await axios.post(
+      `/api/chat/group/${conversationId}/respond`,
+      { accept: !!accept },
+      { withCredentials: true }
+    );
+
+    const conversation = res.data?.conversation || null;
+    if (conversation) {
+      if (accept) {
+        upsertConversation(conversation);
+      } else {
+        setConversations((prev) => prev.filter((item) => item.conversationId !== conversationId));
+      }
+    }
+    return conversation;
+  }, [upsertConversation]);
+
   const findDirectConversationWithUser = useCallback((targetUserUid) => {
     if (!targetUserUid) return null;
 
@@ -443,14 +489,26 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
       });
     };
 
+    const handleConversationUpdated = (payload = {}) => {
+      if (payload.conversation?.conversationId) {
+        upsertConversation(payload.conversation);
+      } else {
+        loadConversations({ silent: true });
+      }
+    };
+
     socket.on('chat:message', handleIncomingMessage);
     socket.on('chat:read', handleReadUpdate);
+    socket.on('chat:conversation-invite', handleConversationUpdated);
+    socket.on('chat:conversation-updated', handleConversationUpdated);
 
     return () => {
       socket.off('chat:message', handleIncomingMessage);
       socket.off('chat:read', handleReadUpdate);
+      socket.off('chat:conversation-invite', handleConversationUpdated);
+      socket.off('chat:conversation-updated', handleConversationUpdated);
     };
-  }, [socket, currentUserUid, appendMessage, loadConversations]);
+  }, [socket, currentUserUid, appendMessage, loadConversations, upsertConversation]);
 
   const value = useMemo(() => ({
     currentUser,
@@ -464,6 +522,9 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
     setDraft: updateDraft,
     loadConversations,
     ensureDirectConversation,
+    createGroupConversation,
+    inviteToConversation,
+    respondConversationInvite,
     findDirectConversationWithUser,
     loadMessages,
     sendMessage,
@@ -486,6 +547,10 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
     updateDraft,
     loadConversations,
     ensureDirectConversation,
+    createGroupConversation,
+    inviteToConversation,
+    respondConversationInvite,
+    findDirectConversationWithUser,
     loadMessages,
     sendMessage,
     sendTextMessage,

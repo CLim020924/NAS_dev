@@ -10,6 +10,9 @@ const {
   listConversationsForUser,
   listMessagesForConversation,
   countUnreadForConversation,
+  createGroupConversation,
+  inviteUsersToConversation,
+  respondConversationInvite,
   createMessage,
   saveReceivedAttachmentsForUser,
   markConversationRead,
@@ -80,14 +83,33 @@ const serializeOtherUser = (member = {}) => ({
   globalAccess: !!member.globalAccess,
 });
 
+const serializeParticipant = (member = {}) => ({
+  userUid: member.userUid,
+  username: getLoginId(member),
+  displayName: getDisplayName(member),
+  role: getRole(member),
+});
+
 const serializeConversationForViewer = (conversation, viewerUid, members) => {
   const otherUid = (conversation.participantUids || []).find((uid) => uid !== viewerUid) || viewerUid;
   const otherUser = members.find((member) => member.userUid === otherUid) || null;
+  const participantMembers = (conversation.participantUids || [])
+    .map((uid) => members.find((member) => member.userUid === uid))
+    .filter(Boolean);
+  const pendingMembers = (conversation.pendingInviteUids || [])
+    .map((uid) => members.find((member) => member.userUid === uid))
+    .filter(Boolean);
 
   return {
     conversationId: conversation.conversationId,
     type: conversation.type,
+    title: conversation.title || '',
+    createdByUid: conversation.createdByUid || '',
     participantUids: conversation.participantUids,
+    pendingInviteUids: conversation.pendingInviteUids || [],
+    inviteStatus: (conversation.pendingInviteUids || []).includes(viewerUid) ? 'PENDING' : 'ACCEPTED',
+    participants: participantMembers.map(serializeParticipant),
+    pendingInvites: pendingMembers.map(serializeParticipant),
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
     lastMessageId: conversation.lastMessageId,
@@ -96,6 +118,29 @@ const serializeConversationForViewer = (conversation, viewerUid, members) => {
     unreadCount: countUnreadForConversation(conversation.conversationId, viewerUid),
     otherUser: otherUser ? serializeOtherUser(otherUser) : null,
   };
+};
+
+const resolveInviteTargets = ({ values = [], members, me }) => {
+  const rawValues = Array.from(new Set(
+    (Array.isArray(values) ? values : [values])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  ));
+
+  const targets = rawValues
+    .map((value) => {
+      const lower = value.toLowerCase();
+      return members.find((member) =>
+        member.userUid === value ||
+        String(getLoginId(member)).toLowerCase() === lower ||
+        String(getDisplayName(member)).toLowerCase() === lower ||
+        String(member.nickname || '').toLowerCase() === lower
+      );
+    })
+    .filter(Boolean)
+    .filter((member) => member.userUid !== me.userUid);
+
+  return Array.from(new Map(targets.map((member) => [member.userUid, member])).values());
 };
 
 const buildNotificationPreview = (message = {}) => {
@@ -230,6 +275,142 @@ router.get('/chat/conversations', verifyToken, (req, res) => {
   return res.json({ conversations });
 });
 
+router.post('/chat/group', verifyToken, (req, res) => {
+  const { title, inviteeUids, invitees } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+
+  const explicitInvitees = Array.isArray(inviteeUids) ? inviteeUids : [];
+  const typedInvitees = Array.isArray(invitees) ? invitees : [];
+  const targets = resolveInviteTargets({ values: [...explicitInvitees, ...typedInvitees], members, me });
+
+  const conversation = createGroupConversation({
+    title,
+    creatorUid: me.userUid,
+    inviteeUids: targets.map((member) => member.userUid),
+  });
+
+  targets.forEach((target) => {
+    createNotification({
+      userUid: target.userUid,
+      type: 'chat_room_invite',
+      title: '채팅방 초대',
+      message: `${getDisplayName(me)}님이 ${conversation.title || '그룹 채팅'}에 초대했습니다.`,
+      meta: {
+        conversationId: conversation.conversationId,
+        fromUserUid: me.userUid,
+        fromUsername: getLoginId(me),
+        fromDisplayName: getDisplayName(me),
+      },
+    });
+  });
+
+  const io = req.app.get('io');
+  targets.forEach((target) => {
+    io.to(`user:${target.userUid}`).emit('chat:conversation-invite', {
+      conversation: serializeConversationForViewer(conversation, target.userUid, members),
+    });
+  });
+
+  return res.json({
+    conversation: serializeConversationForViewer(conversation, me.userUid, members),
+  });
+});
+
+router.post('/chat/group/:conversationId/invite', verifyToken, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const { inviteeUids, invitees } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId) return res.status(400).json({ error: '대화방 식별자가 필요합니다.' });
+
+  const explicitInvitees = Array.isArray(inviteeUids) ? inviteeUids : [];
+  const typedInvitees = Array.isArray(invitees) ? invitees : [];
+  const targets = resolveInviteTargets({ values: [...explicitInvitees, ...typedInvitees], members, me });
+  if (targets.length === 0) return res.status(400).json({ error: '초대할 사용자를 찾을 수 없습니다.' });
+
+  try {
+    const conversation = inviteUsersToConversation({
+      conversationId,
+      inviterUid: me.userUid,
+      inviteeUids: targets.map((member) => member.userUid),
+    });
+
+    targets.forEach((target) => {
+      createNotification({
+        userUid: target.userUid,
+        type: 'chat_room_invite',
+        title: '채팅방 초대',
+        message: `${getDisplayName(me)}님이 ${conversation.title || '그룹 채팅'}에 초대했습니다.`,
+        meta: {
+          conversationId: conversation.conversationId,
+          fromUserUid: me.userUid,
+          fromUsername: getLoginId(me),
+          fromDisplayName: getDisplayName(me),
+        },
+      });
+    });
+
+    const io = req.app.get('io');
+    targets.forEach((target) => {
+      io.to(`user:${target.userUid}`).emit('chat:conversation-invite', {
+        conversation: serializeConversationForViewer(conversation, target.userUid, members),
+      });
+    });
+    (conversation.participantUids || []).forEach((uid) => {
+      io.to(`user:${uid}`).emit('chat:conversation-updated', {
+        conversation: serializeConversationForViewer(conversation, uid, members),
+      });
+    });
+
+    return res.json({
+      conversation: serializeConversationForViewer(conversation, me.userUid, members),
+    });
+  } catch (e) {
+    if (e.message === 'CONVERSATION_NOT_FOUND') return res.status(404).json({ error: '대화방이 없습니다.' });
+    if (e.message === 'GROUP_ONLY') return res.status(400).json({ error: '그룹 채팅방에만 초대할 수 있습니다.' });
+    if (e.message === 'FORBIDDEN_PARTICIPANT') return res.status(403).json({ error: '참가자만 초대할 수 있습니다.' });
+    return res.status(500).json({ error: '초대에 실패했습니다.' });
+  }
+});
+
+router.post('/chat/group/:conversationId/respond', verifyToken, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const { accept } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId) return res.status(400).json({ error: '대화방 식별자가 필요합니다.' });
+
+  try {
+    const conversation = respondConversationInvite({
+      conversationId,
+      userUid: me.userUid,
+      accept: !!accept,
+    });
+
+    const io = req.app.get('io');
+    [...(conversation.participantUids || []), ...(conversation.pendingInviteUids || [])].forEach((uid) => {
+      io.to(`user:${uid}`).emit('chat:conversation-updated', {
+        conversation: serializeConversationForViewer(conversation, uid, members),
+      });
+    });
+
+    return res.json({
+      conversation: serializeConversationForViewer(conversation, me.userUid, members),
+    });
+  } catch (e) {
+    if (e.message === 'CONVERSATION_NOT_FOUND') return res.status(404).json({ error: '대화방이 없습니다.' });
+    if (e.message === 'INVITE_NOT_FOUND') return res.status(404).json({ error: '초대가 없습니다.' });
+    return res.status(500).json({ error: '초대 응답에 실패했습니다.' });
+  }
+});
+
 router.get('/chat/messages', verifyToken, (req, res) => {
   const conversationId = String(req.query.conversationId || '').trim();
   const members = getAllMembers();
@@ -273,30 +454,31 @@ router.post('/chat/messages', verifyToken, (req, res) => {
     });
 
     const io = req.app.get('io');
-    const recipientUid = result.message.recipientUid;
     const previewMessage = buildNotificationPreview(result.message);
+    const recipientUids = (result.conversation.participantUids || []).filter((uid) => uid !== me.userUid);
 
-    createNotification({
-      userUid: recipientUid,
-      type: 'chat_message',
-      title: '새 메시지',
-      message: `${getDisplayName(me)}: ${previewMessage}`,
-      meta: {
+    recipientUids.forEach((recipientUid) => {
+      createNotification({
+        userUid: recipientUid,
+        type: 'chat_message',
+        title: '새 메시지',
+        message: `${getDisplayName(me)}: ${previewMessage}`,
+        meta: {
+          conversationId: result.conversation.conversationId,
+          messageId: result.message.messageId,
+          fromUserUid: me.userUid,
+          fromUsername: getLoginId(me),
+          fromDisplayName: getDisplayName(me),
+          fromRole: getRole(me),
+        },
+      });
+
+      const recipientMember = members.find((member) => member.userUid === recipientUid) || { userUid: recipientUid };
+      io.to(`user:${recipientUid}`).emit('chat:message', {
         conversationId: result.conversation.conversationId,
-        messageId: result.message.messageId,
-        fromUserUid: me.userUid,
-        fromUsername: getLoginId(me),
-        fromDisplayName: getDisplayName(me),
-        fromRole: getRole(me),
-      },
-    });
-
-    const recipientMember = members.find((member) => member.userUid === recipientUid) || { userUid: recipientUid };
-
-    io.to(`user:${recipientUid}`).emit('chat:message', {
-      conversationId: result.conversation.conversationId,
-      message: serializeMessageForViewer(result.message, recipientMember),
-      sender: serializeOtherUser(me),
+        message: serializeMessageForViewer(result.message, recipientMember),
+        sender: serializeOtherUser(me),
+      });
     });
 
     return res.json({

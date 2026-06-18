@@ -15,6 +15,12 @@ import {
   CircularProgress,
   Divider,
   Button,
+  Checkbox,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
   useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -23,6 +29,8 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import GroupIcon from '@mui/icons-material/Group';
 import PersonIcon from '@mui/icons-material/Person';
+import AddIcon from '@mui/icons-material/Add';
+import axios from 'axios';
 import { useChat } from '../contexts/ChatContext';
 import { useWindows } from '../contexts/WindowContext';
 import DockedChatPanel from './DockedChatPanel';
@@ -87,14 +95,42 @@ const ChatRoomSidebar = ({
   onActiveChatChange = () => {},
 }) => {
   const theme = useTheme();
-  const { conversations, loadConversations, loadingConversations } = useChat();
+  const {
+    conversations,
+    loadConversations,
+    loadingConversations,
+    createGroupConversation,
+    respondConversationInvite,
+  } = useChat();
   const { openWindows, setOpenWindows, topZIndex, setTopZIndex, focusWindow } = useWindows();
   const [query, setQuery] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [roomTitle, setRoomTitle] = useState('');
+  const [inviteText, setInviteText] = useState('');
+  const [friendOptions, setFriendOptions] = useState([]);
+  const [selectedInviteUids, setSelectedInviteUids] = useState([]);
+  const [creatingRoom, setCreatingRoom] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     loadConversations();
   }, [open, loadConversations]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    let cancelled = false;
+    axios.get('/api/friends/sidebar', { withCredentials: true })
+      .then((res) => {
+        if (cancelled) return;
+        setFriendOptions(Array.isArray(res.data?.friends) ? res.data.friends : []);
+      })
+      .catch(() => {
+        if (!cancelled) setFriendOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [createOpen]);
 
 
   const filteredConversations = useMemo(() => {
@@ -120,6 +156,7 @@ const ChatRoomSidebar = ({
   }, [conversations, query]);
 
   const handleConversationClick = (conversation) => {
+    if (conversation?.inviteStatus === 'PENDING') return;
     const next = toDockedChat(conversation);
     if (!next) return;
 
@@ -204,6 +241,69 @@ const ChatRoomSidebar = ({
     onClose?.();
   };
 
+  const resetCreateDialog = () => {
+    setRoomTitle('');
+    setInviteText('');
+    setSelectedInviteUids([]);
+    setCreatingRoom(false);
+  };
+
+  const handleCloseCreateDialog = () => {
+    setCreateOpen(false);
+    resetCreateDialog();
+  };
+
+  const handleToggleInviteUid = (userUid) => {
+    setSelectedInviteUids((prev) =>
+      prev.includes(userUid)
+        ? prev.filter((uid) => uid !== userUid)
+        : [...prev, userUid]
+    );
+  };
+
+  const parseTypedInvitees = () =>
+    inviteText
+      .split(/[,\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+  const handleCreateRoom = async () => {
+    const typedInvitees = parseTypedInvitees();
+    if (selectedInviteUids.length === 0 && typedInvitees.length === 0) {
+      alert('초대할 친구나 아이디를 하나 이상 입력하세요.');
+      return;
+    }
+
+    setCreatingRoom(true);
+    try {
+      const conversation = await createGroupConversation({
+        title: roomTitle || '그룹 채팅',
+        inviteeUids: selectedInviteUids,
+        invitees: typedInvitees,
+      });
+      await loadConversations({ silent: true });
+      handleCloseCreateDialog();
+      if (conversation?.conversationId) {
+        openWorkspaceWindow(conversation.conversationId);
+      }
+    } catch (err) {
+      alert(err.response?.data?.error || '채팅방 생성에 실패했습니다.');
+      setCreatingRoom(false);
+    }
+  };
+
+  const handleRespondInvite = async (conversation, accept) => {
+    try {
+      const updated = await respondConversationInvite(conversation.conversationId, accept);
+      await loadConversations({ silent: true });
+      if (accept && updated?.conversationId) {
+        onActiveChatChange(toDockedChat(updated));
+      }
+    } catch (err) {
+      alert(err.response?.data?.error || '초대 응답에 실패했습니다.');
+    }
+  };
+
   return (
     <Drawer
       anchor="right"
@@ -254,6 +354,9 @@ const ChatRoomSidebar = ({
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <IconButton size="small" onClick={() => setCreateOpen(true)} title="채팅방 만들기">
+              <AddIcon fontSize="small" />
+            </IconButton>
             <Button
               size="small"
               variant="outlined"
@@ -269,20 +372,31 @@ const ChatRoomSidebar = ({
         </Box>
 
         <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}`, position: 'relative', zIndex: 1 }}>
-          <TextField
-            fullWidth
-            size="small"
-            placeholder="채팅방 검색"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon fontSize="small" />
-                </InputAdornment>
-              ),
-            }}
-          />
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="채팅방 검색"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+              }}
+            />
+            <IconButton
+              size="small"
+              color="primary"
+              onClick={() => setCreateOpen(true)}
+              title="채팅방 만들기"
+              sx={{ border: `1px solid ${theme.palette.divider}`, flexShrink: 0 }}
+            >
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
             채팅방을 누르면 이 목록의 왼쪽에 채팅방 창이 열립니다.
           </Typography>
@@ -308,6 +422,7 @@ const ChatRoomSidebar = ({
                 const subtitle = conversation.lastMessagePreview || '아직 메시지가 없습니다.';
                 const unreadCount = Number(conversation.unreadCount) || 0;
                 const selected = activeChat?.conversationId === conversation.conversationId;
+                const pendingInvite = conversation.inviteStatus === 'PENDING';
 
                 return (
                   <React.Fragment key={conversation.conversationId}>
@@ -359,6 +474,14 @@ const ChatRoomSidebar = ({
                                 sx={{ height: 20 }}
                               />
                             )}
+                            {pendingInvite && (
+                              <Chip
+                                size="small"
+                                color="warning"
+                                label="초대"
+                                sx={{ height: 20 }}
+                              />
+                            )}
                           </Box>
                         }
                         secondary={
@@ -379,6 +502,31 @@ const ChatRoomSidebar = ({
                             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35 }}>
                               {formatTime(conversation.lastMessageAt || conversation.updatedAt || conversation.createdAt)}
                             </Typography>
+                            {pendingInvite && (
+                              <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}>
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleRespondInvite(conversation, true);
+                                  }}
+                                >
+                                  수락
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="inherit"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleRespondInvite(conversation, false);
+                                  }}
+                                >
+                                  거절
+                                </Button>
+                              </Box>
+                            )}
                           </Box>
                         }
                       />
@@ -390,6 +538,63 @@ const ChatRoomSidebar = ({
             </List>
           )}
         </Box>
+
+        <Dialog open={createOpen} onClose={handleCloseCreateDialog} fullWidth maxWidth="xs">
+          <DialogTitle>채팅방 만들기</DialogTitle>
+          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+            <TextField
+              label="채팅방 이름"
+              value={roomTitle}
+              onChange={(event) => setRoomTitle(event.target.value)}
+              placeholder="예: 프로젝트 회의"
+              fullWidth
+              size="small"
+            />
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>
+                친구 초대
+              </Typography>
+              <Box sx={{ maxHeight: 170, overflowY: 'auto', border: `1px solid ${theme.palette.divider}`, borderRadius: 1, p: 1 }}>
+                {friendOptions.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">표시할 친구가 없습니다.</Typography>
+                ) : (
+                  friendOptions.map((friend) => (
+                    <FormControlLabel
+                      key={friend.userUid}
+                      control={
+                        <Checkbox
+                          checked={selectedInviteUids.includes(friend.userUid)}
+                          onChange={() => handleToggleInviteUid(friend.userUid)}
+                        />
+                      }
+                      label={`${friend.displayName || friend.username} (${friend.username})`}
+                      sx={{ display: 'flex', mr: 0 }}
+                    />
+                  ))
+                )}
+              </Box>
+            </Box>
+            <TextField
+              label="아이디 또는 닉네임으로 초대"
+              value={inviteText}
+              onChange={(event) => setInviteText(event.target.value)}
+              placeholder="쉼표 또는 줄바꿈으로 여러 명 입력"
+              fullWidth
+              multiline
+              minRows={2}
+              size="small"
+            />
+            <Typography variant="caption" color="text.secondary">
+              초대받은 사용자가 수락해야 채팅방과 연결된 화상회의에 들어올 수 있습니다.
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCloseCreateDialog}>취소</Button>
+            <Button variant="contained" onClick={handleCreateRoom} disabled={creatingRoom}>
+              만들기
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </Drawer>
   );

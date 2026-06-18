@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Avatar,
@@ -25,6 +25,7 @@ import VideocamIcon from '@mui/icons-material/Videocam';
 import VideocamOffIcon from '@mui/icons-material/VideocamOff';
 import { alpha, useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
+import axios from 'axios';
 import { normalizeRoomCode, useMeetingSession } from '../contexts/MeetingContext';
 
 const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEnabled = true, screenSharing = false, local = false, compact = false }) => {
@@ -83,10 +84,12 @@ const VideoTile = ({ label, stream, muted = false, audioEnabled = true, videoEna
   );
 };
 
-const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, onOpenWindow = null }) => {
+const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, onOpenWindow = null, conversationId = null }) => {
   const theme = useTheme();
   const compact = useMediaQuery('(max-width:900px), (max-height:650px)');
   const veryCompact = useMediaQuery('(max-width:620px), (max-height:520px)');
+  const [meetingInviteText, setMeetingInviteText] = useState('');
+  const [meetingInviting, setMeetingInviting] = useState(false);
   const session = useMeetingSession();
   const {
     roomCode,
@@ -136,6 +139,29 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
       await navigator.clipboard.writeText(inviteLink);
     } catch (err) {
       window.prompt('초대 링크를 복사하세요.', inviteLink);
+    }
+  };
+
+  const inviteMeetingParticipants = async () => {
+    const invitees = meetingInviteText
+      .split(/[,\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (!conversationId || invitees.length === 0) return;
+    setMeetingInviting(true);
+    try {
+      await axios.post(
+        `/api/chat/group/${conversationId}/invite`,
+        { invitees },
+        { withCredentials: true }
+      );
+      setMeetingInviteText('');
+      alert('회의가 연결된 채팅방으로 초대를 보냈습니다.');
+    } catch (err) {
+      alert(err.response?.data?.error || '회의 초대에 실패했습니다.');
+    } finally {
+      setMeetingInviting(false);
     }
   };
 
@@ -267,6 +293,26 @@ const MeetingApp = ({ initialRoomCode = '', autoJoin = false, inWindow = false, 
             <TextField size="small" value={inviteLink} fullWidth InputProps={{ readOnly: true }} />
             <IconButton onClick={copyInvite} aria-label="초대 링크 복사"><ContentCopyIcon fontSize="small" /></IconButton>
           </Box>
+          {conversationId && (
+            <Box sx={{ display: 'flex', gap: 0.75, mb: compact ? 1 : 1.5 }}>
+              <TextField
+                size="small"
+                placeholder="아이디/닉네임 초대"
+                value={meetingInviteText}
+                onChange={(event) => setMeetingInviteText(event.target.value)}
+                onKeyDown={(event) => event.key === 'Enter' && inviteMeetingParticipants()}
+                fullWidth
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={inviteMeetingParticipants}
+                disabled={meetingInviting || !meetingInviteText.trim()}
+              >
+                초대
+              </Button>
+            </Box>
+          )}
 
           <Divider sx={{ my: compact ? 1 : 1.5 }} />
 

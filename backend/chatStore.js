@@ -50,7 +50,10 @@ const normalizeConversation = (conversation = {}) => {
   return {
     conversationId: conversation.conversationId || generateId('cv'),
     type: conversation.type || 'direct',
+    title: typeof conversation.title === 'string' ? conversation.title : '',
+    createdByUid: conversation.createdByUid || '',
     participantUids: sortParticipantUids(conversation.participantUids || []),
+    pendingInviteUids: sortParticipantUids(conversation.pendingInviteUids || []),
     createdAt,
     updatedAt: conversation.updatedAt || createdAt,
     lastMessageId: conversation.lastMessageId || null,
@@ -132,12 +135,80 @@ const ensureDirectConversation = (userAUid, userBUid) => {
 
 const listConversationsForUser = (userUid) => {
   return getAllConversations()
-    .filter((conversation) => conversation.participantUids.includes(userUid))
+    .filter((conversation) =>
+      conversation.participantUids.includes(userUid) ||
+      conversation.pendingInviteUids.includes(userUid)
+    )
     .sort((a, b) => {
       const aKey = a.lastMessageAt || a.updatedAt || a.createdAt || '';
       const bKey = b.lastMessageAt || b.updatedAt || b.createdAt || '';
       return String(bKey).localeCompare(String(aKey));
     });
+};
+
+const createGroupConversation = ({ title, creatorUid, inviteeUids = [] }) => {
+  const safeTitle = String(title || '').trim().slice(0, 60) || '그룹 채팅';
+  const pendingInviteUids = sortParticipantUids(inviteeUids).filter((uid) => uid && uid !== creatorUid);
+  const conversations = getAllConversations();
+  const createdAt = nowIso();
+  const created = normalizeConversation({
+    type: 'group',
+    title: safeTitle,
+    createdByUid: creatorUid,
+    participantUids: [creatorUid],
+    pendingInviteUids,
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  conversations.push(created);
+  saveConversations(conversations);
+  return created;
+};
+
+const inviteUsersToConversation = ({ conversationId, inviterUid, inviteeUids = [] }) => {
+  const conversations = getAllConversations();
+  const target = conversations.find((conversation) => conversation.conversationId === conversationId);
+  if (!target) throw new Error('CONVERSATION_NOT_FOUND');
+  if (target.type !== 'group') throw new Error('GROUP_ONLY');
+  if (!target.participantUids.includes(inviterUid)) throw new Error('FORBIDDEN_PARTICIPANT');
+
+  const nextPending = sortParticipantUids([
+    ...target.pendingInviteUids,
+    ...inviteeUids.filter((uid) => uid && !target.participantUids.includes(uid) && uid !== inviterUid),
+  ]);
+  const updatedAt = nowIso();
+  const next = conversations.map((conversation) =>
+    conversation.conversationId === conversationId
+      ? normalizeConversation({ ...conversation, pendingInviteUids: nextPending, updatedAt })
+      : conversation
+  );
+
+  saveConversations(next);
+  return next.find((conversation) => conversation.conversationId === conversationId);
+};
+
+const respondConversationInvite = ({ conversationId, userUid, accept }) => {
+  const conversations = getAllConversations();
+  const target = conversations.find((conversation) => conversation.conversationId === conversationId);
+  if (!target) throw new Error('CONVERSATION_NOT_FOUND');
+  if (!target.pendingInviteUids.includes(userUid)) throw new Error('INVITE_NOT_FOUND');
+
+  const updatedAt = nowIso();
+  const next = conversations.map((conversation) => {
+    if (conversation.conversationId !== conversationId) return conversation;
+    return normalizeConversation({
+      ...conversation,
+      participantUids: accept
+        ? sortParticipantUids([...conversation.participantUids, userUid])
+        : conversation.participantUids,
+      pendingInviteUids: conversation.pendingInviteUids.filter((uid) => uid !== userUid),
+      updatedAt,
+    });
+  });
+
+  saveConversations(next);
+  return next.find((conversation) => conversation.conversationId === conversationId);
 };
 
 const listMessagesForConversation = (conversationId) => {
@@ -410,6 +481,9 @@ module.exports = {
   getMessageById,
   findDirectConversation,
   ensureDirectConversation,
+  createGroupConversation,
+  inviteUsersToConversation,
+  respondConversationInvite,
   listConversationsForUser,
   listMessagesForConversation,
   countUnreadForConversation,
