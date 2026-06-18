@@ -419,7 +419,19 @@ const NAS = ({ showWorkspace = true }) => {
     return () => window.removeEventListener('nas_transfer_completed', handleTransferCompleted);
   }, [openWindows]);
 
-  const getActiveTargetPath = () => { if (!focusedContext || focusedContext === 'desktop') return currentFileManagerPath; const activeWin = openWindows.find(w => w.id === focusedContext); if (!activeWin) return currentFileManagerPath; return activeWin.winType === 'folder' ? activeWin.currentPath : ensureSlash(activeWin.fullPath.substring(0, activeWin.fullPath.lastIndexOf('/'))); };
+  const getActiveTargetPath = () => {
+    if (!focusedContext || focusedContext === 'desktop') return currentFileManagerPath;
+
+    const activeWin = openWindows.find(w => w.id === focusedContext);
+    if (!activeWin) return currentFileManagerPath;
+    if (activeWin.winType === 'folder') return activeWin.currentPath || currentFileManagerPath;
+    if (activeWin.winType === 'file' && activeWin.fullPath) {
+      const idx = activeWin.fullPath.lastIndexOf('/');
+      return ensureSlash(idx <= 0 ? '/' : activeWin.fullPath.substring(0, idx));
+    }
+
+    return currentFileManagerPath;
+  };
   const getSelectedItemsData = useCallback(() => { let currentFiles = focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || []); const activeWin = openWindows.find(w => w.id === focusedContext); if (activeWin && activeWin.winType === 'folder') { currentFiles = [...currentFiles, { fullPath: activeWin.currentPath, name: activeWin.currentPath === '/' ? activeWin.name : activeWin.currentPath.split('/').pop(), type: 'folder' }]; } return selectedItems.map(path => { const found = currentFiles.find(f => ensureSlash(f.fullPath) === path); if (found) return found; const name = path === '/' ? 'Root' : path.split('/').pop(); return { fullPath: path, name, type: name.includes('.') ? 'file' : 'folder' }; }); }, [selectedItems, focusedContext, desktopItems, openWindows]);
   const getItemsToProcess = (clickedItem) => selectedItems.includes(ensureSlash(clickedItem.fullPath)) && selectedItems.length > 1 ? getSelectedItemsData() : [clickedItem];
 
