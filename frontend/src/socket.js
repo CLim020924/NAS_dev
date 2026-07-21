@@ -4,7 +4,13 @@ import { io } from "socket.io-client";
 const socket = io({
   path: "/socket.io",
   withCredentials: true,
-  transports: ["websocket"]
+  transports: ["polling", "websocket"],
+  upgrade: true,
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 500,
+  reconnectionDelayMax: 5000,
+  timeout: 15000
 });
 
 export default socket;

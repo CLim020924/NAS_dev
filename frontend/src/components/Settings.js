@@ -19,6 +19,8 @@ const Settings = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
+  const [loginPersistenceEnabled, setLoginPersistenceEnabled] = useState(false);
+  const [loginPersistenceSaving, setLoginPersistenceSaving] = useState(false);
   
   const [pendingUsers, setPendingUsers] = useState([]);
   const [users, setUsers] = useState([]);
@@ -35,6 +37,18 @@ const Settings = () => {
   const currentUser = JSON.parse(localStorage.getItem('user')) || { role: 'USER', username: '' };
   const isMaster = currentUser.role === 'MASTER' || currentUser.Masters;
   const isManager = currentUser.role === 'MANAGER' || currentUser.Managers || isMaster;
+
+  useEffect(() => {
+    axios.get('/api/user/preferences', { withCredentials: true })
+      .then((res) => setLoginPersistenceEnabled(!!res.data?.loginPersistenceEnabled))
+      .catch(() => null);
+  }, []);
+
+  useEffect(() => {
+    if (!isManager && activeTab === 2) {
+      setActiveTab(0);
+    }
+  }, [activeTab, isManager]);
 
   useEffect(() => {
     let interval;
@@ -84,6 +98,21 @@ const Settings = () => {
     localStorage.setItem('platform_app_open_mode', nextMode);
     window.dispatchEvent(new Event('nas_settings_changed'));
   };
+
+  const handleLoginPersistenceChange = async (nextValue) => {
+    setLoginPersistenceEnabled(nextValue);
+    setLoginPersistenceSaving(true);
+    try {
+      await axios.patch('/api/user/preferences', {
+        loginPersistenceEnabled: nextValue
+      }, { withCredentials: true });
+    } catch (err) {
+      setLoginPersistenceEnabled(!nextValue);
+      alert(err.response?.data?.error || '로그인 유지 설정을 저장하지 못했습니다.');
+    } finally {
+      setLoginPersistenceSaving(false);
+    }
+  };
   
   // 🔥 백엔드 융단폭격 저장 로직!
   const handleSaveChanges = async () => {
@@ -94,7 +123,10 @@ const Settings = () => {
         rootPath: u.rootPath,      // 낙타 표기법
         root_path: u.rootPath,     // 뱀 표기법
         basePath: u.rootPath,      // 혹시 모를 basePath
-        global_access: u.globalAccess // 스위치용 뱀 표기법
+        global_access: u.globalAccess, // 스위치용 뱀 표기법
+        storageQuotaMode: u.storageQuotaMode,
+        storageQuotaGb: u.storageQuotaGb,
+        storageQuotaBytes: u.storageQuotaBytes
       }));
       
       console.log("🚀 프론트에서 서버로 던지는 최종 데이터:", shotgunUsers);
@@ -141,6 +173,26 @@ const Settings = () => {
   const managers = filteredUsers.filter(u => u.role === 'MANAGER');
   const normalUsers = filteredUsers.filter(u => u.role === 'USER');
 
+  const bytesToGb = (bytes) => Math.round((Number(bytes || 0) / (1024 * 1024 * 1024)) * 10) / 10;
+  const formatStorage = (bytes) => bytes == null ? '계산 전' : `${bytesToGb(bytes).toLocaleString()}GB`;
+  const getQuotaGbValue = (u) => {
+    if (u.storageQuotaMode === 'unlimited') return '';
+    const bytes = Number(u.storageQuotaBytes || 0);
+    return Number.isFinite(bytes) && bytes > 0 ? String(Math.round(bytes / (1024 * 1024 * 1024))) : '50';
+  };
+  const updateUserStorageQuota = (targetUser, value) => {
+    const trimmed = String(value || '').trim();
+    setUsers(users.map(user => user.id === targetUser.id
+      ? {
+          ...user,
+          storageQuotaMode: trimmed ? 'limited' : 'unlimited',
+          storageQuotaGb: trimmed ? Math.max(1, Number(trimmed)) : undefined,
+          storageQuotaBytes: trimmed ? Math.max(1, Number(trimmed)) * 1024 * 1024 * 1024 : null
+        }
+      : user
+    ));
+  };
+
   const renderUserTable = (userList) => (
     isMobile ? (
       <Box sx={{ mt: 2 }}>
@@ -186,6 +238,13 @@ const Settings = () => {
                       disabled={!isMaster && u.role === 'MASTER'} 
                     />
                 </Grid>
+                <Grid item xs={12}>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>????</Typography>
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                      <TextField size="small" type="number" value={getQuotaGbValue(u)} onChange={(e) => updateUserStorageQuota(u, e.target.value)} disabled={!isMaster && u.role === 'MASTER'} placeholder="???" inputProps={{ min: 1 }} sx={{ maxWidth: 140 }} />
+                      <Typography variant="body2" color="text.secondary">?? {formatStorage(u.storageUsedBytes)}</Typography>
+                    </Box>
+                </Grid>
               </Grid>
             </Paper>
           ))
@@ -199,12 +258,13 @@ const Settings = () => {
               <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>아이디</TableCell>
               <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>권한 변경</TableCell>
               <TableCell align="center" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>타인 파일 접근</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>저장공간</TableCell>
               <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>루트 경로 지정</TableCell>
               <TableCell align="center" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>삭제</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {userList.length === 0 ? <TableRow><TableCell colSpan={5} align="center">해당 사용자가 없습니다.</TableCell></TableRow> : 
+            {userList.length === 0 ? <TableRow><TableCell colSpan={6} align="center">해당 사용자가 없습니다.</TableCell></TableRow> : 
               userList.map((u) => (
                 <TableRow key={u.userUid || u.id} sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
                   <TableCell sx={{ fontWeight: 'bold' }}>
@@ -225,6 +285,12 @@ const Settings = () => {
                         setUsers(users.map(user => user.id === u.id ? { ...user, globalAccess: isGlobal, rootPath: autoPath } : user));
                       }} 
                     />
+                  </TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <TextField size="small" type="number" value={getQuotaGbValue(u)} onChange={(e) => updateUserStorageQuota(u, e.target.value)} disabled={!isMaster && u.role === 'MASTER'} placeholder="무제한" inputProps={{ min: 1 }} sx={{ width: 96 }} />
+                      <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>/ 사용 {formatStorage(u.storageUsedBytes)}</Typography>
+                    </Box>
                   </TableCell>
                   <TableCell>
                     <input 
@@ -252,13 +318,28 @@ const Settings = () => {
       <Typography variant="h4" sx={{ fontWeight: 800, mb: 3 }}>시스템 설정</Typography>
       <Paper elevation={4} sx={{ borderRadius: 3, overflow: 'hidden' }}>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)} textColor="primary" indicatorColor="primary" sx={{ px: 2 }}>
-            <Tab label="전역 설정" /><Tab label="파일 설정" /><Tab label="사용자 관리" />
+          <Tabs value={isManager ? activeTab : Math.min(activeTab, 1)} onChange={(e, v) => setActiveTab(v)} textColor="primary" indicatorColor="primary" sx={{ px: 2 }}>
+            <Tab label="전역 설정" /><Tab label="파일 설정" />{isManager && <Tab label="사용자 관리" />}
           </Tabs>
         </Box>
         <Box sx={{ p: { xs: 2, md: 4 }, minHeight: '400px' }}>
           {activeTab === 0 && (
             <Box>
+              <Typography variant="h6" sx={{ mb: 2 }}>일반 설정</Typography>
+              <FormControlLabel
+                control={(
+                  <Switch
+                    checked={loginPersistenceEnabled}
+                    disabled={loginPersistenceSaving}
+                    onChange={(e) => handleLoginPersistenceChange(e.target.checked)}
+                  />
+                )}
+                label="로그인 유지"
+              />
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 4 }}>
+                꺼두면 브라우저를 닫은 뒤 짧은 시간 내 재접속이 없을 때 자동으로 로그아웃됩니다. 켜두면 직접 로그아웃하기 전까지 로그인이 유지됩니다.
+              </Typography>
+
               <Typography variant="h6" sx={{ mb: 2 }}>테마 설정</Typography>
               <Box sx={{ display: 'flex', gap: 2 }}>
                 <Button variant={themeName === 'light' ? 'contained' : 'outlined'} onClick={() => setThemeName('light')}>밝음</Button>
@@ -284,7 +365,7 @@ const Settings = () => {
                setShowExt(e.target.checked); localStorage.setItem('nas_show_extensions', e.target.checked); window.dispatchEvent(new Event('nas_settings_changed'));
              }} />} label="확장명 표시" />
           )}
-          {activeTab === 2 && (
+          {activeTab === 2 && isManager && (
             <Box>
               <Typography variant="h6" sx={{ mb: 2 }}>가입 승인 대기자 {pendingUsers.length > 0 && <Chip label={pendingUsers.length} color="error" size="small" />}</Typography>
               <TableContainer component={Paper} sx={{ mb: 5, border: '1px solid #e2e8f0', borderRadius: 2 }} elevation={0}>

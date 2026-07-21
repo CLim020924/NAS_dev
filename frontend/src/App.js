@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { ThemeProvider as MUIThemeProvider, createTheme, CssBaseline, Box, Toolbar } from '@mui/material';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import socketIOClient from 'socket.io-client';
+import axios from 'axios';
 import './App.css';
 
 import ServicePlatform from './components/ServicePlatform';
@@ -17,8 +18,11 @@ import DedicatedChatWindowLayer from './components/DedicatedChatWindowLayer';
 import ChatWorkspaceWindowLayer from './components/ChatWorkspaceWindowLayer';
 import GlobalAppWindowLayer from './components/GlobalAppWindowLayer';
 import MeetingInvitePage from './components/MeetingInvitePage';
+import PublicSharePage from './components/PublicSharePage';
+import AiAgentPanel from './components/AiAgentPanel';
 
 import { WindowProvider } from './contexts/WindowContext';
+import { useWindows } from './contexts/WindowContext';
 import { TransferProvider } from './contexts/TransferContext';
 import { ChatProvider } from './contexts/ChatContext';
 import { MeetingProvider } from './contexts/MeetingContext';
@@ -28,6 +32,61 @@ import useNotifications from './notifications/useNotifications';
 const PrivateRoute = ({ children }) => {
   const user = localStorage.getItem('user');
   return user ? children : <Navigate to="/login" />;
+};
+
+const SESSION_LEFT_AT_KEY = 'nas_session_left_at';
+
+const SessionDepartureGuard = () => {
+  useEffect(() => {
+    let validating = false;
+
+    const clearInvalidSession = () => {
+      localStorage.removeItem('user');
+      localStorage.removeItem(SESSION_LEFT_AT_KEY);
+      window.dispatchEvent(new Event('nas:user-updated'));
+      if (!window.location.pathname.startsWith('/login') && !window.location.pathname.startsWith('/signup') && !window.location.pathname.startsWith('/meeting/') && !window.location.pathname.startsWith('/share/')) {
+        window.location.replace('/login');
+      }
+    };
+
+    const validateSession = () => {
+      if (validating) return;
+      if (!localStorage.getItem('user')) return false;
+      validating = true;
+      axios.get('/api/auth/session', { withCredentials: true })
+        .then((res) => {
+          localStorage.removeItem(SESSION_LEFT_AT_KEY);
+          if (res.data?.user) {
+            const current = JSON.parse(localStorage.getItem('user') || '{}');
+            localStorage.setItem('user', JSON.stringify({ ...current, ...res.data.user }));
+            window.dispatchEvent(new Event('nas:user-updated'));
+          }
+        })
+        .catch(() => clearInvalidSession())
+        .finally(() => {
+          validating = false;
+        });
+    };
+
+    validateSession();
+
+    const markDeparture = (event) => {
+      if (event?.persisted || !localStorage.getItem('user')) return;
+      localStorage.setItem(SESSION_LEFT_AT_KEY, String(Date.now()));
+    };
+    const handlePageShow = () => validateSession();
+
+    window.addEventListener('pagehide', markDeparture);
+    window.addEventListener('beforeunload', markDeparture);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      window.removeEventListener('pagehide', markDeparture);
+      window.removeEventListener('beforeunload', markDeparture);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, []);
+
+  return null;
 };
 
 const buildChatPreviewText = (payload = {}) => {
@@ -72,7 +131,7 @@ const PersistentMainRoutes = () => {
   const isNasRoute = location.pathname.startsWith('/nas');
 
   return (
-    <Box sx={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
+    <Box sx={{ position: 'relative', width: '100%', height: '100%', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {!isNasRoute && (
         <Routes>
           <Route path="/platform" element={<ServicePlatform />} />
@@ -101,11 +160,14 @@ const PersistentMainRoutes = () => {
 };
 
 function AppContent() {
+  const navigate = useNavigate();
+  const { openFolderWindowByPath, setFileManagerPath, setFocusedContext } = useWindows();
   const { themeName } = useCustomTheme();
   const [chatSidebarMode, setChatSidebarMode] = useState('none');
   const [activeDockedChat, setActiveDockedChat] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationNavigation, setNotificationNavigation] = useState(null);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')));
   const [appSocket, setAppSocket] = useState(null);
   const [chatPreview, setChatPreview] = useState(null);
@@ -187,10 +249,20 @@ function AppContent() {
       }
     };
 
+    const handleDuplicateLogin = () => {
+      alert('다른 위치에서 기존 접속 종료를 선택해 현재 기기에서 로그아웃됩니다.');
+      localStorage.removeItem('user');
+      localStorage.setItem('last_logout_reason', 'SESSION_REPLACED');
+      window.dispatchEvent(new Event('nas:user-updated'));
+      window.location.href = '/login';
+    };
+
     socket.on('force_logout_target', handleForceLogoutTarget);
+    socket.on('duplicate_login', handleDuplicateLogin);
 
     return () => {
       socket.off('force_logout_target', handleForceLogoutTarget);
+      socket.off('duplicate_login', handleDuplicateLogin);
       socket.disconnect();
       setAppSocket((current) => (current === socket ? null : current));
     };
@@ -232,6 +304,26 @@ function AppContent() {
     if (!notification) return;
     const meta = notification.meta || {};
 
+    if (notification.type === 'upload_complete') {
+      const targetPath = meta.path || '/';
+      const openMode = localStorage.getItem('platform_app_open_mode') || meta.openMode || 'window';
+      setNotificationsOpen(false);
+
+      if (openMode === 'inline') {
+        setFileManagerPath(targetPath);
+        setFocusedContext('desktop');
+        navigate('/nas');
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('nas_transfer_completed', { detail: { path: targetPath } }));
+          window.dispatchEvent(new CustomEvent('nas_tree_refresh'));
+        }, 80);
+        return;
+      }
+
+      openFolderWindowByPath(targetPath);
+      return;
+    }
+
     setNotificationsOpen(false);
     setChatSidebarMode('friends');
     setNotificationNavigation({
@@ -243,7 +335,7 @@ function AppContent() {
       targetRole: meta.fromRole || '',
       ts: Date.now(),
     });
-  }, []);
+  }, [navigate, openFolderWindowByPath, setFileManagerPath, setFocusedContext]);
 
   const notificationState = useNotifications({
     user,
@@ -288,16 +380,17 @@ function AppContent() {
   return (
     <MUIThemeProvider theme={theme}>
       <CssBaseline />
-      <BrowserRouter>
-        <MeetingProvider>
+      <SessionDepartureGuard />
+      <MeetingProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/meeting/:roomCode" element={<MeetingInvitePage />} />
+          <Route path="/share/:token" element={<PublicSharePage />} />
           <Route path="/*" element={
             <PrivateRoute>
               <TransferProvider>
-                <Box sx={{ display: 'flex', height: '100vh', flexDirection: 'column', overflow: 'hidden' }}>
+                <Box sx={{ display: 'flex', width: '100%', height: 'var(--app-viewport-height)', minHeight: 0, flexDirection: 'column', overflow: 'hidden' }}>
                 <TopBar
                   onOpenNotifications={() => setNotificationsOpen(true)}
                   onOpenFriends={openFriendSidebar}
@@ -306,7 +399,9 @@ function AppContent() {
                   chatPreview={chatPreview}
                   onChatPreviewClick={handleChatPreviewClick}
                   chatSidebarMode={chatSidebarMode}
+                  onOpenAi={() => setAiPanelOpen(true)}
                 />
+                <AiAgentPanel open={aiPanelOpen} onClose={() => setAiPanelOpen(false)} />
                 <NotificationSidebar
                   open={notificationsOpen}
                   onClose={() => setNotificationsOpen(false)}
@@ -315,6 +410,9 @@ function AppContent() {
                   unreadCount={notificationState.unreadCount}
                   onReadAll={notificationState.readAllNotifications}
                   onNotificationClick={notificationState.handleNotificationClick}
+                  onNotificationRead={notificationState.handleReadNotification}
+                  onNotificationDelete={notificationState.handleDeleteNotification}
+                  onDeleteRead={notificationState.deleteReadNotifications}
                 />
                 <ChatProvider user={user} socket={appSocket}>
                   <MessageSidebar
@@ -332,8 +430,8 @@ function AppContent() {
                   <DedicatedChatWindowLayer />
                   <ChatWorkspaceWindowLayer />
                 </ChatProvider>
-                <Box component="main" sx={{ flexGrow: 1, height: '100%', overflow: 'hidden' }}>
-                  <Toolbar size="small" sx={{ minHeight: '48px !important' }} />
+                <Box component="main" sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <Toolbar size="small" sx={{ minHeight: '48px !important', flexShrink: 0 }} />
                   <PersistentMainRoutes />
                 </Box>
                 </Box>
@@ -341,8 +439,7 @@ function AppContent() {
             </PrivateRoute>
           } />
         </Routes>
-        </MeetingProvider>
-      </BrowserRouter>
+      </MeetingProvider>
     </MUIThemeProvider>
   );
 }
@@ -350,9 +447,11 @@ function AppContent() {
 export default function App() {
   return (
     <CustomThemeProvider>
-      <WindowProvider>
-        <AppContent />
-      </WindowProvider>
+      <BrowserRouter>
+        <WindowProvider>
+          <AppContent />
+        </WindowProvider>
+      </BrowserRouter>
     </CustomThemeProvider>
   );
 }

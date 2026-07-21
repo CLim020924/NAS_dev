@@ -13,12 +13,13 @@ import InfoIcon from '@mui/icons-material/Info';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import LinkIcon from '@mui/icons-material/Link';
 
 const NASContextMenu = ({ 
   contextMenu, handleContextMenuClose, refreshPath, handleCreateFolderStart, 
   handleUploadClick, openFolderWindow, openFileWindow, handleRenameStart, 
   handleDelete, handleDownload, handleShowProperties, getItemsToProcess,
-  handleCopy, handlePaste, clipboard, handleCreateLinkedDeviceFolder
+  handleCopy, handlePaste, clipboard, handleCreateLinkedDeviceFolder, handleOpenShareDialog
 }) => {
   if (!contextMenu) return null;
 
@@ -50,6 +51,9 @@ const NASContextMenu = ({
         </MenuItem>,
         <MenuItem key="upload" onClick={() => { handleContextMenuClose(); setTimeout(() => handleUploadClick(contextMenu.path, contextMenu.windowId), 10); }}>
           <ListItemIcon><UploadFileIcon fontSize="small" color="secondary" /></ListItemIcon><ListItemText>업로드</ListItemText>
+        </MenuItem>,
+        <MenuItem key="shareFromPicker" onClick={() => { handleContextMenuClose(); setTimeout(() => handleOpenShareDialog(null, contextMenu.path || '/'), 10); }}>
+          <ListItemIcon><LinkIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>공유 링크 생성</ListItemText>
         </MenuItem>,
         <MenuItem key="linkedDeviceFolder" onClick={() => {
           console.log('[NAS PC LINK] menu clicked', { path: contextMenu.path, hasHandler: typeof handleCreateLinkedDeviceFolder });
@@ -99,6 +103,9 @@ const NASContextMenu = ({
         <MenuItem key="downloadFolder" onClick={() => { handleContextMenuClose(); setTimeout(() => { const items = getItemsToProcess(contextMenu.item); items.forEach((it, i) => setTimeout(() => handleDownload(it), i * 500)); }, 10); }}>
           <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon><ListItemText>다운로드</ListItemText>
         </MenuItem>,
+        <MenuItem key="shareFolder" onClick={() => { handleContextMenuClose(); setTimeout(() => handleOpenShareDialog(getItemsToProcess(contextMenu.item), contextMenu.path || '/'), 10); }}>
+          <ListItemIcon><LinkIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>공유 링크 생성</ListItemText>
+        </MenuItem>,
         <MenuItem key="properties" onClick={() => { handleContextMenuClose(); setTimeout(() => handleShowProperties(contextMenu.item), 10); }}>
           <ListItemIcon><InfoIcon fontSize="small" color="info" /></ListItemIcon><ListItemText>폴더 정보</ListItemText>
         </MenuItem>,
@@ -140,6 +147,9 @@ const NASContextMenu = ({
           }, 10); 
         }}>
           <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon><ListItemText>다운로드</ListItemText>
+        </MenuItem>,
+        <MenuItem key="shareFile" onClick={() => { handleContextMenuClose(); setTimeout(() => handleOpenShareDialog(getItemsToProcess(contextMenu.item), contextMenu.path || '/'), 10); }}>
+          <ListItemIcon><LinkIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>공유 링크 생성</ListItemText>
         </MenuItem>,
         <MenuItem key="properties" onClick={() => { handleContextMenuClose(); setTimeout(() => handleShowProperties(contextMenu.item), 10); }}>
           <ListItemIcon><InfoIcon fontSize="small" color="info" /></ListItemIcon><ListItemText>파일 정보</ListItemText>

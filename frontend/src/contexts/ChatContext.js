@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
+import { transferUrl } from '../transferBaseUrl';
 
 const ChatContext = createContext(null);
 
@@ -38,6 +39,9 @@ const mergeMessages = (existing = [], incoming = []) => {
 
 const upsertConversationList = (prev, nextConversation) => {
   if (!nextConversation?.conversationId) return prev;
+  if (nextConversation.deletedAt || nextConversation.viewerRole === 'none') {
+    return prev.filter((item) => item.conversationId !== nextConversation.conversationId);
+  }
   const exists = prev.some((item) => item.conversationId === nextConversation.conversationId);
   const next = exists
     ? prev.map((item) => (item.conversationId === nextConversation.conversationId ? { ...item, ...nextConversation } : item))
@@ -164,6 +168,71 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
     return conversation;
   }, [upsertConversation]);
 
+  const leaveConversation = useCallback(async (conversationId, { transferToUid = '' } = {}) => {
+    if (!conversationId) return null;
+
+    const res = await axios.post(
+      `/api/chat/group/${conversationId}/leave`,
+      { transferToUid },
+      { withCredentials: true }
+    );
+
+    const conversation = res.data?.conversation || null;
+    setConversations((prev) => prev.filter((item) => item.conversationId !== conversationId));
+    return conversation;
+  }, []);
+
+  const transferConversationOwner = useCallback(async (conversationId, targetUserUid) => {
+    if (!conversationId || !targetUserUid) return null;
+
+    const res = await axios.post(
+      `/api/chat/group/${conversationId}/transfer-owner`,
+      { targetUserUid },
+      { withCredentials: true }
+    );
+
+    const conversation = res.data?.conversation || null;
+    if (conversation) upsertConversation(conversation);
+    return conversation;
+  }, [upsertConversation]);
+
+  const setConversationCoHost = useCallback(async (conversationId, targetUserUid, enabled) => {
+    if (!conversationId || !targetUserUid) return null;
+
+    const res = await axios.post(
+      `/api/chat/group/${conversationId}/cohost`,
+      { targetUserUid, enabled: !!enabled },
+      { withCredentials: true }
+    );
+
+    const conversation = res.data?.conversation || null;
+    if (conversation) upsertConversation(conversation);
+    return conversation;
+  }, [upsertConversation]);
+
+  const kickConversationParticipant = useCallback(async (conversationId, targetUserUid) => {
+    if (!conversationId || !targetUserUid) return null;
+
+    const res = await axios.post(
+      `/api/chat/group/${conversationId}/kick`,
+      { targetUserUid },
+      { withCredentials: true }
+    );
+
+    const conversation = res.data?.conversation || null;
+    if (conversation) upsertConversation(conversation);
+    return conversation;
+  }, [upsertConversation]);
+
+  const deleteConversation = useCallback(async (conversationId) => {
+    if (!conversationId) return null;
+
+    const res = await axios.delete(`/api/chat/group/${conversationId}`, { withCredentials: true });
+    const conversation = res.data?.conversation || null;
+    setConversations((prev) => prev.filter((item) => item.conversationId !== conversationId));
+    return conversation;
+  }, []);
+
   const findDirectConversationWithUser = useCallback((targetUserUid) => {
     if (!targetUserUid) return null;
 
@@ -279,7 +348,7 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
       });
       formData.append('manifest', JSON.stringify(manifest));
 
-      const res = await axios.post('/api/chat/attachments/from-device', formData, {
+      const res = await axios.post(transferUrl('/api/chat/attachments/from-device'), formData, {
         withCredentials: true,
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (event) => {
@@ -491,7 +560,16 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
 
     const handleConversationUpdated = (payload = {}) => {
       if (payload.conversation?.conversationId) {
-        upsertConversation(payload.conversation);
+        if (payload.conversation.deletedAt || payload.conversation.viewerRole === 'none') {
+          setConversations((prev) => prev.filter((item) => item.conversationId !== payload.conversation.conversationId));
+          setMessagesByConversation((prev) => {
+            const next = { ...prev };
+            delete next[payload.conversation.conversationId];
+            return next;
+          });
+        } else {
+          upsertConversation(payload.conversation);
+        }
       } else {
         loadConversations({ silent: true });
       }
@@ -524,8 +602,13 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
     ensureDirectConversation,
     createGroupConversation,
     inviteToConversation,
-    respondConversationInvite,
-    findDirectConversationWithUser,
+	    respondConversationInvite,
+	    leaveConversation,
+	    transferConversationOwner,
+	    setConversationCoHost,
+	    kickConversationParticipant,
+	    deleteConversation,
+	    findDirectConversationWithUser,
     loadMessages,
     sendMessage,
     sendTextMessage,
@@ -549,8 +632,13 @@ export const ChatProvider = ({ children, user = null, socket = null }) => {
     ensureDirectConversation,
     createGroupConversation,
     inviteToConversation,
-    respondConversationInvite,
-    findDirectConversationWithUser,
+	    respondConversationInvite,
+	    leaveConversation,
+	    transferConversationOwner,
+	    setConversationCoHost,
+	    kickConversationParticipant,
+	    deleteConversation,
+	    findDirectConversationWithUser,
     loadMessages,
     sendMessage,
     sendTextMessage,

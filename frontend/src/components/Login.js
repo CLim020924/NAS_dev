@@ -6,6 +6,11 @@ import {
   Box,
   Button,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   IconButton,
   InputAdornment,
   Paper,
@@ -13,7 +18,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
-import { AccountCircle, Lock, Visibility, VisibilityOff } from '@mui/icons-material';
+import { AccountCircle, Lock, Search, Videocam, Visibility, VisibilityOff } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { motion } from 'framer-motion';
 
@@ -22,22 +27,80 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [conflictOpen, setConflictOpen] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
+  const [meetingName, setMeetingName] = useState('');
+  const [meetingSearching, setMeetingSearching] = useState(false);
+  const [meetingResults, setMeetingResults] = useState([]);
+  const [meetingSearchError, setMeetingSearchError] = useState('');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const theme = useTheme();
 
-  const handleLogin = () => {
+  const finishLogin = (response) => {
+    localStorage.setItem('user', JSON.stringify(response.data.user));
+    localStorage.removeItem('nas_session_left_at');
+    window.dispatchEvent(new Event('nas:user-updated'));
+    const next = searchParams.get('next');
+    navigate(next || '/platform');
+  };
+
+  const submitLogin = (sessionConflictAction) => {
     setError('');
-    axios.post('/api/login', { id, password }, { withCredentials: true })
-      .then(response => {
-        localStorage.setItem('user', JSON.stringify(response.data.user));
-        window.dispatchEvent(new Event('nas:user-updated'));
-        const next = searchParams.get('next');
-        navigate(next || '/platform');
-      })
+    setIsLoggingIn(true);
+    axios.post('/api/login', {
+      id,
+      password,
+      ...(sessionConflictAction ? { sessionConflictAction } : {})
+    }, { withCredentials: true })
+      .then(finishLogin)
       .catch(err => {
+        if (err.response?.status === 409 && err.response?.data?.code === 'ACTIVE_SESSION_EXISTS') {
+          setConflictOpen(true);
+          return;
+        }
         setError(err.response?.data?.error || '로그인 정보가 올바르지 않습니다.');
+      })
+      .finally(() => {
+        setIsLoggingIn(false);
       });
+  };
+
+  const handleLogin = () => submitLogin();
+  const handleAllowConcurrentLogin = () => {
+    setConflictOpen(false);
+    submitLogin('allow');
+  };
+  const handleReplacePreviousLogin = () => {
+    setConflictOpen(false);
+    submitLogin('replace');
+  };
+
+  const handleMeetingSearch = async () => {
+    const name = meetingName.trim();
+    if (!name) {
+      setMeetingSearchError('참가할 회의방 이름을 정확히 입력하세요.');
+      return;
+    }
+    try {
+      setMeetingSearching(true);
+      setMeetingSearchError('');
+      const res = await axios.get('/api/meetings/public/exact', { params: { name } });
+      const rooms = Array.isArray(res.data?.rooms) ? res.data.rooms : [];
+      setMeetingResults(rooms);
+      if (rooms.length === 0) setMeetingSearchError('일치하는 공개 회의방이 없습니다.');
+    } catch (err) {
+      setMeetingResults([]);
+      setMeetingSearchError(err.response?.data?.error || '회의방을 검색할 수 없습니다.');
+    } finally {
+      setMeetingSearching(false);
+    }
+  };
+
+  const handleOpenMeeting = (room) => {
+    if (!room?.roomId) return;
+    navigate(`/meeting/${encodeURIComponent(room.roomId)}`);
   };
 
   return (
@@ -54,6 +117,21 @@ const Login = () => {
         py: { xs: 3, sm: 6 }
       }}
     >
+      <Button
+        variant="outlined"
+        size="small"
+        startIcon={<Videocam />}
+        onClick={() => setMeetingDialogOpen(true)}
+        sx={{
+          position: 'fixed',
+          top: { xs: 12, sm: 20 },
+          right: { xs: 12, sm: 20 },
+          zIndex: 2,
+          bgcolor: 'background.paper'
+        }}
+      >
+        화상회의 참가
+      </Button>
       <Container maxWidth="xs" disableGutters>
         <motion.div
           initial={{ opacity: 0, y: 12 }}
@@ -144,7 +222,7 @@ const Login = () => {
               </Stack>
 
               <Stack spacing={1.25}>
-                <Button fullWidth variant="contained" size="large" onClick={handleLogin}>
+                <Button fullWidth variant="contained" size="large" onClick={handleLogin} disabled={isLoggingIn}>
                   Sign In
                 </Button>
                 <Button fullWidth variant="text" onClick={() => navigate('/signup')}>
@@ -155,6 +233,60 @@ const Login = () => {
           </Paper>
         </motion.div>
       </Container>
+      <Dialog open={conflictOpen} onClose={() => setConflictOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>이미 로그인되어 있는 계정입니다</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            기존 접속을 유지한 채 이 기기에서도 로그인하거나, 기존 접속을 로그아웃하고 이 기기에서만 로그인할 수 있습니다.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={handleReplacePreviousLogin} color="inherit">
+            기존 접속 로그아웃
+          </Button>
+          <Button onClick={handleAllowConcurrentLogin} variant="contained">
+            동시 로그인
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={meetingDialogOpen} onClose={() => setMeetingDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>화상회의 참가하기</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+            <DialogContentText>
+              보안을 위해 회의방 이름을 정확히 입력해야 검색됩니다.
+            </DialogContentText>
+            <TextField
+              label="회의방 이름"
+              value={meetingName}
+              onChange={(event) => setMeetingName(event.target.value)}
+              onKeyDown={(event) => event.key === 'Enter' && handleMeetingSearch()}
+              fullWidth
+              autoFocus
+            />
+            {meetingSearchError && <Alert severity="warning">{meetingSearchError}</Alert>}
+            {meetingResults.map((room) => (
+              <Paper key={room.roomId} variant="outlined" sx={{ p: 1.25 }}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography sx={{ fontWeight: 900 }} noWrap>{room.title || '회의방'}</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                      방장 {room.hostDisplayName || '-'}{room.accessPolicy?.passwordEnabled ? ' · 비밀번호 필요' : ''}
+                    </Typography>
+                  </Box>
+                  <Button size="small" variant="contained" onClick={() => handleOpenMeeting(room)}>참가</Button>
+                </Stack>
+              </Paper>
+            ))}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMeetingDialogOpen(false)}>닫기</Button>
+          <Button variant="contained" startIcon={<Search />} onClick={handleMeetingSearch} disabled={meetingSearching}>
+            검색
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

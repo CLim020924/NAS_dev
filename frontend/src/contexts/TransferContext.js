@@ -1,10 +1,13 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import axios from 'axios';
-import { Box, Typography, Paper, IconButton, LinearProgress, Snackbar, Alert, CircularProgress } from '@mui/material';
+import { Box, Typography, Paper, IconButton, Snackbar, Alert, CircularProgress, Collapse } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { ensureSlash } from '../components/NAS/nasUtils';
+import { transferUrl } from '../transferBaseUrl';
 
 const TransferContext = createContext(null);
 
@@ -26,6 +29,7 @@ export const TransferProvider = ({ children }) => {
   const currentUser = getCurrentUser();
 
   const [transferTasks, setTransferTasks] = useState([]);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
 
   const uploadControllersRef = useRef({});
@@ -39,6 +43,125 @@ export const TransferProvider = ({ children }) => {
     const safePath = ensureSlash(targetPath || '/');
     window.dispatchEvent(new CustomEvent('nas_transfer_completed', { detail: { path: safePath } }));
     window.dispatchEvent(new CustomEvent('nas_tree_refresh'));
+  };
+
+  const emitUploadCompleteNotification = ({ taskName, targetPath, completedFiles }) => {
+    const safePath = ensureSlash(targetPath || '/');
+    const now = new Date().toISOString();
+    window.dispatchEvent(new CustomEvent('nas_local_notification', {
+      detail: {
+        notificationId: `local_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        type: 'upload_complete',
+        title: '업로드 완료',
+        message: `${taskName || '업로드'} 작업이 완료되었습니다.${completedFiles > 1 ? ` (${completedFiles}개)` : ''}`,
+        createdAt: now,
+        isRead: false,
+        meta: {
+          localOnly: true,
+          path: safePath,
+          openMode: localStorage.getItem('platform_app_open_mode') || 'window'
+        }
+      }
+    }));
+  };
+
+  const formatBytes = (bytes = 0) => {
+    const value = Number(bytes || 0);
+    if (!Number.isFinite(value) || value <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = value;
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit += 1;
+    }
+    return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+  };
+
+  const formatSpeed = (bps = 0) => {
+    const speed = Number(bps || 0);
+    if (!Number.isFinite(speed) || speed <= 0) return '속도 계산 중';
+    return `${formatBytes(speed)}/s`;
+  };
+
+  const formatEta = (seconds = 0) => {
+    const value = Number(seconds || 0);
+    if (!Number.isFinite(value) || value <= 0) return '계산 중';
+    if (value < 60) return `약 ${Math.ceil(value)}초 남음`;
+    if (value < 3600) return `약 ${Math.ceil(value / 60)}분 남음`;
+    const hours = Math.floor(value / 3600);
+    const mins = Math.ceil((value % 3600) / 60);
+    return `약 ${hours}시간 ${mins}분 남음`;
+  };
+
+  const ProgressRing = ({ value = 0, size = 42 }) => {
+    const percent = Math.max(0, Math.min(100, Math.round(Number(value || 0))));
+    return (
+      <Box sx={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+        <CircularProgress
+          variant="determinate"
+          value={100}
+          size={size}
+          thickness={4}
+          sx={{ color: 'rgba(255,255,255,0.18)', position: 'absolute', inset: 0 }}
+        />
+        <CircularProgress
+          variant="determinate"
+          value={percent}
+          size={size}
+          thickness={4}
+          sx={{ color: percent >= 100 ? '#7ddc9d' : '#8fb1ff', position: 'absolute', inset: 0 }}
+        />
+        <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Typography sx={{ fontSize: '0.64rem', fontWeight: 900, color: 'white' }}>{percent}%</Typography>
+        </Box>
+      </Box>
+    );
+  };
+
+  const updateTaskProgress = (taskId, {
+    currentLoaded = 0,
+    currentTotal = 0,
+    completedBytes = 0,
+    totalBytes = 0,
+    completedFiles = 0,
+    totalFiles = 1,
+    currentFileName = ''
+  }) => {
+    const now = Date.now();
+    setTransferTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+      const safeTotalBytes = Math.max(0, Number(totalBytes || task.totalBytes || 0));
+      const safeCompletedBytes = Math.max(0, Number(completedBytes || 0));
+      const safeCurrentLoaded = Math.max(0, Number(currentLoaded || 0));
+      const uploadedBytes = Math.min(safeTotalBytes || safeCompletedBytes + safeCurrentLoaded, safeCompletedBytes + safeCurrentLoaded);
+      const previousUploaded = Number(task.uploadedBytes || 0);
+      const previousMeasuredAt = Number(task.measuredAt || now);
+      const elapsedSec = Math.max(0.25, (now - previousMeasuredAt) / 1000);
+      const instantSpeed = uploadedBytes > previousUploaded ? (uploadedBytes - previousUploaded) / elapsedSec : Number(task.speedBps || 0);
+      const speedBps = Number(task.speedBps || 0) > 0
+        ? (Number(task.speedBps || 0) * 0.7) + (instantSpeed * 0.3)
+        : instantSpeed;
+      const remainingBytes = Math.max(0, safeTotalBytes - uploadedBytes);
+      const etaSeconds = speedBps > 0 ? remainingBytes / speedBps : 0;
+      const currentFilePercent = currentTotal > 0 ? Math.min(99, Math.round((safeCurrentLoaded * 100) / currentTotal)) : 0;
+      const overallPercent = safeTotalBytes > 0
+        ? Math.min(99, Math.round((uploadedBytes * 100) / safeTotalBytes))
+        : Math.round(((completedFiles || 0) * 100) / Math.max(1, totalFiles || 1));
+
+      return {
+        ...task,
+        currentFileName: currentFileName || task.currentFileName,
+        currentFilePercent,
+        overallPercent,
+        percent: overallPercent,
+        uploadedBytes,
+        totalBytes: safeTotalBytes,
+        speedBps,
+        etaSeconds,
+        measuredAt: now
+      };
+    }));
   };
 
 
@@ -242,13 +365,13 @@ export const TransferProvider = ({ children }) => {
 
     if (state.sessionId) {
       cancelCalls.push(
-        axios.post('/api/file/cancel-session', { sessionId: state.sessionId }, { withCredentials: true }).catch(() => null)
+        axios.post(transferUrl('/api/file/cancel-session'), { sessionId: state.sessionId }, { withCredentials: true }).catch(() => null)
       );
     }
 
     for (const uploadId of Array.from(state.uploadIds)) {
       cancelCalls.push(
-        axios.post('/api/file/chunk/cancel', { uploadId }, { withCredentials: true }).catch(() => null)
+        axios.post(transferUrl('/api/file/chunk/cancel'), { uploadId }, { withCredentials: true }).catch(() => null)
       );
     }
 
@@ -390,7 +513,7 @@ export const TransferProvider = ({ children }) => {
     }
   };
 
-  const uploadSmallFileDirect = async ({ file, relPath, targetPath, taskId, sessionId }) => {
+  const uploadSmallFileDirect = async ({ file, relPath, targetPath, taskId, sessionId, completedBytes = 0, totalBytes = 0, completedFiles = 0, totalFiles = 1 }) => {
     throwIfTaskCanceled(taskId);
 
     const destDirPath = getUploadDestDir(targetPath, relPath);
@@ -401,7 +524,7 @@ export const TransferProvider = ({ children }) => {
     const controller = createAbortControllerForTask(taskId);
 
     try {
-      await axios.post('/api/file', formData, {
+      await axios.post(transferUrl('/api/file'), formData, {
         withCredentials: true,
         timeout: 0,
         maxContentLength: Infinity,
@@ -415,8 +538,16 @@ export const TransferProvider = ({ children }) => {
           const total = evt.total || file.size;
           if (!total) return;
           const percent = Math.max(0, Math.min(99, Math.round((evt.loaded * 100) / total)));
+          updateTaskProgress(taskId, {
+            currentLoaded: evt.loaded || 0,
+            currentTotal: total,
+            completedBytes,
+            totalBytes,
+            completedFiles,
+            totalFiles,
+            currentFileName: file.name
+          });
           setTaskPatch(taskId, {
-            percent,
             currentFileName: file.name,
             label: `${percent}%`
           });
@@ -427,7 +558,7 @@ export const TransferProvider = ({ children }) => {
     }
   };
 
-  const uploadLargeFileByChunks = async ({ file, relPath, targetPath, taskId }) => {
+  const uploadLargeFileByChunks = async ({ file, relPath, targetPath, taskId, completedBytes = 0, totalBytes = 0, completedFiles = 0, totalFiles = 1 }) => {
     throwIfTaskCanceled(taskId);
 
     const state = getUploadTaskState(taskId);
@@ -441,7 +572,9 @@ export const TransferProvider = ({ children }) => {
       status: 'uploading',
       method: 'chunk',
       currentFileName: file.name,
-      percent: 0,
+      currentFilePercent: 0,
+      overallPercent: totalBytes > 0 ? Math.round((completedBytes * 100) / totalBytes) : 0,
+      percent: totalBytes > 0 ? Math.round((completedBytes * 100) / totalBytes) : 0,
       chunkIndex: 0,
       totalChunks,
       label: `0% · 청크 0/${totalChunks}`
@@ -469,7 +602,7 @@ export const TransferProvider = ({ children }) => {
       const statusController = createAbortControllerForTask(taskId);
 
       try {
-        const statusRes = await axios.post('/api/file/chunk/status', { uploadId }, {
+        const statusRes = await axios.post(transferUrl('/api/file/chunk/status'), { uploadId }, {
           withCredentials: true,
           timeout: 0,
           signal: statusController.signal
@@ -515,7 +648,7 @@ export const TransferProvider = ({ children }) => {
       let initController = createAbortControllerForTask(taskId);
 
       try {
-        const initRes = await axios.post('/api/file/chunk/init', {
+        const initRes = await axios.post(transferUrl('/api/file/chunk/init'), {
           path: destDirPath,
           fileName: file.name,
           fileSize: file.size,
@@ -590,7 +723,7 @@ export const TransferProvider = ({ children }) => {
         const controller = createAbortControllerForTask(taskId);
 
         try {
-          await axios.post('/api/file/chunk', formData, {
+          await axios.post(transferUrl('/api/file/chunk'), formData, {
             withCredentials: true,
             timeout: 0,
             maxContentLength: Infinity,
@@ -635,6 +768,15 @@ export const TransferProvider = ({ children }) => {
           receivedSet.add(chunkIndex);
 
           const percent = Math.max(0, Math.min(99, Math.floor((uploadedBytes * 100) / file.size)));
+          updateTaskProgress(taskId, {
+            currentLoaded: uploadedBytes,
+            currentTotal: file.size,
+            completedBytes,
+            totalBytes,
+            completedFiles,
+            totalFiles,
+            currentFileName: file.name
+          });
 
           if (state?.resumeMeta) {
             state.resumeMeta.percent = percent;
@@ -642,7 +784,6 @@ export const TransferProvider = ({ children }) => {
           }
 
           setTaskPatch(taskId, {
-            percent,
             currentFileName: file.name,
             chunkIndex: completedChunks,
             totalChunks,
@@ -694,7 +835,7 @@ export const TransferProvider = ({ children }) => {
     const completeController = createAbortControllerForTask(taskId);
 
     try {
-      await axios.post('/api/file/chunk/complete', { uploadId }, {
+      await axios.post(transferUrl('/api/file/chunk/complete'), { uploadId }, {
         withCredentials: true,
         timeout: 0,
         signal: completeController.signal
@@ -706,7 +847,9 @@ export const TransferProvider = ({ children }) => {
     }
 
     setTaskPatch(taskId, {
-      percent: 100,
+      currentFilePercent: 100,
+      overallPercent: totalBytes > 0 ? Math.min(99, Math.round(((completedBytes + file.size) * 100) / totalBytes)) : 100,
+      percent: totalBytes > 0 ? Math.min(99, Math.round(((completedBytes + file.size) * 100) / totalBytes)) : 100,
       currentFileName: file.name,
       chunkIndex: totalChunks,
       totalChunks,
@@ -804,6 +947,10 @@ export const TransferProvider = ({ children }) => {
       relPath: item.relPath || item.file.name,
       type: item.file.type || ''
     }));
+    const totalBytes = files.reduce((sum, item) => sum + Number(item?.file?.size || 0), 0);
+    const completedBytesAt = (count) => files
+      .slice(0, Math.max(0, count || 0))
+      .reduce((sum, item) => sum + Number(item?.file?.size || 0), 0);
 
     const baseResumeMeta = resumeMeta || state?.resumeMeta || {
       taskId,
@@ -858,6 +1005,13 @@ export const TransferProvider = ({ children }) => {
           total: files.length,
           completed: startIndex,
           percent: baseResumeMeta.percent || 0,
+          currentFilePercent: 0,
+          overallPercent: baseResumeMeta.percent || 0,
+          uploadedBytes: completedBytesAt(startIndex),
+          totalBytes,
+          speedBps: 0,
+          etaSeconds: 0,
+          measuredAt: Date.now(),
           status: 'queued',
           currentFileName: files[startIndex]?.file?.name || files[0].file.name,
           label: files.length > 1 ? `대기 중 · ${startIndex}/${files.length}` : '대기 중',
@@ -872,6 +1026,13 @@ export const TransferProvider = ({ children }) => {
         total: files.length,
         completed: startIndex,
         status: 'queued',
+        currentFilePercent: 0,
+        overallPercent: baseResumeMeta.percent || 0,
+        uploadedBytes: completedBytesAt(startIndex),
+        totalBytes,
+        speedBps: 0,
+        etaSeconds: 0,
+        measuredAt: Date.now(),
         targetPath: safeTargetPath,
         resumeMeta: baseResumeMeta,
         label: '이어올리기 준비 중...'
@@ -892,13 +1053,16 @@ export const TransferProvider = ({ children }) => {
 
         const item = files[i];
         const file = item.file;
+        const completedBytesBeforeFile = completedBytesAt(completedFiles);
 
         setTaskPatch(taskId, {
           status: 'uploading',
           currentFileName: file.name,
           completed: completedFiles,
           total: files.length,
-          percent: i === completedFiles ? (baseResumeMeta.percent || 0) : 0,
+          currentFilePercent: 0,
+          overallPercent: totalBytes > 0 ? Math.round((completedBytesBeforeFile * 100) / totalBytes) : 0,
+          percent: totalBytes > 0 ? Math.round((completedBytesBeforeFile * 100) / totalBytes) : 0,
           label: files.length > 1 ? `파일 ${i + 1}/${files.length}` : '0%',
           targetPath: safeTargetPath,
           resumeMeta: baseResumeMeta
@@ -909,7 +1073,11 @@ export const TransferProvider = ({ children }) => {
             file,
             relPath: item.relPath || file.name,
             targetPath: safeTargetPath,
-            taskId
+            taskId,
+            completedBytes: completedBytesBeforeFile,
+            totalBytes,
+            completedFiles,
+            totalFiles: files.length
           });
         } else {
           await uploadSmallFileDirect({
@@ -917,7 +1085,11 @@ export const TransferProvider = ({ children }) => {
             relPath: item.relPath || file.name,
             targetPath: safeTargetPath,
             taskId,
-            sessionId
+            sessionId,
+            completedBytes: completedBytesBeforeFile,
+            totalBytes,
+            completedFiles,
+            totalFiles: files.length
           });
         }
 
@@ -928,7 +1100,10 @@ export const TransferProvider = ({ children }) => {
 
         setTaskPatch(taskId, {
           completed: completedFiles,
-          percent: 100,
+          currentFilePercent: 100,
+          overallPercent: totalBytes > 0 ? Math.round((completedBytesAt(completedFiles) * 100) / totalBytes) : 100,
+          percent: totalBytes > 0 ? Math.round((completedBytesAt(completedFiles) * 100) / totalBytes) : 100,
+          uploadedBytes: completedBytesAt(completedFiles),
           label: files.length > 1 ? `완료 ${completedFiles}/${files.length}` : '100%',
           resumeMeta: baseResumeMeta
         });
@@ -940,12 +1115,15 @@ export const TransferProvider = ({ children }) => {
       setTaskPatch(taskId, {
         status: 'done',
         completed: completedFiles,
+        currentFilePercent: 100,
+        overallPercent: 100,
         percent: 100,
         label: files.length > 1 ? `완료 ${completedFiles}/${files.length}` : '100%'
       });
 
       emitTransferCompleted(safeTargetPath);
       if (safeTargetPath !== '/') emitTransferCompleted('/');
+      emitUploadCompleteNotification({ taskName: displayName, targetPath: safeTargetPath, completedFiles });
 
       setSnackbar({
         open: true,
@@ -1114,66 +1292,108 @@ export const TransferProvider = ({ children }) => {
       />
 
       {transferTasks.length > 0 && (
-        <Box sx={{ position: 'fixed', bottom: 20, right: 20, width: 360, zIndex: 20000, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {transferTasks.map(task => {
-            const percent = Math.max(0, Math.min(100, Number(task.percent || 0)));
-            const canPause = ['queued', 'scanning', 'uploading'].includes(task.status);
-            const canResume = task.status === 'paused';
-            const canCancel = ['queued', 'scanning', 'uploading', 'paused', 'canceling'].includes(task.status);
-            const title =
-              task.status === 'canceling' ? `취소 중: ${task.currentFileName || task.name}` :
-              task.status === 'paused' ? `중단됨: ${task.currentFileName || task.name}` :
-              task.status === 'queued' ? `대기 중: ${task.currentFileName || task.name}` :
-              task.status === 'done' ? `완료: ${task.name}` :
-              task.status === 'failed' ? `실패: ${task.currentFileName || task.name}` :
-              `업로드 중: ${task.currentFileName || task.name}`;
+        <Paper
+          elevation={10}
+          sx={{
+            position: 'fixed',
+            right: { xs: 10, sm: 20 },
+            bottom: { xs: 10, sm: 20 },
+            width: { xs: 'calc(100vw - 20px)', sm: 380 },
+            maxWidth: 'calc(100vw - 20px)',
+            zIndex: 20000,
+            overflow: 'hidden',
+            borderRadius: 2,
+            bgcolor: '#25262b',
+            color: 'white'
+          }}
+        >
+          <Box sx={{ px: 1.25, py: 0.9, display: 'flex', alignItems: 'center', gap: 1, borderBottom: panelCollapsed ? 0 : '1px solid rgba(255,255,255,0.08)' }}>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Typography sx={{ fontSize: '0.82rem', fontWeight: 900 }} noWrap>
+                전송 작업 {transferTasks.length}개
+              </Typography>
+              <Typography sx={{ fontSize: '0.68rem', opacity: 0.72 }} noWrap>
+                {panelCollapsed ? '접힘' : '업로드 상태 표시 중'}
+              </Typography>
+            </Box>
+            <IconButton size="small" color="inherit" title={panelCollapsed ? '펼치기' : '접기'} onClick={() => setPanelCollapsed(prev => !prev)}>
+              {panelCollapsed ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+            </IconButton>
+          </Box>
 
-            const subText = task.label || (
-              task.total > 1
-                ? `${task.completed || 0}/${task.total}`
-                : `${percent}%`
-            );
+          <Collapse in={!panelCollapsed}>
+            <Box sx={{ maxHeight: { xs: '55vh', sm: 420 }, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+              {transferTasks.map(task => {
+                const currentPercent = Math.max(0, Math.min(100, Number(task.currentFilePercent ?? task.percent ?? 0)));
+                const overallPercent = Math.max(0, Math.min(100, Number(task.overallPercent ?? task.percent ?? 0)));
+                const canPause = ['queued', 'scanning', 'uploading'].includes(task.status);
+                const canResume = task.status === 'paused';
+                const canCancel = ['queued', 'scanning', 'uploading', 'paused', 'canceling'].includes(task.status);
+                const isMulti = Number(task.total || 1) > 1;
+                const statusText =
+                  task.status === 'canceling' ? '취소 중' :
+                  task.status === 'paused' ? '중단됨' :
+                  task.status === 'queued' ? '대기 중' :
+                  task.status === 'done' ? '완료' :
+                  task.status === 'failed' ? '실패' :
+                  '업로드 중';
 
-            return (
-              <Paper key={task.id} elevation={8} sx={{ borderRadius: 2, overflow: 'hidden' }}>
-                <Box sx={{ p: 1, bgcolor: '#323232', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
-                  <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="caption" sx={{ fontWeight: 'bold', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {title}
-                    </Typography>
-                    <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                      {subText}
-                    </Typography>
+                return (
+                  <Box key={task.id} sx={{ px: 1.25, py: 1.1, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography sx={{ fontSize: '0.78rem', fontWeight: 900 }} noWrap>
+                          {statusText}
+                          <Typography component="span" sx={{ ml: 0.75, fontSize: '0.7rem', fontWeight: 700, opacity: 0.72 }}>
+                            {formatSpeed(task.speedBps)} · {formatEta(task.etaSeconds)}
+                          </Typography>
+                        </Typography>
+                      </Box>
+
+                      {canResume && (
+                        <IconButton size="small" color="inherit" title="이어올리기" onClick={() => handleResumeTransferTask(task)}>
+                          <PlayArrowIcon fontSize="inherit" />
+                        </IconButton>
+                      )}
+                      {canPause && (
+                        <IconButton size="small" color="inherit" title="일시정지" onClick={() => handlePauseTransferTask(task)}>
+                          <PauseIcon fontSize="inherit" />
+                        </IconButton>
+                      )}
+                      {canCancel && (
+                        <IconButton size="small" color="inherit" title="취소" onClick={() => handleCancelTransferTask(task)}>
+                          <CloseIcon fontSize="inherit" />
+                        </IconButton>
+                      )}
+                    </Box>
+
+                    <Box sx={{ mt: 1, display: 'flex', alignItems: 'center', gap: 1.1, minWidth: 0 }}>
+                      <ProgressRing value={currentPercent} />
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography sx={{ fontSize: '0.68rem', opacity: 0.7, fontWeight: 800 }}>현재 파일</Typography>
+                        <Typography sx={{ fontSize: '0.78rem', fontWeight: 800 }} noWrap>
+                          {task.currentFileName || task.name}
+                        </Typography>
+                      </Box>
+                    </Box>
+
+                    {isMulti && (
+                      <Box sx={{ mt: 0.8, display: 'flex', alignItems: 'center', gap: 1.1, minWidth: 0 }}>
+                        <ProgressRing value={overallPercent} />
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Typography sx={{ fontSize: '0.68rem', opacity: 0.7, fontWeight: 800 }}>전체 작업</Typography>
+                          <Typography sx={{ fontSize: '0.78rem', fontWeight: 800 }} noWrap>
+                            {task.completed || 0} / {task.total || 1}개 완료
+                          </Typography>
+                        </Box>
+                      </Box>
+                    )}
                   </Box>
-
-                  {canResume && (
-                    <IconButton size="small" color="inherit" title="이어올리기" onClick={() => handleResumeTransferTask(task)}>
-                      <PlayArrowIcon fontSize="inherit" />
-                    </IconButton>
-                  )}
-
-                  {canPause && (
-                    <IconButton size="small" color="inherit" title="일시정지" onClick={() => handlePauseTransferTask(task)}>
-                      <PauseIcon fontSize="inherit" />
-                    </IconButton>
-                  )}
-
-                  {canCancel && (
-                    <IconButton size="small" color="inherit" title="취소" onClick={() => handleCancelTransferTask(task)}>
-                      <CloseIcon fontSize="inherit" />
-                    </IconButton>
-                  )}
-                </Box>
-
-                <LinearProgress
-                  variant={task.status === 'queued' || task.status === 'scanning' || task.status === 'canceling' ? 'query' : 'determinate'}
-                  value={percent}
-                  sx={{ height: 5 }}
-                />
-              </Paper>
-            );
-          })}
-        </Box>
+                );
+              })}
+            </Box>
+          </Collapse>
+        </Paper>
       )}
 
       <Snackbar
@@ -1190,4 +1410,3 @@ export const TransferProvider = ({ children }) => {
     </TransferContext.Provider>
   );
 };
-

@@ -34,6 +34,7 @@ import PersonIcon from '@mui/icons-material/Person';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
@@ -158,6 +159,15 @@ const toChatMeta = (conversation) => {
     subtitle: participantCount > 0 ? `참여자 ${participantCount}명` : '그룹 채팅',
     avatarText: 'G',
     avatarColor: 'secondary.main',
+    ownerUid: conversation.ownerUid || conversation.createdByUid || '',
+    coHostUids: conversation.coHostUids || [],
+    participantUids: conversation.participantUids || [],
+    pendingInviteUids: conversation.pendingInviteUids || [],
+    participants: conversation.participants || [],
+    pendingInvites: conversation.pendingInvites || [],
+    viewerRole: conversation.viewerRole || 'member',
+    viewerCanManage: !!conversation.viewerCanManage,
+    viewerCanDelete: !!conversation.viewerCanDelete,
   };
 };
 
@@ -200,6 +210,11 @@ const ChatWorkspaceWindowLayer = () => {
     createDeviceAttachmentBundle,
     createNasAttachmentBundle,
     removeAttachmentBundle,
+    leaveConversation,
+    transferConversationOwner,
+    setConversationCoHost,
+    kickConversationParticipant,
+    deleteConversation,
   } = useChat();
 
   const workspaceWin = useMemo(
@@ -209,6 +224,7 @@ const ChatWorkspaceWindowLayer = () => {
 
   const [roomQuery, setRoomQuery] = useState('');
   const [attachMenuAnchorEl, setAttachMenuAnchorEl] = useState(null);
+  const [roomMenuAnchorEl, setRoomMenuAnchorEl] = useState(null);
   const [nasPickerState, setNasPickerState] = useState({ open: false, conversationId: null });
   const [dragOverConversationId, setDragOverConversationId] = useState(null);
   const [savingMessageIds, setSavingMessageIds] = useState({});
@@ -319,6 +335,83 @@ const ChatWorkspaceWindowLayer = () => {
   if (!workspaceWin) return null;
 
   const currentMeta = toChatMeta(selectedConversation);
+  const isGroupSelected = selectedConversation?.type === 'group';
+  const selectedParticipants = Array.isArray(selectedConversation?.participants) ? selectedConversation.participants : [];
+  const selectedOwnerUid = selectedConversation?.ownerUid || selectedConversation?.createdByUid || '';
+  const selectedCoHostUids = Array.isArray(selectedConversation?.coHostUids) ? selectedConversation.coHostUids : [];
+  const selectedViewerRole = selectedConversation?.viewerRole || 'member';
+  const selectedCanManage = !!selectedConversation?.viewerCanManage || selectedViewerRole === 'owner' || selectedViewerRole === 'cohost';
+  const selectedCanDelete = !!selectedConversation?.viewerCanDelete || selectedViewerRole === 'owner';
+
+  const closeRoomMenu = () => setRoomMenuAnchorEl(null);
+
+  const handleRoomActionResult = async (conversation) => {
+    await loadConversations({ silent: true });
+    if (!conversation?.conversationId || conversation.deletedAt || conversation.viewerRole === 'none') {
+      const nextConversation = conversations.find((item) => item.conversationId !== selectedConversationId) || null;
+      handleSelectConversation(nextConversation?.conversationId || null);
+      return;
+    }
+    handleSelectConversation(conversation.conversationId);
+  };
+
+  const handleLeaveRoom = async () => {
+    if (!selectedConversationId) return;
+    if (!window.confirm('이 채팅방에서 나가시겠습니까?')) return;
+    try {
+      const conversation = await leaveConversation(selectedConversationId);
+      closeRoomMenu();
+      await handleRoomActionResult(conversation);
+    } catch (err) {
+      alert(err.response?.data?.error || '채팅방에서 나가지 못했습니다.');
+    }
+  };
+
+  const handleDeleteRoom = async () => {
+    if (!selectedConversationId) return;
+    if (!window.confirm('채팅방을 파기하면 모든 참가자의 목록에서 사라집니다. 계속할까요?')) return;
+    if (window.prompt('정말 파기하려면 "방 파기"를 입력하세요.') !== '방 파기') return;
+    try {
+      const conversation = await deleteConversation(selectedConversationId);
+      closeRoomMenu();
+      await handleRoomActionResult(conversation);
+    } catch (err) {
+      alert(err.response?.data?.error || '채팅방을 파기하지 못했습니다.');
+    }
+  };
+
+  const handleTransferOwner = async (member) => {
+    if (!selectedConversationId || !member?.userUid) return;
+    if (!window.confirm(`${member.displayName || member.username}님에게 방장을 위임할까요?`)) return;
+    try {
+      const conversation = await transferConversationOwner(selectedConversationId, member.userUid);
+      await handleRoomActionResult(conversation);
+    } catch (err) {
+      alert(err.response?.data?.error || '방장 위임에 실패했습니다.');
+    }
+  };
+
+  const handleToggleCoHost = async (member) => {
+    if (!selectedConversationId || !member?.userUid) return;
+    const enabled = !selectedCoHostUids.includes(member.userUid);
+    try {
+      const conversation = await setConversationCoHost(selectedConversationId, member.userUid, enabled);
+      await handleRoomActionResult(conversation);
+    } catch (err) {
+      alert(err.response?.data?.error || '부방장 설정에 실패했습니다.');
+    }
+  };
+
+  const handleKickMember = async (member) => {
+    if (!selectedConversationId || !member?.userUid) return;
+    if (!window.confirm(`${member.displayName || member.username}님을 채팅방에서 내보낼까요?`)) return;
+    try {
+      const conversation = await kickConversationParticipant(selectedConversationId, member.userUid);
+      await handleRoomActionResult(conversation);
+    } catch (err) {
+      alert(err.response?.data?.error || '내보내기에 실패했습니다.');
+    }
+  };
 
   const handleSelectConversation = (conversationId) => {
     setOpenWindows((prev) =>
@@ -339,7 +432,7 @@ const ChatWorkspaceWindowLayer = () => {
       height: 640,
       payload: {
         roomCode: getConversationMeetingCode(selectedConversationId),
-        autoJoin: true,
+        autoJoin: false,
         conversationId: selectedConversationId,
       },
     });
@@ -607,7 +700,7 @@ const ChatWorkspaceWindowLayer = () => {
 
       <Box sx={{ display: workspaceWin.isMinimized ? 'none' : 'block', pointerEvents: 'auto' }}>
         <Rnd
-          size={fillsParent ? { width: '100vw', height: 'calc(100vh - 48px)' } : { width: workspaceWin.width, height: workspaceWin.height }}
+          size={fillsParent ? { width: '100vw', height: 'calc(var(--app-viewport-height) - 48px)' } : { width: workspaceWin.width, height: workspaceWin.height }}
           position={fillsParent ? { x: 0, y: 48 } : { x: workspaceWin.x, y: workspaceWin.y }}
           onMouseDown={(e) => {
             e.stopPropagation();
@@ -734,7 +827,7 @@ const ChatWorkspaceWindowLayer = () => {
                   />
                 </Box>
 
-                <Box sx={{ flex: 1, overflowY: 'auto', p: 1 }}>
+                <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', p: 1 }}>
                   {loadingConversations ? (
                     <Typography variant="body2" color="text.secondary" sx={{ px: 1, py: 2 }}>
                       채팅방 목록을 불러오는 중...
@@ -873,6 +966,11 @@ const ChatWorkspaceWindowLayer = () => {
                         <IconButton size="small" onClick={() => setInviteDialogOpen(true)} title="인원 추가">
                           <PersonAddIcon fontSize="small" />
                         </IconButton>
+                        {isGroupSelected && (
+                          <IconButton size="small" onClick={(event) => setRoomMenuAnchorEl(event.currentTarget)} title="채팅방 관리">
+                            <MoreVertIcon fontSize="small" />
+                          </IconButton>
+                        )}
                       </Box>
                     </Box>
 
@@ -880,6 +978,7 @@ const ChatWorkspaceWindowLayer = () => {
                       ref={messageViewportRef}
                       sx={{
                         flex: 1,
+                        minHeight: 0,
                         overflowY: 'auto',
                         p: 1.5,
                         bgcolor:
@@ -1000,7 +1099,7 @@ const ChatWorkspaceWindowLayer = () => {
 
                     <Divider />
 
-                    <Box sx={{ p: 1.25, display: 'flex', gap: 1, alignItems: 'flex-end', bgcolor: 'background.paper' }}>
+                    <Box sx={{ p: 1.25, pb: 'calc(10px + var(--app-safe-bottom))', display: 'flex', gap: 1, alignItems: 'flex-end', bgcolor: 'background.paper', flexShrink: 0 }}>
                       <IconButton onClick={(e) => setAttachMenuAnchorEl(e.currentTarget)}>
                         <AddIcon />
                       </IconButton>
@@ -1080,6 +1179,67 @@ const ChatWorkspaceWindowLayer = () => {
         >
           NAS에서 선택
         </MenuItem>
+      </Menu>
+
+      <Menu
+        anchorEl={roomMenuAnchorEl}
+        open={Boolean(roomMenuAnchorEl)}
+        onClose={closeRoomMenu}
+        PaperProps={{ sx: { width: 340, maxWidth: 'calc(100vw - 24px)' } }}
+      >
+        <Box sx={{ px: 1.5, py: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>채팅방 관리</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {selectedViewerRole === 'owner' ? '방장' : selectedViewerRole === 'cohost' ? '부방장' : '멤버'}
+          </Typography>
+        </Box>
+        <Divider />
+        {selectedParticipants.map((member) => {
+          const isOwner = member.userUid === selectedOwnerUid;
+          const isCoHost = selectedCoHostUids.includes(member.userUid);
+          const isMe = member.userUid === currentUserUid;
+          return (
+            <Box key={member.userUid} sx={{ px: 1.25, py: 0.9 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                <Avatar sx={{ width: 26, height: 26, fontSize: 12 }}>
+                  {(member.displayName || member.username || '?').slice(0, 1)}
+                </Avatar>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 800 }} noWrap>
+                    {member.displayName || member.username}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {isOwner ? '방장' : isCoHost ? '부방장' : '멤버'}{isMe ? ' · 나' : ''}
+                  </Typography>
+                </Box>
+              </Box>
+              {!isMe && selectedCanManage && !isOwner && (
+                <Box sx={{ mt: 0.75, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                  {selectedCanDelete && (
+                    <>
+                      <Button size="small" variant="text" onClick={() => handleTransferOwner(member)}>
+                        방장위임
+                      </Button>
+                      <Button size="small" variant="text" onClick={() => handleToggleCoHost(member)}>
+                        {isCoHost ? '부방장 해제' : '부방장'}
+                      </Button>
+                    </>
+                  )}
+                  <Button size="small" color="error" variant="text" onClick={() => handleKickMember(member)}>
+                    내보내기
+                  </Button>
+                </Box>
+              )}
+            </Box>
+          );
+        })}
+        <Divider />
+        <MenuItem onClick={handleLeaveRoom}>채팅방 나가기</MenuItem>
+        {selectedCanDelete && (
+          <MenuItem onClick={handleDeleteRoom} sx={{ color: 'error.main', fontWeight: 900 }}>
+            채팅방 파기
+          </MenuItem>
+        )}
       </Menu>
 
       <ChatNasPickerDialog

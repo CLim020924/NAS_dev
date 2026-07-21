@@ -166,6 +166,39 @@ const markChatNotificationsRead = ({ userUid, conversationId = '', fromUserUid =
   return changed;
 };
 
+const deleteNotification = (userUid, notificationId) => {
+  const targetId = String(notificationId || '').trim();
+  if (!userUid || !targetId) return false;
+
+  const items = readNotifications();
+  const next = items.filter((item) => {
+    const n = normalizeNotification(item);
+    return !(n.userUid === userUid && n.notificationId === targetId);
+  });
+
+  const changed = next.length !== items.length;
+  if (changed) writeNotifications(next);
+  return changed;
+};
+
+const deleteReadNotifications = (userUid) => {
+  if (!userUid) return 0;
+
+  const items = readNotifications();
+  let removed = 0;
+  const next = items.filter((item) => {
+    const n = normalizeNotification(item);
+    if (n.userUid === userUid && n.isRead) {
+      removed += 1;
+      return false;
+    }
+    return true;
+  });
+
+  if (removed > 0) writeNotifications(next);
+  return removed;
+};
+
 module.exports = {
   createNotification,
   listNotificationsForUser,
@@ -173,4 +206,6 @@ module.exports = {
   markNotificationRead,
   markAllNotificationsRead,
   markChatNotificationsRead,
+  deleteNotification,
+  deleteReadNotifications,
 };

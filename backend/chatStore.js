@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const config = require('./config/env');
 const {
   getBundle,
   updateBundle,
@@ -9,7 +10,7 @@ const {
 
 const conversationsFilePath = path.join(__dirname, 'data', 'conversations.json');
 const messagesFilePath = path.join(__dirname, 'data', 'messages.json');
-const CHAT_TEMP_ROOT = '/mnt/nas/chat_tmp';
+const CHAT_TEMP_ROOT = config.CHAT_TEMP_ROOT;
 
 const nowIso = () => new Date().toISOString();
 
@@ -47,18 +48,37 @@ const sortParticipantUids = (uids) => {
 
 const normalizeConversation = (conversation = {}) => {
   const createdAt = conversation.createdAt || nowIso();
+  const participantUids = sortParticipantUids(conversation.participantUids || []);
+  const pendingInviteUids = sortParticipantUids(conversation.pendingInviteUids || []);
+  const ownerUid = conversation.ownerUid || conversation.createdByUid || participantUids[0] || '';
+  const meeting = conversation.meeting && typeof conversation.meeting === 'object'
+    ? {
+        enabled: !!conversation.meeting.enabled,
+        roomCode: typeof conversation.meeting.roomCode === 'string' ? conversation.meeting.roomCode : '',
+        accessPolicy: conversation.meeting.accessPolicy && typeof conversation.meeting.accessPolicy === 'object'
+          ? conversation.meeting.accessPolicy
+          : {},
+        savedFromTemporaryAt: conversation.meeting.savedFromTemporaryAt || null,
+      }
+    : null;
   return {
     conversationId: conversation.conversationId || generateId('cv'),
     type: conversation.type || 'direct',
     title: typeof conversation.title === 'string' ? conversation.title : '',
     createdByUid: conversation.createdByUid || '',
-    participantUids: sortParticipantUids(conversation.participantUids || []),
-    pendingInviteUids: sortParticipantUids(conversation.pendingInviteUids || []),
+    ownerUid,
+    coHostUids: sortParticipantUids(conversation.coHostUids || []).filter((uid) => uid && uid !== ownerUid && participantUids.includes(uid)),
+    bannedUids: sortParticipantUids(conversation.bannedUids || []),
+    participantUids,
+    pendingInviteUids,
     createdAt,
     updatedAt: conversation.updatedAt || createdAt,
     lastMessageId: conversation.lastMessageId || null,
     lastMessagePreview: typeof conversation.lastMessagePreview === 'string' ? conversation.lastMessagePreview : '',
     lastMessageAt: conversation.lastMessageAt || null,
+    deletedAt: conversation.deletedAt || null,
+    deletedByUid: conversation.deletedByUid || '',
+    meeting,
   };
 };
 
@@ -136,14 +156,30 @@ const ensureDirectConversation = (userAUid, userBUid) => {
 const listConversationsForUser = (userUid) => {
   return getAllConversations()
     .filter((conversation) =>
-      conversation.participantUids.includes(userUid) ||
-      conversation.pendingInviteUids.includes(userUid)
+      !conversation.deletedAt && (
+        conversation.participantUids.includes(userUid) ||
+        conversation.pendingInviteUids.includes(userUid)
+      )
     )
     .sort((a, b) => {
       const aKey = a.lastMessageAt || a.updatedAt || a.createdAt || '';
       const bKey = b.lastMessageAt || b.updatedAt || b.createdAt || '';
       return String(bKey).localeCompare(String(aKey));
     });
+};
+
+const listAllConversationsForMeetingSearch = () => {
+  return getAllConversations().filter((conversation) => !conversation.deletedAt);
+};
+
+const getMeetingConversationByRoomCode = (roomCode = '') => {
+  const normalizedRoomCode = String(roomCode || '').trim().toUpperCase();
+  if (!normalizedRoomCode) return null;
+  return getAllConversations().find((conversation) =>
+    !conversation.deletedAt &&
+    conversation.meeting?.enabled &&
+    String(conversation.meeting.roomCode || '').trim().toUpperCase() === normalizedRoomCode
+  ) || null;
 };
 
 const createGroupConversation = ({ title, creatorUid, inviteeUids = [] }) => {
@@ -155,6 +191,7 @@ const createGroupConversation = ({ title, creatorUid, inviteeUids = [] }) => {
     type: 'group',
     title: safeTitle,
     createdByUid: creatorUid,
+    ownerUid: creatorUid,
     participantUids: [creatorUid],
     pendingInviteUids,
     createdAt,
@@ -166,12 +203,91 @@ const createGroupConversation = ({ title, creatorUid, inviteeUids = [] }) => {
   return created;
 };
 
+const createMeetingConversation = ({ title, creatorUid, participantUids = [], roomCode = '', accessPolicy = {} }) => {
+  const safeTitle = String(title || '').trim().slice(0, 60) || '회의방';
+  const members = sortParticipantUids([creatorUid, ...participantUids]).filter(Boolean);
+  const conversations = getAllConversations();
+  const createdAt = nowIso();
+  const created = normalizeConversation({
+    type: 'group',
+    title: safeTitle,
+    createdByUid: creatorUid,
+    ownerUid: creatorUid,
+    participantUids: members,
+    pendingInviteUids: [],
+    createdAt,
+    updatedAt: createdAt,
+    meeting: {
+      enabled: true,
+      roomCode,
+      accessPolicy,
+      savedFromTemporaryAt: createdAt,
+    },
+  });
+
+  conversations.push(created);
+  saveConversations(conversations);
+  return created;
+};
+
+const upsertConversationParticipant = ({ conversationId, userUid }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) throw new Error('CONVERSATION_DELETED');
+    if (!userUid) throw new Error('USER_REQUIRED');
+    if ((conversation.bannedUids || []).includes(userUid)) throw new Error('BANNED_PARTICIPANT');
+    return {
+      ...conversation,
+      participantUids: sortParticipantUids([...(conversation.participantUids || []), userUid]),
+      pendingInviteUids: (conversation.pendingInviteUids || []).filter((uid) => uid !== userUid),
+      updatedAt: nowIso(),
+    };
+  });
+};
+
+const requestConversationJoin = ({ conversationId, userUid }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) throw new Error('CONVERSATION_DELETED');
+    if (!userUid) throw new Error('USER_REQUIRED');
+    if ((conversation.bannedUids || []).includes(userUid)) throw new Error('BANNED_PARTICIPANT');
+    if ((conversation.participantUids || []).includes(userUid)) return conversation;
+    return {
+      ...conversation,
+      pendingInviteUids: sortParticipantUids([...(conversation.pendingInviteUids || []), userUid]),
+      updatedAt: nowIso(),
+    };
+  });
+};
+
+const updateMeetingConversationSettings = ({ conversationId, actorUid, title, accessPolicy }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) throw new Error('CONVERSATION_DELETED');
+    if (!canManageConversation(conversation, actorUid)) throw new Error('FORBIDDEN_MANAGER');
+    const existingMeeting = conversation.meeting && typeof conversation.meeting === 'object'
+      ? conversation.meeting
+      : {};
+    return {
+      ...conversation,
+      title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : conversation.title,
+      meeting: {
+        ...existingMeeting,
+        enabled: true,
+        accessPolicy: accessPolicy && typeof accessPolicy === 'object'
+          ? accessPolicy
+          : existingMeeting.accessPolicy || {},
+      },
+      updatedAt: nowIso(),
+    };
+  });
+};
+
 const inviteUsersToConversation = ({ conversationId, inviterUid, inviteeUids = [] }) => {
   const conversations = getAllConversations();
   const target = conversations.find((conversation) => conversation.conversationId === conversationId);
   if (!target) throw new Error('CONVERSATION_NOT_FOUND');
+  if (target.deletedAt) throw new Error('CONVERSATION_DELETED');
   if (target.type !== 'group') throw new Error('GROUP_ONLY');
   if (!target.participantUids.includes(inviterUid)) throw new Error('FORBIDDEN_PARTICIPANT');
+  if (!canManageConversation(target, inviterUid)) throw new Error('FORBIDDEN_MANAGER');
 
   const nextPending = sortParticipantUids([
     ...target.pendingInviteUids,
@@ -192,6 +308,8 @@ const respondConversationInvite = ({ conversationId, userUid, accept }) => {
   const conversations = getAllConversations();
   const target = conversations.find((conversation) => conversation.conversationId === conversationId);
   if (!target) throw new Error('CONVERSATION_NOT_FOUND');
+  if (target.deletedAt) throw new Error('CONVERSATION_DELETED');
+  if ((target.bannedUids || []).includes(userUid)) throw new Error('BANNED_PARTICIPANT');
   if (!target.pendingInviteUids.includes(userUid)) throw new Error('INVITE_NOT_FOUND');
 
   const updatedAt = nowIso();
@@ -209,6 +327,147 @@ const respondConversationInvite = ({ conversationId, userUid, accept }) => {
 
   saveConversations(next);
   return next.find((conversation) => conversation.conversationId === conversationId);
+};
+
+const getConversationRole = (conversation = {}, userUid = '') => {
+  if (!userUid || conversation.deletedAt) return 'none';
+  if (conversation.ownerUid === userUid || conversation.createdByUid === userUid) return 'owner';
+  if ((conversation.coHostUids || []).includes(userUid)) return 'cohost';
+  if ((conversation.participantUids || []).includes(userUid)) return 'member';
+  if ((conversation.pendingInviteUids || []).includes(userUid)) return 'pending';
+  return 'none';
+};
+
+const canManageConversation = (conversation = {}, userUid = '') => {
+  const role = getConversationRole(conversation, userUid);
+  return role === 'owner' || role === 'cohost';
+};
+
+const chooseNextOwnerUid = (conversation = {}, leavingUid = '', preferredUid = '') => {
+  const candidates = (conversation.participantUids || []).filter((uid) => uid && uid !== leavingUid);
+  if (preferredUid && candidates.includes(preferredUid)) return preferredUid;
+  const coHost = (conversation.coHostUids || []).find((uid) => candidates.includes(uid));
+  return coHost || candidates[0] || '';
+};
+
+const updateConversationRecord = (conversationId, updater) => {
+  const conversations = getAllConversations();
+  let updated = null;
+  const next = conversations.map((conversation) => {
+    if (conversation.conversationId !== conversationId) return conversation;
+    updated = normalizeConversation(updater(conversation));
+    return updated;
+  });
+  if (!updated) throw new Error('CONVERSATION_NOT_FOUND');
+  saveConversations(next);
+  return updated;
+};
+
+const leaveConversation = ({ conversationId, userUid, transferToUid = '' }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) throw new Error('CONVERSATION_DELETED');
+    if (conversation.type !== 'group') throw new Error('GROUP_ONLY');
+    if (!conversation.participantUids.includes(userUid)) throw new Error('FORBIDDEN_PARTICIPANT');
+
+    const remainingParticipants = conversation.participantUids.filter((uid) => uid !== userUid);
+    if (remainingParticipants.length === 0) {
+      return {
+        ...conversation,
+        participantUids: [],
+        pendingInviteUids: [],
+        coHostUids: [],
+        ownerUid: '',
+        deletedAt: nowIso(),
+        deletedByUid: userUid,
+        updatedAt: nowIso(),
+      };
+    }
+
+    const nextOwnerUid = conversation.ownerUid === userUid
+      ? chooseNextOwnerUid(conversation, userUid, transferToUid)
+      : conversation.ownerUid;
+
+    return {
+      ...conversation,
+      ownerUid: nextOwnerUid,
+      participantUids: remainingParticipants,
+      coHostUids: (conversation.coHostUids || []).filter((uid) => uid !== userUid && uid !== nextOwnerUid && remainingParticipants.includes(uid)),
+      pendingInviteUids: (conversation.pendingInviteUids || []).filter((uid) => uid !== userUid),
+      updatedAt: nowIso(),
+    };
+  });
+};
+
+const transferConversationOwner = ({ conversationId, actorUid, targetUid }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) throw new Error('CONVERSATION_DELETED');
+    if (conversation.type !== 'group') throw new Error('GROUP_ONLY');
+    if (conversation.ownerUid !== actorUid) throw new Error('FORBIDDEN_OWNER');
+    if (!conversation.participantUids.includes(targetUid)) throw new Error('TARGET_NOT_PARTICIPANT');
+    if (targetUid === actorUid) return conversation;
+    return {
+      ...conversation,
+      ownerUid: targetUid,
+      coHostUids: Array.from(new Set([...(conversation.coHostUids || []).filter((uid) => uid !== targetUid), actorUid])),
+      updatedAt: nowIso(),
+    };
+  });
+};
+
+const setConversationCoHost = ({ conversationId, actorUid, targetUid, enabled }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) throw new Error('CONVERSATION_DELETED');
+    if (conversation.type !== 'group') throw new Error('GROUP_ONLY');
+    if (conversation.ownerUid !== actorUid) throw new Error('FORBIDDEN_OWNER');
+    if (!conversation.participantUids.includes(targetUid)) throw new Error('TARGET_NOT_PARTICIPANT');
+    if (targetUid === conversation.ownerUid) throw new Error('TARGET_IS_OWNER');
+    const coHostUids = enabled
+      ? Array.from(new Set([...(conversation.coHostUids || []), targetUid]))
+      : (conversation.coHostUids || []).filter((uid) => uid !== targetUid);
+    return {
+      ...conversation,
+      coHostUids,
+      updatedAt: nowIso(),
+    };
+  });
+};
+
+const kickConversationParticipant = ({ conversationId, actorUid, targetUid }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) throw new Error('CONVERSATION_DELETED');
+    if (conversation.type !== 'group') throw new Error('GROUP_ONLY');
+    if (!canManageConversation(conversation, actorUid)) throw new Error('FORBIDDEN_MANAGER');
+    if (conversation.ownerUid === targetUid) throw new Error('TARGET_IS_OWNER');
+    if (actorUid === targetUid) throw new Error('CANNOT_KICK_SELF');
+    if (!conversation.participantUids.includes(targetUid) && !conversation.pendingInviteUids.includes(targetUid)) {
+      throw new Error('TARGET_NOT_PARTICIPANT');
+    }
+    return {
+      ...conversation,
+      participantUids: conversation.participantUids.filter((uid) => uid !== targetUid),
+      pendingInviteUids: conversation.pendingInviteUids.filter((uid) => uid !== targetUid),
+      coHostUids: (conversation.coHostUids || []).filter((uid) => uid !== targetUid),
+      bannedUids: Array.from(new Set([...(conversation.bannedUids || []), targetUid])),
+      updatedAt: nowIso(),
+    };
+  });
+};
+
+const deleteConversation = ({ conversationId, actorUid }) => {
+  return updateConversationRecord(conversationId, (conversation) => {
+    if (conversation.deletedAt) return conversation;
+    if (conversation.type !== 'group') throw new Error('GROUP_ONLY');
+    if (conversation.ownerUid !== actorUid) throw new Error('FORBIDDEN_OWNER');
+    return {
+      ...conversation,
+      deletedAt: nowIso(),
+      deletedByUid: actorUid,
+      participantUids: [],
+      pendingInviteUids: [],
+      coHostUids: [],
+      updatedAt: nowIso(),
+    };
+  });
 };
 
 const listMessagesForConversation = (conversationId) => {
@@ -293,7 +552,7 @@ const copyPathRecursive = (srcPath, destPath) => {
   }
 };
 
-const createMessage = ({ conversationId, senderUid, text, attachmentBundleIds = [] }) => {
+const createMessage = ({ conversationId, senderUid, text, attachmentBundleIds = [], allowExternalSender = false }) => {
   const trimmed = String(text || '').trim();
   const bundleIds = Array.from(new Set((Array.isArray(attachmentBundleIds) ? attachmentBundleIds : []).filter(Boolean)));
 
@@ -308,7 +567,7 @@ const createMessage = ({ conversationId, senderUid, text, attachmentBundleIds = 
     throw new Error('CONVERSATION_NOT_FOUND');
   }
 
-  if (!targetConversation.participantUids.includes(senderUid)) {
+  if (!allowExternalSender && !targetConversation.participantUids.includes(senderUid)) {
     throw new Error('FORBIDDEN_PARTICIPANT');
   }
 
@@ -482,8 +741,21 @@ module.exports = {
   findDirectConversation,
   ensureDirectConversation,
   createGroupConversation,
+  createMeetingConversation,
+  upsertConversationParticipant,
+  requestConversationJoin,
+  updateMeetingConversationSettings,
   inviteUsersToConversation,
   respondConversationInvite,
+  getConversationRole,
+  canManageConversation,
+  leaveConversation,
+  transferConversationOwner,
+  setConversationCoHost,
+  kickConversationParticipant,
+  deleteConversation,
+  listAllConversationsForMeetingSearch,
+  getMeetingConversationByRoomCode,
   listConversationsForUser,
   listMessagesForConversation,
   countUnreadForConversation,

@@ -13,6 +13,12 @@ const {
   createGroupConversation,
   inviteUsersToConversation,
   respondConversationInvite,
+  getConversationRole,
+  leaveConversation,
+  transferConversationOwner,
+  setConversationCoHost,
+  kickConversationParticipant,
+  deleteConversation,
   createMessage,
   saveReceivedAttachmentsForUser,
   markConversationRead,
@@ -105,9 +111,15 @@ const serializeConversationForViewer = (conversation, viewerUid, members) => {
     type: conversation.type,
     title: conversation.title || '',
     createdByUid: conversation.createdByUid || '',
+    ownerUid: conversation.ownerUid || conversation.createdByUid || '',
+    coHostUids: conversation.coHostUids || [],
+    bannedUids: conversation.bannedUids || [],
     participantUids: conversation.participantUids,
     pendingInviteUids: conversation.pendingInviteUids || [],
     inviteStatus: (conversation.pendingInviteUids || []).includes(viewerUid) ? 'PENDING' : 'ACCEPTED',
+    viewerRole: getConversationRole(conversation, viewerUid),
+    viewerCanManage: ['owner', 'cohost'].includes(getConversationRole(conversation, viewerUid)),
+    viewerCanDelete: getConversationRole(conversation, viewerUid) === 'owner',
     participants: participantMembers.map(serializeParticipant),
     pendingInvites: pendingMembers.map(serializeParticipant),
     createdAt: conversation.createdAt,
@@ -115,9 +127,49 @@ const serializeConversationForViewer = (conversation, viewerUid, members) => {
     lastMessageId: conversation.lastMessageId,
     lastMessagePreview: conversation.lastMessagePreview,
     lastMessageAt: conversation.lastMessageAt,
+    deletedAt: conversation.deletedAt || null,
+    deletedByUid: conversation.deletedByUid || '',
     unreadCount: countUnreadForConversation(conversation.conversationId, viewerUid),
     otherUser: otherUser ? serializeOtherUser(otherUser) : null,
   };
+};
+
+const emitConversationUpdated = (req, conversation, members, extraUids = []) => {
+  const io = req.app.get('io');
+  const recipients = Array.from(new Set([
+    ...(conversation.participantUids || []),
+    ...(conversation.pendingInviteUids || []),
+    ...(extraUids || []),
+  ].filter(Boolean)));
+
+  recipients.forEach((uid) => {
+    io.to(`user:${uid}`).emit('chat:conversation-updated', {
+      conversation: serializeConversationForViewer(conversation, uid, members),
+    });
+  });
+};
+
+const sendRoomSystemMessage = (req, conversation, members, actor, text) => {
+  try {
+    const stored = createMessage({
+      conversationId: conversation.conversationId,
+      senderUid: actor.userUid,
+      text,
+      attachmentBundleIds: [],
+    });
+    const io = req.app.get('io');
+    (stored.conversation.participantUids || []).forEach((uid) => {
+      const member = members.find((item) => item.userUid === uid) || { userUid: uid };
+      io.to(`user:${uid}`).emit('chat:message', {
+        conversationId: stored.conversation.conversationId,
+        message: serializeMessageForViewer(stored.message, member),
+        sender: serializeOtherUser(actor),
+      });
+    });
+    return stored.conversation;
+  } catch (err) {
+    return conversation;
+  }
 };
 
 const resolveInviteTargets = ({ values = [], members, me }) => {
@@ -361,11 +413,7 @@ router.post('/chat/group/:conversationId/invite', verifyToken, (req, res) => {
         conversation: serializeConversationForViewer(conversation, target.userUid, members),
       });
     });
-    (conversation.participantUids || []).forEach((uid) => {
-      io.to(`user:${uid}`).emit('chat:conversation-updated', {
-        conversation: serializeConversationForViewer(conversation, uid, members),
-      });
-    });
+    emitConversationUpdated(req, conversation, members);
 
     return res.json({
       conversation: serializeConversationForViewer(conversation, me.userUid, members),
@@ -374,6 +422,7 @@ router.post('/chat/group/:conversationId/invite', verifyToken, (req, res) => {
     if (e.message === 'CONVERSATION_NOT_FOUND') return res.status(404).json({ error: '대화방이 없습니다.' });
     if (e.message === 'GROUP_ONLY') return res.status(400).json({ error: '그룹 채팅방에만 초대할 수 있습니다.' });
     if (e.message === 'FORBIDDEN_PARTICIPANT') return res.status(403).json({ error: '참가자만 초대할 수 있습니다.' });
+    if (e.message === 'FORBIDDEN_MANAGER') return res.status(403).json({ error: '방장 또는 부방장만 초대할 수 있습니다.' });
     return res.status(500).json({ error: '초대에 실패했습니다.' });
   }
 });
@@ -394,12 +443,7 @@ router.post('/chat/group/:conversationId/respond', verifyToken, (req, res) => {
       accept: !!accept,
     });
 
-    const io = req.app.get('io');
-    [...(conversation.participantUids || []), ...(conversation.pendingInviteUids || [])].forEach((uid) => {
-      io.to(`user:${uid}`).emit('chat:conversation-updated', {
-        conversation: serializeConversationForViewer(conversation, uid, members),
-      });
-    });
+    emitConversationUpdated(req, conversation, members, [me.userUid]);
 
     return res.json({
       conversation: serializeConversationForViewer(conversation, me.userUid, members),
@@ -408,6 +452,122 @@ router.post('/chat/group/:conversationId/respond', verifyToken, (req, res) => {
     if (e.message === 'CONVERSATION_NOT_FOUND') return res.status(404).json({ error: '대화방이 없습니다.' });
     if (e.message === 'INVITE_NOT_FOUND') return res.status(404).json({ error: '초대가 없습니다.' });
     return res.status(500).json({ error: '초대 응답에 실패했습니다.' });
+  }
+});
+
+router.post('/chat/group/:conversationId/leave', verifyToken, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const { transferToUid } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId) return res.status(400).json({ error: '대화방 식별자가 필요합니다.' });
+
+  try {
+    const before = getConversationById(conversationId);
+    const conversation = leaveConversation({ conversationId, userUid: me.userUid, transferToUid });
+    const notifiedUids = [...(before?.participantUids || []), ...(before?.pendingInviteUids || []), me.userUid];
+    emitConversationUpdated(req, conversation, members, notifiedUids);
+    return res.json({
+      success: true,
+      conversation: serializeConversationForViewer(conversation, me.userUid, members),
+    });
+  } catch (e) {
+    if (e.message === 'CONVERSATION_NOT_FOUND') return res.status(404).json({ error: '대화방이 없습니다.' });
+    if (e.message === 'GROUP_ONLY') return res.status(400).json({ error: '그룹 채팅방에서만 나갈 수 있습니다.' });
+    if (e.message === 'FORBIDDEN_PARTICIPANT') return res.status(403).json({ error: '대화 참가자가 아닙니다.' });
+    return res.status(500).json({ error: '채팅방 나가기에 실패했습니다.' });
+  }
+});
+
+router.post('/chat/group/:conversationId/transfer-owner', verifyToken, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const { targetUserUid } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId || !targetUserUid) return res.status(400).json({ error: '대화방과 대상 사용자가 필요합니다.' });
+
+  try {
+    const conversation = transferConversationOwner({ conversationId, actorUid: me.userUid, targetUid: targetUserUid });
+    const updated = sendRoomSystemMessage(req, conversation, members, me, `${getDisplayName(me)}님이 방장을 위임했습니다.`);
+    emitConversationUpdated(req, updated, members);
+    return res.json({ success: true, conversation: serializeConversationForViewer(updated, me.userUid, members) });
+  } catch (e) {
+    if (e.message === 'FORBIDDEN_OWNER') return res.status(403).json({ error: '방장만 위임할 수 있습니다.' });
+    if (e.message === 'TARGET_NOT_PARTICIPANT') return res.status(400).json({ error: '참가자에게만 위임할 수 있습니다.' });
+    if (e.message === 'GROUP_ONLY') return res.status(400).json({ error: '그룹 채팅방에서만 가능합니다.' });
+    return res.status(500).json({ error: '방장 위임에 실패했습니다.' });
+  }
+});
+
+router.post('/chat/group/:conversationId/cohost', verifyToken, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const { targetUserUid, enabled } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId || !targetUserUid) return res.status(400).json({ error: '대화방과 대상 사용자가 필요합니다.' });
+
+  try {
+    const conversation = setConversationCoHost({ conversationId, actorUid: me.userUid, targetUid: targetUserUid, enabled: !!enabled });
+    emitConversationUpdated(req, conversation, members);
+    return res.json({ success: true, conversation: serializeConversationForViewer(conversation, me.userUid, members) });
+  } catch (e) {
+    if (e.message === 'FORBIDDEN_OWNER') return res.status(403).json({ error: '방장만 부방장을 지정할 수 있습니다.' });
+    if (e.message === 'TARGET_IS_OWNER') return res.status(400).json({ error: '방장은 부방장으로 지정할 필요가 없습니다.' });
+    if (e.message === 'TARGET_NOT_PARTICIPANT') return res.status(400).json({ error: '참가자만 부방장으로 지정할 수 있습니다.' });
+    return res.status(500).json({ error: '부방장 설정에 실패했습니다.' });
+  }
+});
+
+router.post('/chat/group/:conversationId/kick', verifyToken, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const { targetUserUid } = req.body || {};
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId || !targetUserUid) return res.status(400).json({ error: '대화방과 대상 사용자가 필요합니다.' });
+
+  try {
+    const before = getConversationById(conversationId);
+    const conversation = kickConversationParticipant({ conversationId, actorUid: me.userUid, targetUid: targetUserUid });
+    emitConversationUpdated(req, conversation, members, [...(before?.participantUids || []), ...(before?.pendingInviteUids || [])]);
+    return res.json({ success: true, conversation: serializeConversationForViewer(conversation, me.userUid, members) });
+  } catch (e) {
+    if (e.message === 'FORBIDDEN_MANAGER') return res.status(403).json({ error: '방장 또는 부방장만 내보낼 수 있습니다.' });
+    if (e.message === 'TARGET_IS_OWNER') return res.status(400).json({ error: '방장은 내보낼 수 없습니다.' });
+    if (e.message === 'CANNOT_KICK_SELF') return res.status(400).json({ error: '자기 자신은 내보낼 수 없습니다.' });
+    if (e.message === 'TARGET_NOT_PARTICIPANT') return res.status(400).json({ error: '대상이 채팅방에 없습니다.' });
+    return res.status(500).json({ error: '내보내기에 실패했습니다.' });
+  }
+});
+
+router.delete('/chat/group/:conversationId', verifyToken, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const members = getAllMembers();
+  const me = findMemberFromToken(req.user, members);
+
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+  if (!conversationId) return res.status(400).json({ error: '대화방 식별자가 필요합니다.' });
+
+  try {
+    const before = getConversationById(conversationId);
+    const conversation = deleteConversation({ conversationId, actorUid: me.userUid });
+    const endMeetingRoomsForConversation = req.app.get('endMeetingRoomsForConversation');
+    if (typeof endMeetingRoomsForConversation === 'function') {
+      endMeetingRoomsForConversation(conversationId, `conversation:${me.userUid}`);
+    }
+    emitConversationUpdated(req, conversation, members, [...(before?.participantUids || []), ...(before?.pendingInviteUids || [])]);
+    return res.json({ success: true, conversation: serializeConversationForViewer(conversation, me.userUid, members) });
+  } catch (e) {
+    if (e.message === 'FORBIDDEN_OWNER') return res.status(403).json({ error: '방장만 방을 파기할 수 있습니다.' });
+    if (e.message === 'GROUP_ONLY') return res.status(400).json({ error: '그룹 채팅방만 파기할 수 있습니다.' });
+    return res.status(500).json({ error: '채팅방 파기에 실패했습니다.' });
   }
 });
 

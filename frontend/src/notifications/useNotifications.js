@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  deleteNotification,
+  deleteReadNotifications,
   listNotifications,
   readAllNotifications,
   readNotificationGroup,
@@ -19,8 +21,20 @@ const useNotifications = ({
   const [loading, setLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
 
-  const syncNotifications = useCallback((items) => {
-    setNotifications(Array.isArray(items) ? items : []);
+  const syncNotifications = useCallback((items, { preserveLocal = true } = {}) => {
+    setNotifications((prev) => {
+      const incoming = Array.isArray(items) ? items : [];
+      const incomingHasLocal = incoming.some((item) => item?.meta?.localOnly);
+      const localItems = incomingHasLocal
+        ? incoming.filter((item) => item?.meta?.localOnly)
+        : (preserveLocal ? (Array.isArray(prev) ? prev : []).filter((item) => item?.meta?.localOnly) : []);
+      const serverItems = incoming.filter((item) => !item?.meta?.localOnly);
+      const serverIds = new Set(serverItems.map((item) => item?.notificationId).filter(Boolean));
+      return [
+        ...localItems.filter((item) => !serverIds.has(item.notificationId)),
+        ...serverItems
+      ];
+    });
   }, []);
 
   const refreshNotifications = useCallback(async ({ silent = false } = {}) => {
@@ -71,8 +85,33 @@ const useNotifications = ({
     };
   }, [socket, user, refreshNotifications]);
 
+  useEffect(() => {
+    const handleLocalNotification = (event) => {
+      const item = event.detail;
+      if (!item?.notificationId) return;
+      setNotifications((prev) => [
+        item,
+        ...(Array.isArray(prev) ? prev.filter((n) => n?.notificationId !== item.notificationId) : [])
+      ]);
+    };
+
+    window.addEventListener('nas_local_notification', handleLocalNotification);
+    return () => window.removeEventListener('nas_local_notification', handleLocalNotification);
+  }, []);
+
   const handleNotificationClick = useCallback(async (notification) => {
     try {
+      if (notification?.meta?.localOnly) {
+        const now = new Date().toISOString();
+        setNotifications((prev) => (Array.isArray(prev) ? prev : []).map((item) =>
+          item?.notificationId === notification.notificationId
+            ? { ...item, isRead: true, readAt: item.readAt || now }
+            : item
+        ));
+        onNavigateFromNotification(notification);
+        return;
+      }
+
       if (notification && !notification.isRead) {
         await readNotificationGroup({
           notificationId: notification.notificationId,
@@ -93,13 +132,66 @@ const useNotifications = ({
     const next = markAllNotificationsAsReadLocal(notifications);
 
     try {
-      syncNotifications(next);
+      syncNotifications(next, { preserveLocal: false });
       await readAllNotifications();
     } catch (err) {
-      syncNotifications(prev);
+      syncNotifications(prev, { preserveLocal: false });
       alert(err.response?.data?.error || '전체 읽음 처리에 실패했습니다.');
     }
   }, [notifications, syncNotifications]);
+
+  const handleReadNotification = useCallback(async (notification) => {
+    if (!notification) return;
+    const prev = notifications;
+    const now = new Date().toISOString();
+    const next = notifications.map((item) => item?.notificationId === notification.notificationId
+      ? { ...item, isRead: true, readAt: item.readAt || now }
+      : item);
+
+    try {
+      syncNotifications(next, { preserveLocal: false });
+      if (notification?.meta?.localOnly) return;
+      await readNotificationGroup({
+        notificationId: notification.notificationId,
+        conversationId: '',
+        fromUserUid: '',
+      });
+      await refreshNotifications({ silent: true });
+    } catch (err) {
+      syncNotifications(prev, { preserveLocal: false });
+      alert(err.response?.data?.error || '알림 읽음 처리에 실패했습니다.');
+    }
+  }, [notifications, refreshNotifications, syncNotifications]);
+
+  const handleDeleteNotification = useCallback(async (notification) => {
+    if (!notification?.notificationId) return;
+    const prev = notifications;
+    const next = notifications.filter((item) => item?.notificationId !== notification.notificationId);
+
+    try {
+      syncNotifications(next, { preserveLocal: false });
+      if (notification?.meta?.localOnly) return;
+      await deleteNotification(notification.notificationId);
+      await refreshNotifications({ silent: true });
+    } catch (err) {
+      syncNotifications(prev, { preserveLocal: false });
+      alert(err.response?.data?.error || '알림 삭제에 실패했습니다.');
+    }
+  }, [notifications, refreshNotifications, syncNotifications]);
+
+  const handleDeleteReadNotifications = useCallback(async () => {
+    const prev = notifications;
+    const next = notifications.filter((item) => !item?.isRead);
+
+    try {
+      syncNotifications(next, { preserveLocal: false });
+      await deleteReadNotifications();
+      await refreshNotifications({ silent: true });
+    } catch (err) {
+      syncNotifications(prev, { preserveLocal: false });
+      alert(err.response?.data?.error || '읽은 알림 삭제에 실패했습니다.');
+    }
+  }, [notifications, refreshNotifications, syncNotifications]);
 
   const visibleNotifications = useMemo(
     () => groupNotificationsForDisplay(notifications),
@@ -118,6 +210,9 @@ const useNotifications = ({
     unreadCount,
     refreshNotifications,
     handleNotificationClick,
+    handleReadNotification,
+    handleDeleteNotification,
+    deleteReadNotifications: handleDeleteReadNotifications,
     readAllNotifications: handleReadAll,
   };
 };

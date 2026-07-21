@@ -14,12 +14,39 @@ console.log("Using backend URL:", backendUrl);
 function Signup() {
   const navigate = useNavigate();
   const [id, setId] = useState('');
+  const [nickname, setNickname] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [error, setError] = useState('');
+  const [idAvailable, setIdAvailable] = useState(null);
+  const [nicknameAvailable, setNicknameAvailable] = useState(null);
 
-  const handleSignup = () => {
-    axios.post(`/api/signup-request`, { id, password, passwordConfirm })
+  const checkIdentity = async (field) => {
+    try {
+      const response = await axios.get('/api/users/check-identity', { params: { id, nickname } });
+      if (field === 'id') setIdAvailable(response.data.idAvailable);
+      if (field === 'nickname') setNicknameAvailable(response.data.nicknameAvailable);
+      return response.data;
+    } catch (err) {
+      setError('중복 확인 중 오류가 발생했습니다.');
+      return null;
+    }
+  };
+
+  const handleSignup = async () => {
+    setError('');
+    if (!id.trim() || !nickname.trim() || !password || !passwordConfirm) {
+      setError('아이디, 닉네임, 비밀번호를 모두 입력해주세요.');
+      return;
+    }
+    const availability = await checkIdentity('id');
+    setNicknameAvailable(availability?.nicknameAvailable ?? null);
+    if (!availability?.idAvailable || !availability?.nicknameAvailable) {
+      setError(!availability?.idAvailable ? '이미 사용 중인 아이디입니다.' : '이미 사용 중인 닉네임입니다.');
+      return;
+    }
+
+    axios.post(`/api/signup-request`, { id: id.trim(), nickname: nickname.trim(), password, passwordConfirm })
       .then(response => {
         // alert 메시지 표시 후 로그인 페이지로 이동
         alert("회원가입 요청을 보냈습니다.");
@@ -40,9 +67,21 @@ function Signup() {
         <TextField
           label="아이디"
           value={id}
-          onChange={(e) => setId(e.target.value)}
+          onChange={(e) => { setId(e.target.value); setIdAvailable(null); }}
           fullWidth
+          helperText={idAvailable === true ? '사용 가능한 아이디입니다.' : idAvailable === false ? '이미 사용 중인 아이디입니다.' : '로그인에 사용할 고유 아이디입니다.'}
+          error={idAvailable === false}
         />
+        <Button variant="text" size="small" onClick={() => checkIdentity('id')} disabled={!id.trim()} sx={{ alignSelf: 'flex-end', mt: -1.5 }}>아이디 중복 확인</Button>
+        <TextField
+          label="닉네임"
+          value={nickname}
+          onChange={(e) => { setNickname(e.target.value); setNicknameAvailable(null); }}
+          fullWidth
+          helperText={nicknameAvailable === true ? '사용 가능한 닉네임입니다.' : nicknameAvailable === false ? '이미 사용 중인 닉네임입니다.' : '친구와 채팅에 표시되는 이름입니다.'}
+          error={nicknameAvailable === false}
+        />
+        <Button variant="text" size="small" onClick={() => checkIdentity('nickname')} disabled={!nickname.trim()} sx={{ alignSelf: 'flex-end', mt: -1.5 }}>닉네임 중복 확인</Button>
         <TextField
           label="비밀번호"
           type="password"

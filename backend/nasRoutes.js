@@ -7,6 +7,20 @@ const archiver = require('archiver');
 const { exec } = require('child_process');
 const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
+const config = require('./config/env');
+const {
+  NAS_ROOT,
+  getLoginId,
+  normalizeQuotaFields,
+  findMemberByAnyId,
+  getAccessBasePath,
+  getQuotaBasePath,
+  resolveInside,
+  getCachedPathUsage,
+  getUserStorageSummary,
+  invalidateUsageCache,
+  assertQuotaAvailable
+} = require('./storageQuota');
 
 const router = express.Router();
 
@@ -32,8 +46,8 @@ router.use('/files', (req, res, next) => {
   next();
 });
 
-const nasPath = '/mnt/nas';
-const JWT_SECRET = 'my-service-platform-secure-key-2026';
+const nasPath = NAS_ROOT;
+const JWT_SECRET = config.JWT_SECRET;
 const canceledSessions = new Set();
 // =========================================================
 // PC 바탕화면 연동 / Device Pairing 기초 구조
@@ -141,7 +155,7 @@ const getDeviceOwnerKey = (user = {}) => {
   return String(user.userUid || user.loginId || user.id || user.username || 'unknown');
 };
 
-const getUserLoginId = (user = {}) => String(user.loginId || user.id || user.username || '').trim();
+const getUserLoginId = (user = {}) => getLoginId(user);
 
 const normalizeAgentUser = (user = {}) => {
   const loginId = getUserLoginId(user);
@@ -724,82 +738,39 @@ const chunkUpload = multer({
 
 
 const verifyToken = (req, res, next) => {
-  // 🔥 [복구] ONLYOFFICE 도커 서버의 비밀 통로 (토큰 검사 우회)
   if (req.query.oosecret === 'nas_office_2026') {
     const isActuallyAdmin = req.query.officeAdmin === 'true';
     const officeLoginId = req.query.officeUid || 'office';
-    req.user = { 
-        id: officeLoginId,
-        loginId: officeLoginId,
-        userUid: officeLoginId,
-        Masters: isActuallyAdmin,
-        globalAccess: isActuallyAdmin,
-        rootPath: isActuallyAdmin ? '' : decodeURIComponent(req.query.officeRoot || '')
-    };
+    req.user = normalizeQuotaFields({
+      id: officeLoginId,
+      loginId: officeLoginId,
+      userUid: officeLoginId,
+      Masters: isActuallyAdmin,
+      globalAccess: isActuallyAdmin,
+      rootPath: isActuallyAdmin ? '' : decodeURIComponent(req.query.officeRoot || '')
+    });
     return next();
-}
+  }
   const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: '로그인 필요' });
-  try { req.user = jwt.verify(token, JWT_SECRET); next(); } 
-  catch (e) { res.status(401).json({ error: '인증실패' }); }
+  if (!token) return res.status(401).json({ error: '???? ?????.' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const latestUser = findMemberByAnyId(decoded);
+    req.user = normalizeQuotaFields({ ...decoded, ...(latestUser || {}) });
+    next();
+  } catch (e) {
+    res.status(401).json({ error: '??? ??????.' });
+  }
 };
 
-const getValidatedPath = (user, requestedPath, providedPassword) => {
-  const isPrivileged = user.Masters || user.globalAccess;
-  const path = require('path');
-  const fs = require('fs');
-
-  const currentLoginId = user.loginId || user.id;
-  let relativeRoot = user.rootPath ? user.rootPath.replace(/^(\/|\\)+/, '') : path.join('users', currentLoginId);
-  const basePath = isPrivileged ? nasPath : path.resolve(nasPath, relativeRoot);
-  const safeReqPath = (requestedPath || '').replace(/^(\/|\\)+/, '');
-  const targetPath = path.resolve(basePath, safeReqPath);
-
-  let hasPasswordAccess = false;
-
-  if (targetPath.includes(path.join(nasPath, 'users'))) {
-    const segments = path.relative(path.join(nasPath, 'users'), targetPath).split(path.sep);
-    const targetUserId = segments[0];
-
-    if (targetUserId && targetUserId !== currentLoginId) {
-      try {
-        const members = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'members.json'), 'utf8'));
-        const targetUser = members.find(u => (u.loginId || u.id) === targetUserId);
-        const currentUser = members.find(u => (u.loginId || u.id) === currentLoginId);
-
-        if (targetUser) {
-          if (targetUser.isPasswordEnabled) {
-            const isMasterKeyCorrect = (user.Masters || user.Managers) && currentUser?.masterKey && providedPassword === currentUser.masterKey;
-            const isRootPassCorrect = providedPassword === targetUser.rootPassword;
-
-            if (!isMasterKeyCorrect && !isRootPassCorrect) { const err = new Error('PASSWORD_REQUIRED'); err.status = 403; throw err; } else {
-              hasPasswordAccess = true; // ✨ 비밀번호/마스터키 맞음! VIP 패스 발급
-            }
-          } else {
-            hasPasswordAccess = true; // ✨ 스위치 OFF 상태! 무조건 VIP 패스 발급
-          }
-        }
-      } catch(e) { 
-        if(e.message === 'PASSWORD_REQUIRED') throw e; 
-      }
-    }
-  }
-
-  // 🚨 [핵심 수정] VIP 패스(hasPasswordAccess)가 있다면, 내 홈 폴더 밖이라도 권한 검사를 무사통과!
-  if (!isPrivileged && !hasPasswordAccess && !targetPath.startsWith(basePath)) {
-    const err = new Error('권한 없는 경로');
-    err.status = 403;
-    throw err;
-  }
+const getValidatedPath = (user, requestedPath) => {
+  const normalizedUser = normalizeQuotaFields(user || {});
+  const basePath = getAccessBasePath(normalizedUser);
+  const targetPath = resolveInside(basePath, requestedPath || '');
   return { basePath, targetPath };
 };
 
-const getUserBasePath = (user) => {
-  const isPrivileged = user.Masters || user.globalAccess;
-  const currentLoginId = user.loginId || user.id;
-  let relativeRoot = user.rootPath ? user.rootPath.replace(/^(\/|\\)+/, '') : path.join('users', currentLoginId);
-  return isPrivileged ? nasPath : path.resolve(nasPath, relativeRoot);
-};
+const getUserBasePath = (user) => getAccessBasePath(normalizeQuotaFields(user || {}));
 
 const ensureFixedSystemFolders = (user) => {
   const basePath = getUserBasePath(user);
@@ -820,6 +791,127 @@ const ensureFixedSystemFolders = (user) => {
 
   return result;
 };
+
+const SEARCH_MAX_RESULTS = 200;
+const SEARCH_MAX_VISITED = 60000;
+const SEARCH_SKIP_NAMES = new Set([
+  '.agent_incoming',
+  '.msp_chunk_uploads',
+  '.msp_chunk_canceled'
+]);
+
+const toNasRelativePath = (basePath, targetPath) => {
+  const rel = path.relative(basePath, targetPath).replace(/\\/g, '/');
+  return rel ? `/${rel}` : '/';
+};
+
+const searchFilesRecursive = (basePath, query) => {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return [];
+
+  const results = [];
+  let visited = 0;
+
+  const walk = (currentPath) => {
+    if (results.length >= SEARCH_MAX_RESULTS || visited >= SEARCH_MAX_VISITED) return;
+
+    let entries = [];
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    } catch (err) {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (results.length >= SEARCH_MAX_RESULTS || visited >= SEARCH_MAX_VISITED) break;
+      if (SEARCH_SKIP_NAMES.has(entry.name)) continue;
+
+      const fullPath = path.join(currentPath, entry.name);
+      visited += 1;
+
+      let stat = null;
+      try {
+        stat = fs.lstatSync(fullPath);
+      } catch (err) {
+        continue;
+      }
+
+      if (stat.isSymbolicLink()) continue;
+
+      const isDirectory = entry.isDirectory();
+      const type = isDirectory ? 'folder' : 'file';
+      const relPath = toNasRelativePath(basePath, fullPath);
+
+      if (entry.name.toLowerCase().includes(needle)) {
+        results.push({
+          name: entry.name,
+          type,
+          fullPath: relPath,
+          parentPath: toNasRelativePath(basePath, path.dirname(fullPath)),
+          size: stat.isFile() ? stat.size : null,
+          modifiedAt: stat.mtime.toISOString()
+        });
+      }
+
+      if (isDirectory) walk(fullPath);
+    }
+  };
+
+  walk(basePath);
+
+  return results.sort((a, b) => {
+    const aExact = a.name.toLowerCase() === needle ? 0 : 1;
+    const bExact = b.name.toLowerCase() === needle ? 0 : 1;
+    if (aExact !== bExact) return aExact - bExact;
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    return a.fullPath.localeCompare(b.fullPath, 'ko');
+  });
+};
+
+router.get('/files/search', verifyToken, (req, res) => {
+  try {
+    ensureFixedSystemFolders(req.user);
+    const query = String(req.query.q || '').trim();
+    if (query.length < 2) return res.json({ results: [] });
+
+    const { basePath } = getValidatedPath(req.user, '/');
+    const results = searchFilesRecursive(basePath, query);
+    res.json({
+      query,
+      results,
+      limited: results.length >= SEARCH_MAX_RESULTS
+    });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || '검색에 실패했습니다.' });
+  }
+});
+
+router.get('/storage/me', verifyToken, async (req, res) => {
+  try {
+    const summary = await getUserStorageSummary(req.user);
+    res.json(summary);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || '저장공간 정보를 불러오지 못했습니다.' });
+  }
+});
+
+router.get('/storage/path', verifyToken, async (req, res) => {
+  try {
+    const { targetPath } = getValidatedPath(req.user, req.query.path || '/');
+    const usage = await getCachedPathUsage(targetPath);
+    res.json({
+      path: req.query.path || '/',
+      absolutePath: targetPath,
+      sizeBytes: usage.sizeBytes,
+      files: usage.files,
+      directories: usage.directories,
+      cached: usage.cached,
+      updatedAt: usage.updatedAt
+    });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || '경로 용량을 계산하지 못했습니다.' });
+  }
+});
 
 router.post('/file/cancel-session', verifyToken, (req, res) => {
   const { sessionId } = req.body;
@@ -895,10 +987,28 @@ router.get('/files', verifyToken, (req, res) => {
 
 // [2] 파일 업로드 / 폴더 생성
 router.post('/file', verifyToken, upload.single('file'), (req, res) => {
-  if (req.file) return res.json({ success: true });
+  if (req.file) {
+    (async () => {
+      try {
+        invalidateUsageCache(req.file.path);
+        const summary = await getUserStorageSummary(req.user);
+        if (summary.quotaMode === 'limited' && summary.usedBytes > summary.quotaBytes) {
+          safeRmSync(req.file.path);
+          invalidateUsageCache(req.file.path);
+          return res.status(413).json({ error: `저장공간이 부족합니다. 기본 할당량은 ${Math.round(summary.quotaBytes / 1024 / 1024 / 1024)}GB입니다.` });
+        }
+        return res.json({ success: true });
+      } catch (e) {
+        safeRmSync(req.file.path);
+        return res.status(e.status || 500).json({ error: e.message || '저장공간 제한을 확인하지 못했습니다.' });
+      }
+    })();
+    return;
+  }
   try {
     const { targetPath } = getValidatedPath(req.user, path.join(req.body.path || '', req.body.folderName), req.headers['x-nas-password']);
     if (!fs.existsSync(targetPath)) fs.mkdirSync(targetPath, { recursive: true });
+    invalidateUsageCache(targetPath);
     res.json({ success: true });
   } catch (e) { res.status(403).json({ error: e.message }); }
 });
@@ -934,6 +1044,7 @@ router.delete('/file', verifyToken, (req, res) => {
 
     if (fs.existsSync(targetPath)) {
       fs.rmSync(targetPath, { recursive: true, force: true });
+      invalidateUsageCache(targetPath);
     }
     res.json({ success: true });
   } catch (e) { res.status(403).json({ error: e.message }); }
@@ -953,7 +1064,7 @@ router.get('/file/download', verifyToken, (req, res) => {
 });
 
 // [5] 파일/폴더 복사 (Ctrl+C / Ctrl+V)
-router.post('/file/copy', verifyToken, (req, res) => {
+router.post('/file/copy', verifyToken, async (req, res) => {
   try {
     const { sourcePaths, destinationFolder } = req.body;
     if (!sourcePaths || !Array.isArray(sourcePaths)) return res.status(400).json({ error: '잘못된 요청' });
@@ -964,9 +1075,11 @@ router.post('/file/copy', verifyToken, (req, res) => {
 
     if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
-    sourcePaths.forEach(src => {
+    let incomingBytes = 0;
+    const preparedCopies = [];
+    for (const src of sourcePaths) {
       const { targetPath: srcPath } = getValidatedPath(req.user, src);
-      if (!fs.existsSync(srcPath)) return;
+      if (!fs.existsSync(srcPath)) continue;
 
       const fileName = path.basename(srcPath);
       let finalDest = path.join(destDir, fileName);
@@ -978,7 +1091,16 @@ router.post('/file/copy', verifyToken, (req, res) => {
         finalDest = path.join(destDir, `${name} - 복사본 (${counter})${ext}`);
         counter++;
       }
+      const usage = await getCachedPathUsage(srcPath);
+      incomingBytes += Number(usage.sizeBytes || 0);
+      preparedCopies.push({ srcPath, finalDest });
+    }
+
+    await assertQuotaAvailable(req.user, incomingBytes, destDir);
+
+    preparedCopies.forEach(({ srcPath, finalDest }) => {
       fs.cpSync(srcPath, finalDest, { recursive: true });
+      invalidateUsageCache(finalDest);
     });
     res.json({ message: '복사 완료' });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1158,6 +1280,8 @@ router.put('/file', verifyToken, (req, res) => {
     // 파일 이동(이름 변경) 실행
     if (fs.existsSync(fullOldPath)) {
       fs.renameSync(fullOldPath, fullNewPath);
+      invalidateUsageCache(fullOldPath);
+      invalidateUsageCache(fullNewPath);
     }
     res.json({ success: true });
   } catch (err) {
@@ -1176,21 +1300,59 @@ router.post('/onlyoffice/callback', async (req, res) => {
   if (status === 2 || status === 6) { 
     try {
       const axios = require('axios');
+      const https = require('https');
       const fs = require('fs');
       const path = require('path');
       
-      const nasPath = process.env.NAS_PATH || '/mnt/nas';
-      const basePath = isAdmin ? nasPath : path.join(nasPath, 'users', uid || 'default');
-      const safeReqPath = (relPath || '').replace(/^(\/|\\)+/, '');
-      const absoluteFilePath = path.resolve(basePath, safeReqPath);
+      const officeUser = normalizeQuotaFields(findMemberByAnyId({ loginId: uid, id: uid, username: uid }) || {
+        id: uid || 'office',
+        loginId: uid || 'office',
+        username: uid || 'office',
+        role: isAdmin ? 'MASTER' : 'USER',
+        Masters: isAdmin,
+        globalAccess: isAdmin
+      });
+      const basePath = getAccessBasePath(officeUser);
+      const absoluteFilePath = resolveInside(basePath, relPath || '');
+      const parentDir = path.dirname(absoluteFilePath);
+      if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
 
-      const response = await axios.get(url, { responseType: 'stream' });
+      console.log('[onlyoffice callback]', {
+        status,
+        relPath,
+        uid,
+        isAdmin,
+        target: absoluteFilePath,
+        downloadUrl: url
+      });
+
+      const response = await axios.get(url, {
+        responseType: 'stream',
+        timeout: 120000,
+        maxRedirects: 5,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      });
+      const contentLength = Number(response.headers['content-length'] || 0);
+      if (contentLength > 0) await assertQuotaAvailable(officeUser, contentLength, absoluteFilePath);
       const writer = fs.createWriteStream(absoluteFilePath);
       response.data.pipe(writer);
       
-      writer.on('finish', () => res.json({ error: 0 }));
-      writer.on('error', (err) => res.json({ error: 1 }));
+      writer.on('finish', () => {
+        invalidateUsageCache(absoluteFilePath);
+        res.json({ error: 0 });
+      });
+      writer.on('error', (err) => {
+        console.error('[onlyoffice callback] write failed', err);
+        res.json({ error: 1 });
+      });
     } catch (error) {
+      console.error('[onlyoffice callback] failed', {
+        message: error.message,
+        status,
+        relPath,
+        uid,
+        downloadUrl: url
+      });
       return res.json({ error: 1 });
     }
   } else {
@@ -1215,7 +1377,7 @@ router.post('/check-access', (req, res) => {
 // =========================================================
 
 // [청크] 업로드 세션 생성
-router.post('/file/chunk/init', verifyToken, (req, res) => {
+router.post('/file/chunk/init', verifyToken, async (req, res) => {
   try {
     cleanupOldChunkCancelMarkers();
     ensureDirSync(CHUNK_TMP_ROOT);
@@ -1261,6 +1423,8 @@ router.post('/file/chunk/init', verifyToken, (req, res) => {
       finalReqPath,
       req.headers['x-nas-password']
     );
+
+    await assertQuotaAvailable(req.user, fileSize, finalPath);
 
     const uploadId = createChunkUploadId();
     const uploadDir = getChunkDir(uploadId);
@@ -1489,6 +1653,7 @@ router.post('/file/chunk/complete', verifyToken, (req, res) => {
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
     fs.renameSync(meta.tempPath, meta.finalPath);
+    invalidateUsageCache(meta.finalPath);
     safeRmSync(getChunkDir(uploadId));
 
     return res.json({
@@ -2650,6 +2815,7 @@ router.post('/devices/agent/sync-folder', express.json(), (req, res) => {
     const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath, req.body?.syncRootId);
 
     if (!fs.existsSync(finalPath)) fs.mkdirSync(finalPath, { recursive: true });
+    invalidateUsageCache(finalPath);
     touchLinkedDevice(device, linkedRoot);
 
     return res.json({ success: true, relPath, type: 'folder' });
@@ -2684,6 +2850,8 @@ router.post('/devices/agent/sync-delete', express.json(), (req, res) => {
 
     fs.mkdirSync(path.dirname(trashPath), { recursive: true });
     fs.renameSync(finalPath, trashPath);
+    invalidateUsageCache(finalPath);
+    invalidateUsageCache(trashPath);
     touchLinkedDevice(device, linkedRoot);
 
     return res.json({ success: true, relPath, trashed: true });
@@ -2693,7 +2861,7 @@ router.post('/devices/agent/sync-delete', express.json(), (req, res) => {
 });
 
 // Agent가 PC 파일 생성/변경 이벤트를 NAS 폴더로 반영
-router.post('/devices/agent/sync-file', agentUpload.single('file'), (req, res) => {
+router.post('/devices/agent/sync-file', agentUpload.single('file'), async (req, res) => {
   const incomingPath = req.file?.path;
 
   try {
@@ -2705,11 +2873,18 @@ router.post('/devices/agent/sync-file', agentUpload.single('file'), (req, res) =
     }
 
     const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath || req.file.originalname, req.body?.syncRootId);
+    const ownerUser = normalizeQuotaFields(findMemberByAnyId({
+      userUid: device.userUid,
+      loginId: device.loginId || device.ownerKey,
+      id: device.ownerKey
+    }) || {});
+    await assertQuotaAvailable(ownerUser, Number(req.file.size || 0), finalPath);
 
     const parent = path.dirname(finalPath);
     if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
 
     fs.renameSync(incomingPath, finalPath);
+    invalidateUsageCache(finalPath);
     touchLinkedDevice(device, linkedRoot);
 
     return res.json({

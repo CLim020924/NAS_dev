@@ -524,7 +524,7 @@ const DedicatedChatWindowLayer = () => {
             />
 
             <Rnd
-              size={fillsParent ? { width: '100vw', height: 'calc(100vh - 48px)' } : { width: win.width, height: win.height }}
+              size={fillsParent ? { width: '100vw', height: 'calc(var(--app-viewport-height) - 48px)' } : { width: win.width, height: win.height }}
               position={fillsParent ? { x: 0, y: 48 } : { x: win.x, y: win.y }}
               onMouseDown={(e) => {
                 e.stopPropagation();
@@ -653,6 +653,7 @@ const DedicatedChatWindowLayer = () => {
                   }}
                   sx={{
                     flex: 1,
+                    minHeight: 0,
                     overflowY: 'auto',
                     p: 1.5,
                     bgcolor: isDragOver ? 'action.hover' : 'background.default',
@@ -767,7 +768,7 @@ const DedicatedChatWindowLayer = () => {
 
                 <Divider />
 
-                <Box sx={{ p: 1.25, display: 'flex', gap: 1, alignItems: 'flex-end', bgcolor: 'background.paper' }}>
+                <Box sx={{ p: 1.25, pb: 'calc(10px + var(--app-safe-bottom))', display: 'flex', gap: 1, alignItems: 'flex-end', bgcolor: 'background.paper', flexShrink: 0 }}>
                   <IconButton
                     onClick={(e) => {
                       setAttachMenuAnchorEl(e.currentTarget);

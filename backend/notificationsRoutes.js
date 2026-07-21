@@ -8,6 +8,8 @@ const {
   markNotificationRead,
   markAllNotificationsRead,
   markChatNotificationsRead,
+  deleteNotification,
+  deleteReadNotifications,
 } = require('./notificationStore');
 
 const router = express.Router();
@@ -101,6 +103,24 @@ router.post('/notifications/read-all', verifyToken, (req, res) => {
 
   markAllNotificationsRead(me.userUid);
   return res.json({ success: true });
+});
+
+router.delete('/notifications/read', verifyToken, (req, res) => {
+  const members = readMembers();
+  const me = findMemberFromToken(req.user, members);
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+
+  const deletedCount = deleteReadNotifications(me.userUid);
+  return res.json({ success: true, deletedCount });
+});
+
+router.delete('/notifications/:notificationId', verifyToken, (req, res) => {
+  const members = readMembers();
+  const me = findMemberFromToken(req.user, members);
+  if (!me) return res.status(401).json({ error: '현재 사용자 정보를 찾을 수 없습니다.' });
+
+  const ok = deleteNotification(me.userUid, req.params.notificationId);
+  return res.json({ success: true, deleted: ok });
 });
 
 module.exports = router;

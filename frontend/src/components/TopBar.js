@@ -10,6 +10,9 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import SpaceDashboardIcon from '@mui/icons-material/SpaceDashboard';
 import VideocamIcon from '@mui/icons-material/Videocam';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
+import HistoryIcon from '@mui/icons-material/History';
 import axios from 'axios';
 import { useWindows } from '../contexts/WindowContext';
 import { alpha } from '@mui/material/styles';
@@ -22,13 +25,15 @@ const TopBar = ({
   chatPreview = null,
   onChatPreviewClick = () => {},
   chatSidebarMode = 'none',
+  onOpenAi = () => {},
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { taskbarWindows, focusWindow } = useWindows();
+  const { taskbarWindows, focusWindow, toggleMinimize, focusedContext, openAppWindow } = useWindows();
 
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')) || { username: 'USER', role: 'USER' });
   const [anchorEl, setAnchorEl] = useState(null);
+  const [navigationMenuAnchorEl, setNavigationMenuAnchorEl] = useState(null);
   const [folderMenuAnchorEl, setFolderMenuAnchorEl] = useState(null);
   const [fileMenuAnchorEl, setFileMenuAnchorEl] = useState(null);
   const [appMenuAnchorEl, setAppMenuAnchorEl] = useState(null);
@@ -36,6 +41,7 @@ const TopBar = ({
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
 
   const [profileOpen, setProfileOpen] = useState(false);
+  const [profileNickname, setProfileNickname] = useState(user.nickname || user.displayName || user.username || '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -43,7 +49,11 @@ const TopBar = ({
   useEffect(() => {
     const handleStorageChange = () => setUser(JSON.parse(localStorage.getItem('user')) || { username: 'USER', role: 'USER' });
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    window.addEventListener('nas:user-updated', handleStorageChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('nas:user-updated', handleStorageChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -62,10 +72,15 @@ const TopBar = ({
     return '바탕화면';
   };
 
-  const handleLogout = () => {
-    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+  const handleLogout = async () => {
+    try {
+      await axios.post('/api/logout', {}, { withCredentials: true });
+    } catch (err) {
+      // Clear local state even if the server session has already expired.
+    }
     localStorage.removeItem('user');
-    navigate('/login');
+    localStorage.removeItem('nas_session_left_at');
+    window.location.replace('/login');
   };
 
   const handlePasswordChange = async () => {
@@ -89,28 +104,88 @@ const TopBar = ({
     }
   };
 
+  const handleNicknameChange = async () => {
+    const nickname = profileNickname.trim();
+    if (nickname.length < 2) return alert('닉네임은 2자 이상 입력해주세요.');
+    try {
+      const response = await axios.put('/api/users/profile', { nickname }, { withCredentials: true });
+      const nextUser = response.data?.user;
+      if (!nextUser) return;
+      localStorage.setItem('user', JSON.stringify(nextUser));
+      setUser(nextUser);
+      window.dispatchEvent(new Event('nas:user-updated'));
+      alert('닉네임이 변경되었습니다.');
+    } catch (err) {
+      alert(err.response?.data?.error || '닉네임을 변경하지 못했습니다.');
+    }
+  };
+
   const taskWindows = taskbarWindows.filter(Boolean).slice().reverse();
   const minimizedFolders = appOpenMode === 'window' ? taskWindows.filter((w) => w.winType === 'folder') : [];
   const minimizedFiles = taskWindows.filter((w) => w.winType === 'file');
   const minimizedApps = taskWindows.filter((w) => w.winType === 'app');
   const minimizedChats = taskWindows.filter((w) => w.winType === 'chat');
+  const canOpenBackup = user.role === 'MASTER' || user.Masters || user.globalAccess;
 
-  const restoreMinimizedWindow = (win) => {
+  const navigationItems = [
+    { id: 'desktop', title: '바탕화면', icon: SpaceDashboardIcon, action: () => goDesktop() },
+    { id: 'files', title: '파일 관리자', icon: FolderIcon, action: () => navigate('/nas') },
+    { id: 'pc-sync', title: 'PC 연동', icon: DesktopWindowsIcon, action: () => navigate('/nas') },
+    {
+      id: 'meeting',
+      title: '화상회의',
+      icon: VideocamIcon,
+      action: () => {
+        if (appOpenMode === 'window') {
+          openAppWindow({
+            id: 'meeting',
+            title: '화상회의',
+            winType: 'app',
+            width: 920,
+            height: 640,
+            payload: {}
+          });
+        } else {
+          window.dispatchEvent(new CustomEvent('platform:open-app', { detail: { id: 'meeting' } }));
+          navigate('/platform');
+        }
+      }
+    },
+    { id: 'settings', title: '설정', icon: SettingsIcon, action: () => navigate('/settings') },
+    ...(canOpenBackup ? [{ id: 'backup', title: '백업', icon: HistoryIcon, action: () => navigate('/nas/backup') }] : [])
+  ];
+
+  const handleTaskWindowClick = (win) => {
     if (!win) return;
+    if (!win.isMinimized && focusedContext === win.id) {
+      toggleMinimize(win.id);
+      return;
+    }
     focusWindow(win.id);
+  };
+
+  const handleNavigationSelect = (item) => {
+    setNavigationMenuAnchorEl(null);
+    item.action();
+  };
+
+  const goDesktop = () => {
+    window.dispatchEvent(new Event('platform:show-desktop'));
+    navigate('/platform');
   };
 
   return (
     <>
       <AppBar position="fixed" elevation={0} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.94), backdropFilter: 'blur(14px)', color: 'text.primary', borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
         <Toolbar size="small" sx={{ minHeight: '48px !important', gap: 1 }}>
-          <Box onClick={() => navigate('/platform')} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
+          <Box onClick={goDesktop} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
             <Box sx={{ width: 28, height: 28, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: (theme) => alpha(theme.palette.primary.main, 0.10), color: 'primary.main', border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.18)}` }}>
               <FolderIcon sx={{ fontSize: 18 }} />
             </Box>
             <Typography variant="h6" sx={{ fontWeight: 900, fontSize: '0.98rem', whiteSpace: 'nowrap' }}>NAS</Typography>
           </Box>
           <Box
+            onClick={(e) => setNavigationMenuAnchorEl(e.currentTarget)}
             sx={{
               ml: 2,
               px: 1.2,
@@ -121,6 +196,11 @@ const TopBar = ({
               borderRadius: 1.5,
               backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.07),
               border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.14)}`,
+              cursor: 'pointer',
+              userSelect: 'none',
+              '&:hover': {
+                backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.12),
+              },
             }}
           >
             <SpaceDashboardIcon sx={{ fontSize: 16, color: 'primary.main' }} />
@@ -135,6 +215,31 @@ const TopBar = ({
               {getPageTitle(location.pathname)}
             </Typography>
           </Box>
+          <Menu
+            anchorEl={navigationMenuAnchorEl}
+            open={Boolean(navigationMenuAnchorEl)}
+            onClose={() => setNavigationMenuAnchorEl(null)}
+            PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 220, borderRadius: 2 } }}
+          >
+            {navigationItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <MenuItem
+                  key={item.id}
+                  onClick={() => handleNavigationSelect(item)}
+                  selected={
+                    (item.id === 'desktop' && location.pathname.startsWith('/platform')) ||
+                    (item.id === 'files' && location.pathname.startsWith('/nas')) ||
+                    (item.id === 'settings' && location.pathname.startsWith('/settings'))
+                  }
+                  sx={{ gap: 1.25, py: 1 }}
+                >
+                  <Icon fontSize="small" sx={{ color: 'text.secondary' }} />
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>{item.title}</Typography>
+                </MenuItem>
+              );
+            })}
+          </Menu>
 
           {minimizedFolders.length > 0 && (
             <>
@@ -144,7 +249,7 @@ const TopBar = ({
                 icon={<FolderIcon sx={{ fontSize: 16 }} />}
                 onClick={(e) => {
                   if (minimizedFolders.length === 1) {
-                    restoreMinimizedWindow(minimizedFolders[0]);
+                    handleTaskWindowClick(minimizedFolders[0]);
                   } else {
                     setFolderMenuAnchorEl(e.currentTarget);
                   }
@@ -168,7 +273,7 @@ const TopBar = ({
                       key={win.id}
                       onClick={() => {
                         setFolderMenuAnchorEl(null);
-                        restoreMinimizedWindow(win);
+                        handleTaskWindowClick(win);
                       }}
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
@@ -206,7 +311,7 @@ const TopBar = ({
                 icon={<InsertDriveFileIcon sx={{ fontSize: 16 }} />}
                 onClick={(e) => {
                   if (minimizedFiles.length === 1) {
-                    restoreMinimizedWindow(minimizedFiles[0]);
+                    handleTaskWindowClick(minimizedFiles[0]);
                   } else {
                     setFileMenuAnchorEl(e.currentTarget);
                   }
@@ -230,7 +335,7 @@ const TopBar = ({
                       key={win.id}
                       onClick={() => {
                         setFileMenuAnchorEl(null);
-                        restoreMinimizedWindow(win);
+                        handleTaskWindowClick(win);
                       }}
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
@@ -268,7 +373,7 @@ const TopBar = ({
                 icon={<VideocamIcon sx={{ fontSize: 16 }} />}
                 onClick={(e) => {
                   if (minimizedApps.length === 1) {
-                    restoreMinimizedWindow(minimizedApps[0]);
+                    handleTaskWindowClick(minimizedApps[0]);
                   } else {
                     setAppMenuAnchorEl(e.currentTarget);
                   }
@@ -292,7 +397,7 @@ const TopBar = ({
                       key={win.id}
                       onClick={() => {
                         setAppMenuAnchorEl(null);
-                        restoreMinimizedWindow(win);
+                        handleTaskWindowClick(win);
                       }}
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
@@ -330,7 +435,7 @@ const TopBar = ({
                 icon={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
                 onClick={(e) => {
                   if (minimizedChats.length === 1) {
-                    restoreMinimizedWindow(minimizedChats[0]);
+                    handleTaskWindowClick(minimizedChats[0]);
                   } else {
                     setChatMenuAnchorEl(e.currentTarget);
                   }
@@ -354,7 +459,7 @@ const TopBar = ({
                       key={win.id}
                       onClick={() => {
                         setChatMenuAnchorEl(null);
-                        restoreMinimizedWindow(win);
+                        handleTaskWindowClick(win);
                       }}
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
@@ -411,6 +516,10 @@ const TopBar = ({
           )}
 
           <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <IconButton onClick={onOpenAi} size="small" sx={{ color: 'primary.main', bgcolor: 'action.hover' }} title="AI 에이전트">
+              <SmartToyIcon fontSize="small" />
+            </IconButton>
+
             <IconButton onClick={onOpenNotifications} size="small" sx={{ color: 'text.primary', bgcolor: 'action.hover' }}>
               <Badge
                 color="error"
@@ -452,21 +561,21 @@ const TopBar = ({
 
             <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} size="small">
               <Avatar sx={{ width: 28, height: 28, fontSize: '0.8rem', bgcolor: 'primary.main', fontWeight: 'bold' }}>
-                {(user.displayName || user.username)?.[0]?.toUpperCase()}
+                {(user.nickname || user.displayName || user.username)?.[0]?.toUpperCase()}
               </Avatar>
             </IconButton>
           </Box>
 
           <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)} PaperProps={{ elevation: 3, sx: { mt: 1, minWidth: 150, borderRadius: 2 } }}>
             <Box sx={{ px: 2, py: 1, outline: 'none' }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>{user.displayName || user.username}</Typography>
+              <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>{user.nickname || user.displayName || user.username}</Typography>
               <Typography variant="caption" color="text.secondary">
                 {(user.displayName && user.displayName !== user.username ? `@${user.username} · ` : '')}{user.role}
               </Typography>
             </Box>
             <Box sx={{ my: 0.5, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }} />
 
-            <MenuItem onClick={() => { setAnchorEl(null); setProfileOpen(true); }}>
+            <MenuItem onClick={() => { setAnchorEl(null); setProfileNickname(user.nickname || user.displayName || user.username || ''); setProfileOpen(true); }}>
               <ManageAccountsIcon fontSize="small" sx={{ mr: 1.5, color: 'text.secondary' }} /> 내 정보 수정
             </MenuItem>
 
@@ -484,6 +593,10 @@ const TopBar = ({
             <TextField label="아이디" value={user.username} disabled size="small" fullWidth />
             <TextField label="현재 권한" value={user.role} disabled size="small" fullWidth />
 
+            <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 'bold', color: 'primary.main' }}>닉네임</Typography>
+            <TextField label="닉네임" value={profileNickname} onChange={(e) => setProfileNickname(e.target.value)} size="small" fullWidth helperText="친구, 채팅, 회의에 표시되는 이름입니다." />
+            <Button onClick={handleNicknameChange} variant="outlined">닉네임 저장</Button>
+
             <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 'bold', color: 'primary.main' }}>비밀번호 변경</Typography>
             <TextField label="현재 비밀번호" type="password" size="small" fullWidth value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
             <TextField label="새 비밀번호" type="password" size="small" fullWidth value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
@@ -492,7 +605,7 @@ const TopBar = ({
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
           <Button onClick={() => setProfileOpen(false)} color="inherit">취소</Button>
-          <Button onClick={handlePasswordChange} variant="contained" color="primary" sx={{ borderRadius: 2 }}>변경 완료</Button>
+          <Button onClick={handlePasswordChange} variant="contained" color="primary" sx={{ borderRadius: 2 }}>비밀번호 변경</Button>
         </DialogActions>
       </Dialog>
     </>

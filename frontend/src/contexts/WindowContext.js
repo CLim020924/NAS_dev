@@ -3,6 +3,32 @@ import axios from 'axios';
 
 const WindowContext = createContext();
 
+const TOOLBAR_HEIGHT = 48;
+const VIEWPORT_GAP = 8;
+
+const numericDimension = (value, fallback) => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const fitWindowToViewport = (win) => {
+  if (typeof window === 'undefined' || win.isMaximized || win.isImmersive || win.isMinimized) return win;
+
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const maxWidth = Math.max(280, viewportWidth - (VIEWPORT_GAP * 2));
+  const maxHeight = Math.max(240, viewportHeight - TOOLBAR_HEIGHT - VIEWPORT_GAP);
+  const width = Math.min(numericDimension(win.width, 860), maxWidth);
+  const height = Math.min(numericDimension(win.height, 620), maxHeight);
+  const maxX = Math.max(VIEWPORT_GAP, viewportWidth - width - VIEWPORT_GAP);
+  const maxY = Math.max(TOOLBAR_HEIGHT, viewportHeight - height - VIEWPORT_GAP);
+  const x = Math.min(Math.max(numericDimension(win.x, VIEWPORT_GAP), VIEWPORT_GAP), maxX);
+  const y = Math.min(Math.max(numericDimension(win.y, TOOLBAR_HEIGHT), TOOLBAR_HEIGHT), maxY);
+
+  if (width === win.width && height === win.height && x === win.x && y === win.y) return win;
+  return { ...win, width, height, x, y };
+};
+
 export const WindowProvider = ({ children }) => {
   const [openWindows, setOpenWindows] = useState([]);
   const [topZIndex, setTopZIndex] = useState(100);
@@ -11,6 +37,32 @@ export const WindowProvider = ({ children }) => {
   
   // [추가] 현재 선택된(포커스된) 대상을 추적합니다. 기본값은 바탕화면('desktop')
   const [focusedContext, setFocusedContext] = useState('desktop');
+
+  const fitOpenWindows = useCallback(() => {
+    setOpenWindows((prev) => {
+      let changed = false;
+      const next = prev.map((win) => {
+        const fitted = fitWindowToViewport(win);
+        if (fitted !== win) changed = true;
+        return fitted;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    fitOpenWindows();
+  }, [fitOpenWindows, openWindows.length]);
+
+  useEffect(() => {
+    const handleViewportResize = () => window.requestAnimationFrame(fitOpenWindows);
+    window.addEventListener('resize', handleViewportResize);
+    window.visualViewport?.addEventListener('resize', handleViewportResize);
+    return () => {
+      window.removeEventListener('resize', handleViewportResize);
+      window.visualViewport?.removeEventListener('resize', handleViewportResize);
+    };
+  }, [fitOpenWindows]);
 
   useEffect(() => {
     localStorage.setItem('nas_file_manager_path', fileManagerPath || '/');

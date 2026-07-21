@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Box, List, ListItem, ListItemIcon, ListItemText, Collapse, useTheme } from '@mui/material';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Box, List, ListItem, ListItemIcon, ListItemText, Collapse, useTheme, Typography, LinearProgress, Tooltip, IconButton } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import KeyboardArrowRight from '@mui/icons-material/KeyboardArrowRight';
 import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import axios from 'axios';
 import InlineInput from '../InlineInput';
 
@@ -12,6 +13,15 @@ const normalizePath = (p) => {
   let np = p.startsWith('/') ? p : '/' + p;
   if (np !== '/' && np.endsWith('/')) np = np.slice(0, -1);
   return np;
+};
+
+const formatBytes = (bytes) => {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '0B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  const size = value / (1024 ** index);
+  return `${size >= 10 || index === 0 ? Math.round(size) : size.toFixed(1)}${units[index]}`;
 };
 
 const TreeNode = ({
@@ -243,32 +253,75 @@ const SidebarTree = ({
   setInlineEdit
 }) => {
   const theme = useTheme();
+  const [pathUsage, setPathUsage] = useState(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState('');
+
+  const currentPath = normalizePath(win.currentPath || win.basePath || '/');
+
+  const refreshPathUsage = useCallback(() => {
+    setUsageLoading(true);
+    setUsageError('');
+    axios.get(`/api/storage/path?path=${encodeURIComponent(currentPath)}`, { withCredentials: true })
+      .then((res) => setPathUsage(res.data || null))
+      .catch(() => setUsageError('계산 실패'))
+      .finally(() => setUsageLoading(false));
+  }, [currentPath]);
+
+  useEffect(() => {
+    refreshPathUsage();
+  }, [refreshPathUsage, win.files?.length]);
 
   return (
     <Box
       sx={{
         width: '100%',
         height: '100%',
-        overflow: 'auto',
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
         bgcolor: theme.palette.background.default,
         color: theme.palette.text.primary,
-        py: 1,
         borderRight: `1px solid ${theme.palette.divider}`
       }}
     >
-      <TreeNode
-        item={{ fullPath: win.basePath, name: win.name || "Root", type: 'folder' }}
-        level={0}
-        win={win}
-        fetchFiles={fetchFiles}
-        openFileWindow={openFileWindow}
-        handleContextMenu={handleContextMenu}
-        handleItemClick={handleItemClick}
-        selectedItems={selectedItems}
-        inlineEdit={inlineEdit}
-        handleInlineSubmit={handleInlineSubmit}
-        setInlineEdit={setInlineEdit}
-      />
+      <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', py: 1 }}>
+        <TreeNode
+          item={{ fullPath: win.basePath, name: win.name || "Root", type: 'folder' }}
+          level={0}
+          win={win}
+          fetchFiles={fetchFiles}
+          openFileWindow={openFileWindow}
+          handleContextMenu={handleContextMenu}
+          handleItemClick={handleItemClick}
+          selectedItems={selectedItems}
+          inlineEdit={inlineEdit}
+          handleInlineSubmit={handleInlineSubmit}
+          setInlineEdit={setInlineEdit}
+        />
+      </Box>
+
+      <Box sx={{ flexShrink: 0, p: 1.25, borderTop: `1px solid ${theme.palette.divider}`, bgcolor: theme.palette.background.paper }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontWeight: 800 }}>
+              이 폴더 사용량
+            </Typography>
+            <Typography sx={{ fontWeight: 900, fontSize: '0.92rem', lineHeight: 1.2 }}>
+              {usageError || (usageLoading && !pathUsage ? '계산 중' : formatBytes(pathUsage?.sizeBytes))}
+            </Typography>
+          </Box>
+          <Tooltip title="다시 계산">
+            <span>
+              <IconButton size="small" onClick={refreshPathUsage} disabled={usageLoading}>
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
+        {usageLoading && <LinearProgress sx={{ mt: 1, height: 4, borderRadius: 999 }} />}
+      </Box>
     </Box>
   );
 };

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Drawer,
   Box,
@@ -11,8 +11,11 @@ import {
   Chip,
   Button,
   CircularProgress,
+  Menu,
+  MenuItem,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
 import MarkEmailReadIcon from '@mui/icons-material/MarkEmailRead';
 
@@ -24,7 +27,12 @@ const NotificationSidebar = ({
   unreadCount = 0,
   onReadAll = () => {},
   onNotificationClick = () => {},
+  onNotificationRead = () => {},
+  onNotificationDelete = () => {},
+  onDeleteRead = () => {},
 }) => {
+  const [contextMenu, setContextMenu] = useState(null);
+
   const getTypeLabel = (type) => {
     switch (type) {
       case 'friend_request':
@@ -37,6 +45,32 @@ const NotificationSidebar = ({
         return '알림';
     }
   };
+
+  const openContextMenu = (event, notification) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      mouseX: event.clientX + 2,
+      mouseY: event.clientY - 6,
+      notification,
+    });
+  };
+
+  const closeContextMenu = () => setContextMenu(null);
+
+  const handleContextRead = () => {
+    const notification = contextMenu?.notification;
+    closeContextMenu();
+    if (notification) onNotificationRead(notification);
+  };
+
+  const handleContextDelete = () => {
+    const notification = contextMenu?.notification;
+    closeContextMenu();
+    if (notification) onNotificationDelete(notification);
+  };
+
+  const readCount = notifications.filter((item) => item?.isRead).length;
 
   return (
     <Drawer
@@ -78,20 +112,9 @@ const NotificationSidebar = ({
             )}
           </Box>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Button
-              size="small"
-              color="inherit"
-              startIcon={<MarkEmailReadIcon />}
-              onClick={onReadAll}
-              disabled={unreadCount === 0}
-            >
-              모두 읽음
-            </Button>
-            <IconButton onClick={onClose} size="small">
-              <CloseIcon fontSize="small" />
-            </IconButton>
-          </Box>
+          <IconButton onClick={onClose} size="small">
+            <CloseIcon fontSize="small" />
+          </IconButton>
         </Box>
 
         <Box sx={{ flex: 1, overflowY: 'auto' }}>
@@ -114,11 +137,16 @@ const NotificationSidebar = ({
                 <React.Fragment key={n.notificationId}>
                   <ListItemButton
                     onClick={() => onNotificationClick(n)}
+                    onContextMenu={(event) => openContextMenu(event, n)}
                     sx={{
                       alignItems: 'flex-start',
                       px: 2,
                       py: 1.5,
-                      backgroundColor: 'action.hover',
+                      backgroundColor: n.isRead ? 'transparent' : 'action.hover',
+                      opacity: n.isRead ? 0.62 : 1,
+                      '&:hover': {
+                        backgroundColor: n.isRead ? 'action.selected' : 'action.hover',
+                      },
                     }}
                   >
                     <ListItemText
@@ -134,7 +162,7 @@ const NotificationSidebar = ({
                             label={getTypeLabel(n.type)}
                             sx={{ height: 20 }}
                           />
-                          <Chip size="small" color="error" label="NEW" sx={{ height: 20 }} />
+                          {!n.isRead && <Chip size="small" color="error" label="NEW" sx={{ height: 20 }} />}
                           {n.type === 'chat_message' && (
                             <Chip
                               size="small"
@@ -151,7 +179,7 @@ const NotificationSidebar = ({
                             {n.message}
                           </Typography>
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-                            {n.createdAt}
+                            {n.createdAt}{n.isRead ? ' · 읽음' : ''}
                           </Typography>
                         </Box>
                       }
@@ -163,7 +191,51 @@ const NotificationSidebar = ({
             </List>
           )}
         </Box>
+        <Box
+          sx={{
+            p: 1.5,
+            borderTop: (theme) => `1px solid ${theme.palette.divider}`,
+            display: 'flex',
+            gap: 1,
+            justifyContent: 'space-between',
+            backgroundColor: 'background.default',
+          }}
+        >
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<MarkEmailReadIcon />}
+            onClick={onReadAll}
+            disabled={unreadCount === 0}
+          >
+            전체 읽음
+          </Button>
+          <Button
+            size="small"
+            color="error"
+            startIcon={<DeleteOutlineIcon />}
+            onClick={onDeleteRead}
+            disabled={readCount === 0}
+          >
+            읽은 알림 삭제
+          </Button>
+        </Box>
       </Box>
+      <Menu
+        open={Boolean(contextMenu)}
+        onClose={closeContextMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}
+      >
+        <MenuItem onClick={handleContextRead} disabled={!!contextMenu?.notification?.isRead}>
+          <MarkEmailReadIcon fontSize="small" sx={{ mr: 1 }} />
+          읽음 처리
+        </MenuItem>
+        <MenuItem onClick={handleContextDelete} sx={{ color: 'error.main' }}>
+          <DeleteOutlineIcon fontSize="small" sx={{ mr: 1 }} />
+          알림 삭제
+        </MenuItem>
+      </Menu>
     </Drawer>
   );
 };

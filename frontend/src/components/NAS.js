@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Divider, Chip, TextField, InputAdornment} from '@mui/material';
+import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Divider, Chip, TextField, InputAdornment, Menu, MenuItem} from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rnd } from 'react-rnd';
@@ -10,6 +10,8 @@ import InlineInput from './NAS/InlineInput';
 import FileViewer from './NAS/FileViewer';
 import NASContextMenu from './NAS/NASContextMenu';
 import SidebarTree from './NAS/Window/SidebarTree';
+import ShareLinkDialog from './ShareLinkDialog';
+import ShareManagerDialog from './ShareManagerDialog';
 
 import MenuIcon from '@mui/icons-material/Menu'; 
 import FolderIcon from '@mui/icons-material/Folder';
@@ -27,10 +29,14 @@ import RemoveIcon from '@mui/icons-material/Remove';
 import CropSquareIcon from '@mui/icons-material/CropSquare';
 import FilterNoneIcon from '@mui/icons-material/FilterNone';
 import SearchIcon from '@mui/icons-material/Search';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import LinkIcon from '@mui/icons-material/Link';
+import SettingsIcon from '@mui/icons-material/Settings';
 
 import { useWindows } from '../contexts/WindowContext';
 import { useTransfer } from '../contexts/TransferContext';
 import useShortcuts from '../hooks/useShortcuts';
+import { transferUrl } from '../transferBaseUrl';
 
 const NAS = ({ showWorkspace = true }) => {
   const theme = useTheme();
@@ -62,7 +68,15 @@ const NAS = ({ showWorkspace = true }) => {
   };
 
   const [desktopItems, setDesktopItems] = useState([]);
+  const [storageSummary, setStorageSummary] = useState(null);
+  const [pathUsage, setPathUsage] = useState(null);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
+  const [fileSearchResults, setFileSearchResults] = useState([]);
+  const [fileSearchLoading, setFileSearchLoading] = useState(false);
+  const [fileSearchLimited, setFileSearchLimited] = useState(false);
+  const [actionMenuAnchor, setActionMenuAnchor] = useState(null);
+  const [shareDialog, setShareDialog] = useState({ open: false, target: null, targets: [], initialPath: '/' });
+  const [shareManagerOpen, setShareManagerOpen] = useState(false);
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
 
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
@@ -80,15 +94,21 @@ const NAS = ({ showWorkspace = true }) => {
     return item.name.includes('.') ? item.name.substring(0, item.name.lastIndexOf('.')) : item.name;
   };
 
-  const matchesFileSearch = (item) => {
-    const q = fileSearchQuery.trim().toLowerCase();
-    if (!q) return true;
-    return [
-      item.name,
-      item.fullPath,
-      item.path,
-      item.type
-    ].filter(Boolean).some((value) => String(value).toLowerCase().includes(q));
+  const formatBytes = (bytes) => {
+    const value = Number(bytes || 0);
+    if (!Number.isFinite(value) || value <= 0) return '0B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+    const size = value / (1024 ** index);
+    return `${size >= 10 || index === 0 ? Math.round(size) : size.toFixed(1)}${units[index]}`;
+  };
+
+  const getParentPath = (item) => {
+    if (item.parentPath) return ensureSlash(item.parentPath);
+    const safePath = ensureSlash(item.fullPath || item.path || '/');
+    if (safePath === '/') return '/';
+    const idx = safePath.lastIndexOf('/');
+    return idx <= 0 ? '/' : safePath.slice(0, idx);
   };
 
   const [closePrompt, setClosePrompt] = useState(null);
@@ -113,6 +133,40 @@ const NAS = ({ showWorkspace = true }) => {
   const openWindowsRef = useRef(openWindows); openWindowsRef.current = openWindows;
   const inlineEditRef = useRef(inlineEdit); inlineEditRef.current = inlineEdit;
   const contextMenuRef = useRef(contextMenu); contextMenuRef.current = contextMenu;
+
+  useEffect(() => {
+    const query = fileSearchQuery.trim();
+    if (query.length < 2) {
+      setFileSearchResults([]);
+      setFileSearchLimited(false);
+      setFileSearchLoading(false);
+      return undefined;
+    }
+
+    let canceled = false;
+    setFileSearchLoading(true);
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const { data } = await axios.get(`/api/files/search?q=${encodeURIComponent(query)}`, { withCredentials: true });
+        if (canceled) return;
+        setFileSearchResults(Array.isArray(data?.results) ? data.results : []);
+        setFileSearchLimited(!!data?.limited);
+      } catch (err) {
+        if (!canceled) {
+          setFileSearchResults([]);
+          setFileSearchLimited(false);
+        }
+      } finally {
+        if (!canceled) setFileSearchLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [fileSearchQuery]);
 
   const touchTimer = useRef(null);
   const isLongPressTriggered = useRef(false);
@@ -435,6 +489,24 @@ const NAS = ({ showWorkspace = true }) => {
   const getSelectedItemsData = useCallback(() => { let currentFiles = focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || []); const activeWin = openWindows.find(w => w.id === focusedContext); if (activeWin && activeWin.winType === 'folder') { currentFiles = [...currentFiles, { fullPath: activeWin.currentPath, name: activeWin.currentPath === '/' ? activeWin.name : activeWin.currentPath.split('/').pop(), type: 'folder' }]; } return selectedItems.map(path => { const found = currentFiles.find(f => ensureSlash(f.fullPath) === path); if (found) return found; const name = path === '/' ? 'Root' : path.split('/').pop(); return { fullPath: path, name, type: name.includes('.') ? 'file' : 'folder' }; }); }, [selectedItems, focusedContext, desktopItems, openWindows]);
   const getItemsToProcess = (clickedItem) => selectedItems.includes(ensureSlash(clickedItem.fullPath)) && selectedItems.length > 1 ? getSelectedItemsData() : [clickedItem];
 
+  const closeActionMenu = () => setActionMenuAnchor(null);
+  const openShareDialog = (target = null, initialPath = getActiveTargetPath()) => {
+    if (Array.isArray(target)) {
+      openShareTargetsDialog(target, initialPath);
+      return;
+    }
+    const normalizedTarget = target && target.fullPath ? target : null;
+    setShareDialog({ open: true, target: normalizedTarget, targets: normalizedTarget ? [normalizedTarget] : [], initialPath: ensureSlash(initialPath || '/') });
+  };
+  const openShareTargetsDialog = (targets = [], initialPath = getActiveTargetPath()) => {
+    const normalizedTargets = targets.filter((target) => target && target.fullPath);
+    setShareDialog({ open: true, target: normalizedTargets[0] || null, targets: normalizedTargets, initialPath: ensureSlash(initialPath || '/') });
+  };
+  const openShareFromSelection = () => {
+    const items = getSelectedItemsData();
+    openShareTargetsDialog(items, getActiveTargetPath());
+  };
+
   const downloadAgentInstaller = (agentDownloadUrl, agentDownloadName) => {
     if (!agentDownloadUrl) return;
     const a = document.createElement('a');
@@ -484,11 +556,11 @@ const NAS = ({ showWorkspace = true }) => {
       return;
     }
 
-    const winId = `desk_${item.name}`;
+    const winId = item.id === 'system_root' ? 'system_root' : `desk_${targetPath}`;
     if (!openWindows.find(w => w.id === winId && w.id !== 'system_root')) {
-      const newWinId = item.id === 'system_root' ? 'system_root' : winId; if(openWindows.find(w => w.id === newWinId)) return focusWindow(newWinId);
-      setOpenWindows(prev => [...prev, { ...item, id: newWinId, winType: 'folder', basePath: targetPath, currentPath: targetPath, files: [], isLoaded: false, zIndex: topZIndex + 1, sidebarOpen: !isMobile, width: 900, height: 650, x: 100 + (prev.length * 30), y: 50 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
-      setTopZIndex(prev => prev + 1); setFocusedContext(newWinId);
+      if(openWindows.find(w => w.id === winId)) return focusWindow(winId);
+      setOpenWindows(prev => [...prev, { ...item, id: winId, winType: 'folder', basePath: targetPath, currentPath: targetPath, files: [], isLoaded: false, zIndex: topZIndex + 1, sidebarOpen: !isMobile, width: 900, height: 650, x: 100 + (prev.length * 30), y: 50 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
+      setTopZIndex(prev => prev + 1); setFocusedContext(winId);
     } else focusWindow(winId); setSelectedItems([]); 
   };
 
@@ -514,9 +586,31 @@ const NAS = ({ showWorkspace = true }) => {
       setTopZIndex(prev => prev + 1); setFocusedContext(fileId); } catch (err) { showError('파일 열기', err); } setSelectedItems([]);
   };
 
+  const handleSearchResultOpen = (item) => {
+    const safePath = ensureSlash(item.fullPath || item.path || '/');
+    const targetItem = {
+      ...item,
+      fullPath: safePath,
+      path: safePath,
+      name: item.name || safePath.split('/').filter(Boolean).pop() || rootLabel
+    };
+
+    setFileSearchQuery('');
+    setFileSearchResults([]);
+    setSelectedItems([]);
+    setInlineEdit(null);
+
+    if (item.type === 'folder' || item.type === 'linked-device') {
+      openFolderWindow({ ...targetItem, type: item.type || 'folder' });
+    } else {
+      openFileWindow({ ...targetItem, type: 'file' }, false);
+    }
+  };
+
   const handleCloseWindowClick = (win) => {
     const isOffice = ['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt'].includes(win.ext);
-    if (win.winType === 'file' && !win.isBinary && !isOffice && win.content !== win.originalContent) {
+    const hasTextChanges = win.winType === 'file' && !win.isBinary && !isOffice && win.content !== win.originalContent;
+    if (win.winType === 'file' && (hasTextChanges || win.hasUnsavedChanges)) {
       setClosePrompt(win);
     } else {
       closeWindow(win.id);
@@ -524,15 +618,16 @@ const NAS = ({ showWorkspace = true }) => {
   };
   const toggleSidebar = (windowId) => setOpenWindows(prev => prev.map(w => w.id === windowId ? { ...w, sidebarOpen: !w.sidebarOpen } : w));
   const toggleEditMode = (id) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, mode: w.mode === 'view' ? 'edit' : 'view' } : w));
-  const handleContentChange = (id, newContent) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, content: newContent } : w));
+  const handleContentChange = (id, newContent) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, content: newContent, hasUnsavedChanges: newContent !== w.originalContent } : w));
+  const handleFileDirtyChange = (id, dirty) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, hasUnsavedChanges: !!dirty } : w));
 
-  const saveFile = async (win) => {
+  const saveFile = async (win, options = {}) => {
     try { const blob = new Blob([win.content], { type: 'text/plain' }); const file = new File([blob], win.name, { type: 'text/plain' }); const formData = new FormData(); formData.append('path', ensureSlash(win.fullPath.substring(0, win.fullPath.lastIndexOf('/')))); formData.append('file', file);
-      await axios.post('/api/file', formData, {
+      await axios.post(transferUrl('/api/file'), formData, {
           withCredentials: true,
           timeout: 0,
           maxContentLength: Infinity,
-          maxBodyLength: Infinity, headers: { 'Content-Type': 'multipart/form-data' } }); setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, originalContent: win.content, mode: 'view' } : w)); setSnackbar({ open: true, message: `'${win.name}' 저장 완료.`, severity: 'success' }); } catch (err) { showError('저장', err); }
+          maxBodyLength: Infinity, headers: { 'Content-Type': 'multipart/form-data' } }); setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, originalContent: win.content, hasUnsavedChanges: false, mode: options.keepEditMode ? w.mode : 'view' } : w)); setSnackbar({ open: true, message: `'${win.name}' 저장 완료.`, severity: 'success' }); return true; } catch (err) { showError('저장', err); return false; }
   };
 
   const handleInlineSubmit = async (value, editState) => {
@@ -554,7 +649,7 @@ const NAS = ({ showWorkspace = true }) => {
         
         const file = new File([new Blob([''], { type: 'text/plain' })], finalName, { type: 'text/plain' });
         const formData = new FormData(); formData.append('path', safeContextPath); formData.append('file', file);
-        await axios.post('/api/file', formData, {
+        await axios.post(transferUrl('/api/file'), formData, {
           withCredentials: true,
           timeout: 0,
           maxContentLength: Infinity,
@@ -888,13 +983,13 @@ const NAS = ({ showWorkspace = true }) => {
 
     if (state.sessionId) {
       cancelCalls.push(
-        axios.post('/api/file/cancel-session', { sessionId: state.sessionId }, { withCredentials: true }).catch(() => null)
+        axios.post(transferUrl('/api/file/cancel-session'), { sessionId: state.sessionId }, { withCredentials: true }).catch(() => null)
       );
     }
 
     for (const uploadId of Array.from(state.uploadIds)) {
       cancelCalls.push(
-        axios.post('/api/file/chunk/cancel', { uploadId }, { withCredentials: true }).catch(() => null)
+        axios.post(transferUrl('/api/file/chunk/cancel'), { uploadId }, { withCredentials: true }).catch(() => null)
       );
     }
 
@@ -1047,7 +1142,7 @@ const NAS = ({ showWorkspace = true }) => {
     const controller = createAbortControllerForTask(taskId);
 
     try {
-      await axios.post('/api/file', formData, {
+      await axios.post(transferUrl('/api/file'), formData, {
         withCredentials: true,
         timeout: 0,
         maxContentLength: Infinity,
@@ -1115,7 +1210,7 @@ const NAS = ({ showWorkspace = true }) => {
       const statusController = createAbortControllerForTask(taskId);
 
       try {
-        const statusRes = await axios.post('/api/file/chunk/status', { uploadId }, {
+        const statusRes = await axios.post(transferUrl('/api/file/chunk/status'), { uploadId }, {
           withCredentials: true,
           timeout: 0,
           signal: statusController.signal
@@ -1161,7 +1256,7 @@ const NAS = ({ showWorkspace = true }) => {
       let initController = createAbortControllerForTask(taskId);
 
       try {
-        const initRes = await axios.post('/api/file/chunk/init', {
+        const initRes = await axios.post(transferUrl('/api/file/chunk/init'), {
           path: destDirPath,
           fileName: file.name,
           fileSize: file.size,
@@ -1236,7 +1331,7 @@ const NAS = ({ showWorkspace = true }) => {
         const controller = createAbortControllerForTask(taskId);
 
         try {
-          await axios.post('/api/file/chunk', formData, {
+          await axios.post(transferUrl('/api/file/chunk'), formData, {
             withCredentials: true,
             timeout: 0,
             maxContentLength: Infinity,
@@ -1340,7 +1435,7 @@ const NAS = ({ showWorkspace = true }) => {
     const completeController = createAbortControllerForTask(taskId);
 
     try {
-      await axios.post('/api/file/chunk/complete', { uploadId }, {
+      await axios.post(transferUrl('/api/file/chunk/complete'), { uploadId }, {
         withCredentials: true,
         timeout: 0,
         signal: completeController.signal
@@ -1709,7 +1804,7 @@ const NAS = ({ showWorkspace = true }) => {
       setFolderDownload(item); 
     } else {
       const a = document.createElement('a'); 
-      a.href = `/api/file/download?path=${encodeURIComponent(ensureSlash(item.fullPath))}`; 
+      a.href = transferUrl(`/api/file/download?path=${encodeURIComponent(ensureSlash(item.fullPath))}`); 
       a.download = item.name; 
       document.body.appendChild(a); 
       a.click(); 
@@ -1822,7 +1917,7 @@ const NAS = ({ showWorkspace = true }) => {
   const executeFolderDownload = (format) => {
     if (!folderDownload) return;
     const a = document.createElement('a');
-    a.href = `/api/file/download-folder?path=${encodeURIComponent(ensureSlash(folderDownload.fullPath))}&format=${format}`;
+    a.href = transferUrl(`/api/file/download-folder?path=${encodeURIComponent(ensureSlash(folderDownload.fullPath))}&format=${format}`);
     document.body.appendChild(a); 
     a.click(); 
     document.body.removeChild(a);
@@ -1851,8 +1946,8 @@ const NAS = ({ showWorkspace = true }) => {
       const fileName = isFolder ? `${item.name}.zip` : item.name;
       const mimeType = isFolder ? 'application/zip' : 'application/octet-stream';
       const downloadUrl = isFolder
-        ? `${window.location.origin}/api/file/download-folder?path=${encodeURIComponent(safePath)}`
-        : `${window.location.origin}/api/file/download?path=${encodeURIComponent(safePath)}`;
+        ? transferUrl(`/api/file/download-folder?path=${encodeURIComponent(safePath)}`)
+        : transferUrl(`/api/file/download?path=${encodeURIComponent(safePath)}`);
       e.dataTransfer.setData('DownloadURL', `${mimeType}:${fileName}:${downloadUrl}`);
     }
   };
@@ -1939,10 +2034,30 @@ const NAS = ({ showWorkspace = true }) => {
   const activeWindow = openWindows.find(w => w.id === focusedContext);
   const activeTargetPath = getActiveTargetPath();
   const rootLabel = isAdmin ? '서버 전체 저장소' : '내 클라우드';
-  const linkedDeviceCount = desktopItems.filter(item => item.type === 'linked-device').length;
-  const folderCount = desktopItems.filter(item => item.type === 'folder' || item.type === 'linked-device').length;
-  const fileCount = desktopItems.filter(item => item.type === 'file').length;
-  const visibleDesktopItems = desktopItems.filter(matchesFileSearch);
+  const visibleDesktopItems = desktopItems;
+  const activeSearchQuery = fileSearchQuery.trim();
+  const showSearchResults = activeSearchQuery.length >= 2;
+  const storagePercent = storageSummary?.quotaMode === 'limited' && storageSummary?.quotaBytes
+    ? Math.min(100, Math.round((Number(storageSummary.usedBytes || 0) / Number(storageSummary.quotaBytes)) * 100))
+    : (storageSummary?.totalBytes ? Math.min(100, Math.round((Number(storageSummary.usedBytes || 0) / Number(storageSummary.totalBytes)) * 100)) : 0);
+
+  const refreshStorageUsage = useCallback(async (targetPath = activeTargetPath) => {
+    try {
+      const [summaryRes, pathRes] = await Promise.all([
+        axios.get('/api/storage/me', { withCredentials: true }),
+        axios.get(`/api/storage/path?path=${encodeURIComponent(ensureSlash(targetPath || '/'))}`, { withCredentials: true })
+      ]);
+      setStorageSummary(summaryRes.data || null);
+      setPathUsage(pathRes.data || null);
+    } catch (err) {
+      // Storage information is supplemental; file browsing should keep working.
+    }
+  }, [activeTargetPath]);
+
+  useEffect(() => {
+    refreshStorageUsage(activeTargetPath);
+  }, [activeTargetPath, desktopItems.length, refreshStorageUsage]);
+
   const desktopCardStyle = isMobile
     ? { textAlign: 'center', cursor: 'pointer', width: '100%', minWidth: 0, zIndex: 10 }
     : { textAlign: 'center', cursor: 'pointer', width: '100%', minWidth: 0, zIndex: 10 };
@@ -2003,9 +2118,14 @@ const NAS = ({ showWorkspace = true }) => {
             }}
           />
           <Button variant="outlined" color="inherit" onClick={() => refreshPath(activeTargetPath)} startIcon={<StorageIcon />}>새로고침</Button>
-          <Button variant="outlined" color="secondary" onClick={() => handleUploadClick(activeTargetPath)} startIcon={<UploadFileIcon />}>업로드</Button>
-          <Button variant="outlined" color="info" onClick={() => handleCreateFileStart(activeTargetPath, focusedContext, activeTargetPath === '/' ? getAvailableDesktopSlot() : null)} startIcon={<NoteAddIcon />}>새 파일</Button>
-          <Button variant="contained" color="primary" onClick={() => handleCreateFolderStart(activeTargetPath, focusedContext, activeTargetPath === '/' ? getAvailableDesktopSlot() : null)} startIcon={<CreateNewFolderIcon />}>새 폴더</Button>
+          <IconButton
+            color="inherit"
+            onClick={(e) => setActionMenuAnchor(e.currentTarget)}
+            aria-label="추가 작업"
+            sx={{ border: `1px solid ${theme.palette.divider}` }}
+          >
+            <MoreVertIcon />
+          </IconButton>
         </Box>
       </Box>
 
@@ -2014,14 +2134,19 @@ const NAS = ({ showWorkspace = true }) => {
           <Box sx={{ width: 286, flexShrink: 0, bgcolor: 'background.paper', borderRight: `1px solid ${theme.palette.divider}`, display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}` }}>
               <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900 }}>Storage</Typography>
-              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mt: 1 }}>
-                <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.08) }}>
-                  <Typography sx={{ fontWeight: 900 }}>{desktopItems.length}</Typography>
-                  <Typography variant="caption" color="text.secondary">전체 항목</Typography>
+              <Box sx={{ display: 'grid', gap: 1, mt: 1 }}>
+                <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.08) }}>
+                  <Typography variant="caption" color="text.secondary">내 저장공간</Typography>
+                  <Typography sx={{ fontWeight: 900 }}>
+                    {formatBytes(storageSummary?.usedBytes)}
+                    {' / '}
+                    {storageSummary?.quotaMode === 'limited' ? formatBytes(storageSummary?.quotaBytes) : formatBytes(storageSummary?.totalBytes)}
+                  </Typography>
+                  <LinearProgress variant="determinate" value={storagePercent} sx={{ mt: 0.75, height: 6, borderRadius: 999 }} />
                 </Box>
-                <Box sx={{ p: 1, borderRadius: 1.5, bgcolor: alpha(theme.palette.secondary.main, 0.08) }}>
-                  <Typography sx={{ fontWeight: 900 }}>{linkedDeviceCount}</Typography>
-                  <Typography variant="caption" color="text.secondary">연동 PC</Typography>
+                <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.secondary.main, 0.08) }}>
+                  <Typography variant="caption" color="text.secondary">현재 경로 사용량</Typography>
+                  <Typography sx={{ fontWeight: 900 }}>{pathUsage ? formatBytes(pathUsage.sizeBytes) : '계산 중'}</Typography>
                 </Box>
               </Box>
             </Box>
@@ -2046,12 +2171,10 @@ const NAS = ({ showWorkspace = true }) => {
         )}
 
         <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: desktopBackground }}>
-          <Box sx={{ px: { xs: 1.5, sm: 3 }, py: { xs: 1.25, sm: 2 }, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
-            <Box>
-              <Typography sx={{ fontWeight: 900, fontSize: { xs: '1rem', sm: '1.25rem' } }}>파일 작업공간</Typography>
-              <Typography variant="body2" color="text.secondary">{fileSearchQuery.trim() ? `검색 결과 ${visibleDesktopItems.length}개` : `${folderCount}개 폴더 · ${fileCount}개 파일`} · 선택 {selectedItems.length}개</Typography>
-            </Box>
-            <Chip size="small" color={openWindows.length > 0 ? 'primary' : 'default'} variant={openWindows.length > 0 ? 'filled' : 'outlined'} label={`열린 창 ${openWindows.filter(w => !w.isMinimized).length}`} />
+          <Box sx={{ px: { xs: 1.5, sm: 3 }, py: { xs: 0.85, sm: 1.1 }, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
+            <Typography sx={{ fontWeight: 900, fontSize: { xs: '1rem', sm: '1.18rem' } }}>
+              {showSearchResults ? '검색 결과' : '파일 작업공간'}
+            </Typography>
           </Box>
 
           <Box sx={{ display: { xs: 'block', sm: 'none' }, px: 1.5, pb: 1.25, flexShrink: 0 }}>
@@ -2070,6 +2193,53 @@ const NAS = ({ showWorkspace = true }) => {
               }}
             />
           </Box>
+
+          {showSearchResults && (
+            <Box sx={{ px: { xs: 1.5, sm: 3 }, pb: 1.25, flexShrink: 0 }}>
+              <Paper elevation={0} sx={{ borderRadius: 1.5, border: `1px solid ${theme.palette.divider}`, overflow: 'hidden', bgcolor: 'background.paper' }}>
+                <Box sx={{ px: 1.5, py: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, borderBottom: `1px solid ${theme.palette.divider}` }}>
+                  <Typography sx={{ fontWeight: 900, fontSize: '0.86rem' }}>
+                    전체 검색
+                    <Typography component="span" color="text.secondary" sx={{ ml: 0.75, fontSize: '0.78rem' }}>
+                      {fileSearchLoading ? '검색 중' : `${fileSearchResults.length}개`}
+                      {fileSearchLimited ? '+' : ''}
+                    </Typography>
+                  </Typography>
+                  <Button size="small" color="inherit" onClick={() => { setFileSearchQuery(''); setFileSearchResults([]); }}>닫기</Button>
+                </Box>
+                <Box sx={{ maxHeight: { xs: 260, sm: 320 }, overflow: 'auto' }}>
+                  {fileSearchLoading && fileSearchResults.length === 0 ? (
+                    <Box sx={{ px: 1.5, py: 2 }}>
+                      <Typography variant="body2" color="text.secondary">검색 중...</Typography>
+                    </Box>
+                  ) : fileSearchResults.length === 0 ? (
+                    <Box sx={{ px: 1.5, py: 2 }}>
+                      <Typography variant="body2" color="text.secondary">일치하는 파일이나 폴더가 없습니다.</Typography>
+                    </Box>
+                  ) : (
+                    fileSearchResults.map((item) => {
+                      const safePath = ensureSlash(item.fullPath || item.path || '/');
+                      const isFolder = item.type === 'folder' || item.type === 'linked-device';
+                      const Icon = item.type === 'linked-device' ? DesktopWindowsIcon : (isFolder ? FolderIcon : InsertDriveFileIcon);
+                      const iconColor = item.type === 'linked-device' ? deviceColor : (isFolder ? folderColor : fileColor);
+                      return (
+                        <ListItemButton key={`search_${safePath}`} onClick={() => handleSearchResultOpen(item)} sx={{ px: 1.5, py: 1, alignItems: 'flex-start', borderBottom: `1px solid ${alpha(theme.palette.divider, 0.7)}` }}>
+                          <ListItemIcon sx={{ minWidth: 34, pt: 0.3 }}>
+                            <Icon sx={{ color: iconColor }} />
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={<Typography sx={{ fontWeight: 800, fontSize: '0.9rem', overflowWrap: 'anywhere' }}>{item.name}</Typography>}
+                            secondary={<Typography color="text.secondary" sx={{ fontSize: '0.76rem', overflowWrap: 'anywhere' }}>{getParentPath(item)}</Typography>}
+                          />
+                          <Chip size="small" variant="outlined" label={isFolder ? (folderInlineMode ? '이동' : '창 열기') : '열기'} sx={{ ml: 1, mt: 0.25, flexShrink: 0 }} />
+                        </ListItemButton>
+                      );
+                    })
+                  )}
+                </Box>
+              </Paper>
+            </Box>
+          )}
 
           <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, currentFileManagerPath, 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, minHeight: 0, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: 'grid', gridTemplateColumns: { xs: 'repeat(auto-fill, minmax(92px, 1fr))', sm: 'repeat(auto-fill, minmax(132px, 1fr))', lg: 'repeat(auto-fill, minmax(148px, 1fr))' }, alignContent: 'flex-start', gap: { xs: 1.25, sm: 1.75 }, px: { xs: 1.5, sm: 3 }, pb: { xs: 8, sm: 3 } }}>
         <motion.div onClick={(e) => { e.stopPropagation(); setSelectedItems(['system_root']); if (isMobile) openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); }} onDoubleClick={(e) => { e.stopPropagation(); if(!isMobile) openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); }} style={desktopCardStyle}>
@@ -2111,6 +2281,7 @@ const NAS = ({ showWorkspace = true }) => {
         <Button variant="contained" color="secondary" size={isMobile ? "small" : "medium"} onClick={() => handleUploadClick(getActiveTargetPath())} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="업로드"><UploadFileIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "업로드"}</Button>
         <Button variant="contained" color="info" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFileStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="새 파일"><NoteAddIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 파일"}</Button>
         <Button variant="contained" color="primary" size={isMobile ? "small" : "medium"} onClick={() => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null)} sx={{ minWidth: isMobile ? 42 : 'auto', width: isMobile ? 42 : 'auto', height: isMobile ? 42 : 'auto', borderRadius: isMobile ? '50%' : 1 }} aria-label="새 폴더"><CreateNewFolderIcon sx={{ mr: isMobile ? 0 : 1 }} /> {!isMobile && "새 폴더"}</Button>
+        <Button variant="contained" color="inherit" size="small" onClick={(e) => setActionMenuAnchor(e.currentTarget)} sx={{ minWidth: 42, width: 42, height: 42, borderRadius: '50%' }} aria-label="추가 작업"><MoreVertIcon /></Button>
       
 </Box>
 
@@ -2180,7 +2351,7 @@ const NAS = ({ showWorkspace = true }) => {
                         <TableContainer className="window-content-area" onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} onContextMenu={(e) => handleContextMenu(e, 'background', { path: win.currentPath, windowId: win.id })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if(e.target === e.currentTarget) setSelectedItems([]); }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, background: 'transparent', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
                           <Table stickyHeader size="small">
                             <TableBody>
-                              {win.files.filter(matchesFileSearch).map((file, idx) => {
+                              {win.files.map((file, idx) => {
                                 const safePath = ensureSlash(file.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === win.id); const isSelected = selectedItems.includes(safePath); const isDragTarget = dragOverTarget === safePath;
                                 return (
                                   <TableRow key={idx} className="selectable-item" data-path={safePath} hover draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, file, win.id) }} onDragOver={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragOver(e, file.fullPath) }} onDragLeave={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragLeave(e, file.fullPath) }} onDrop={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDrop(e, file.fullPath, win.id) }} onClick={(e) => handleItemClick(e, safePath, file)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (file.type === 'folder' || file.type === 'linked-device') ? fetchFiles(win.id, ensureSlash(file.fullPath)) : openFileWindow(file, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, file.type, { item: file, path: win.currentPath, windowId: win.id }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, file.type, { item: file, path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ cursor: isEditing ? 'default' : 'pointer', backgroundColor: isDragTarget ? alpha(theme.palette.warning.main, 0.14) : (isSelected ? alpha(theme.palette.primary.main, 0.10) : 'inherit'), borderLeft: isSelected ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent', outline: isDragTarget ? `2px dashed ${theme.palette.warning.main}` : 'none', '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.06) } }}>
@@ -2195,7 +2366,7 @@ const NAS = ({ showWorkspace = true }) => {
                         </TableContainer>
                       </>
                     )}
-                    {win.winType === 'file' && <FileViewer win={win} toggleEditMode={toggleEditMode} handleContentChange={handleContentChange} saveFile={saveFile} />}
+                    {win.winType === 'file' && <FileViewer win={win} toggleEditMode={toggleEditMode} handleContentChange={handleContentChange} saveFile={saveFile} onDirtyChange={handleFileDirtyChange} />}
                   
 </Box>
 
@@ -2216,13 +2387,54 @@ const NAS = ({ showWorkspace = true }) => {
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ p: 2, pt: 0 }}>
-          <Button onClick={async () => { await saveFile(closePrompt); closeWindow(closePrompt.id); setClosePrompt(null); }} color="primary" variant="contained" disableElevation>저장</Button>
-          <Button onClick={() => { closeWindow(closePrompt.id); setClosePrompt(null); }} color="error" variant="outlined">저장 안 함</Button>
           <Button onClick={() => setClosePrompt(null)} color="inherit">취소</Button>
+          <Button onClick={() => { closeWindow(closePrompt.id); setClosePrompt(null); }} color="error" variant="outlined">저장하지 않고 닫기</Button>
+          <Button onClick={async () => {
+            const handler = window.__nasFileSaveHandlers?.[closePrompt.id];
+            const ok = typeof handler === 'function' ? await handler() : await saveFile(closePrompt);
+            if (ok !== false) {
+              closeWindow(closePrompt.id);
+              setClosePrompt(null);
+            }
+          }} color="primary" variant="contained" disableElevation>저장</Button>
         </DialogActions>
       </Dialog>
     
-      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleShowProperties={handleShowProperties} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} />
+      <Menu anchorEl={actionMenuAnchor} open={Boolean(actionMenuAnchor)} onClose={closeActionMenu}>
+        <MenuItem onClick={() => { closeActionMenu(); handleUploadClick(activeTargetPath); }}>
+          <ListItemIcon><UploadFileIcon fontSize="small" color="secondary" /></ListItemIcon>
+          <ListItemText>업로드</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeActionMenu(); handleCreateFileStart(activeTargetPath, focusedContext, activeTargetPath === '/' ? getAvailableDesktopSlot() : null); }}>
+          <ListItemIcon><NoteAddIcon fontSize="small" color="info" /></ListItemIcon>
+          <ListItemText>새 파일</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeActionMenu(); handleCreateFolderStart(activeTargetPath, focusedContext, activeTargetPath === '/' ? getAvailableDesktopSlot() : null); }}>
+          <ListItemIcon><CreateNewFolderIcon fontSize="small" color="primary" /></ListItemIcon>
+          <ListItemText>새 폴더</ListItemText>
+        </MenuItem>
+        <Divider />
+        <MenuItem onClick={() => { closeActionMenu(); openShareFromSelection(); }}>
+          <ListItemIcon><LinkIcon fontSize="small" color="primary" /></ListItemIcon>
+          <ListItemText>공유 링크 생성</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeActionMenu(); setShareManagerOpen(true); }}>
+          <ListItemIcon><SettingsIcon fontSize="small" color="action" /></ListItemIcon>
+          <ListItemText>공유 링크 관리</ListItemText>
+        </MenuItem>
+      </Menu>
+      <ShareLinkDialog
+        open={shareDialog.open}
+        initialTarget={shareDialog.target}
+        initialTargets={shareDialog.targets}
+        initialPath={shareDialog.initialPath}
+        onClose={() => setShareDialog({ open: false, target: null, targets: [], initialPath: '/' })}
+      />
+      <ShareManagerDialog
+        open={shareManagerOpen}
+        onClose={() => setShareManagerOpen(false)}
+      />
+      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleShowProperties={handleShowProperties} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} handleOpenShareDialog={openShareDialog} />
       <Snackbar open={snackbar.open} autoHideDuration={snackbar.severity === 'info' ? null : 3000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}><Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', display: 'flex', alignItems: 'center' }}>{snackbar.severity === 'info' && <CircularProgress size={20} sx={{ mr: 2, color: 'inherit' }} />}{snackbar.message}</Alert></Snackbar>
       {/* 파일/폴더 정보 다이얼로그 */}
       <Dialog

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Paper, Typography, IconButton } from '@mui/material';
 import { Rnd } from 'react-rnd';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -47,6 +47,12 @@ const NASWindow = ({
   const fillsParent = !!win.isMaximized || !!win.isImmersive;
   const isFolder = win.winType === 'folder';
   const isFile = win.winType === 'file';
+  const [immersiveHeaderVisible, setImmersiveHeaderVisible] = useState(false);
+  const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false);
+  const maximizeHoldTimerRef = useRef(null);
+  const maximizeHoldTriggeredRef = useRef(false);
+  const browserFullscreenCancelRef = useRef(false);
+  const windowSurfaceRef = useRef(null);
 
   const safeWin = {
     ...win,
@@ -54,6 +60,7 @@ const NASWindow = ({
   };
 
   const safeSelectedItems = Array.isArray(selectedItems) ? selectedItems : [];
+  const fullscreenChromeActive = !!safeWin.isImmersive || isBrowserFullscreen;
 
   const rndSize = fillsParent
     ? { width: '100%', height: '100%' }
@@ -62,6 +69,100 @@ const NASWindow = ({
   const rndPosition = fillsParent
     ? { x: 0, y: 0 }
     : { x: safeWin.x, y: safeWin.y };
+
+  const clearMaximizeHoldTimer = () => {
+    if (maximizeHoldTimerRef.current) {
+      clearTimeout(maximizeHoldTimerRef.current);
+      maximizeHoldTimerRef.current = null;
+    }
+    if (!maximizeHoldTriggeredRef.current) {
+      browserFullscreenCancelRef.current = true;
+      if (document.fullscreenElement === windowSurfaceRef.current) {
+        document.exitFullscreen?.().catch(() => {});
+      }
+    }
+  };
+
+  const enterBrowserFullscreen = async () => {
+    const target = windowSurfaceRef.current;
+    if (!target || document.fullscreenElement) return;
+    try {
+      await target.requestFullscreen?.();
+      if (browserFullscreenCancelRef.current && document.fullscreenElement === target) {
+        await document.exitFullscreen?.();
+      }
+    } catch (err) {
+      console.warn('브라우저 전체화면 전환 실패', err);
+    } finally {
+      browserFullscreenCancelRef.current = false;
+    }
+  };
+
+  const startMaximizeHold = () => {
+    clearMaximizeHoldTimer();
+    maximizeHoldTriggeredRef.current = false;
+    browserFullscreenCancelRef.current = false;
+    enterBrowserFullscreen();
+    maximizeHoldTimerRef.current = setTimeout(() => {
+      maximizeHoldTriggeredRef.current = true;
+      toggleFullscreen?.(safeWin.id);
+      setImmersiveHeaderVisible(false);
+      maximizeHoldTimerRef.current = null;
+    }, 550);
+  };
+
+  const handleMaximizeClick = (event) => {
+    event.stopPropagation();
+    if (maximizeHoldTriggeredRef.current) {
+      maximizeHoldTriggeredRef.current = false;
+      return;
+    }
+    toggleMaximize?.(safeWin.id);
+  };
+
+  const handleBrowserFullscreenToggle = (event) => {
+    event.stopPropagation();
+    if (safeWin.isImmersive || document.fullscreenElement === windowSurfaceRef.current) {
+      document.exitFullscreen?.().catch(() => {});
+      if (safeWin.isImmersive) toggleFullscreen?.(safeWin.id);
+      return;
+    }
+    browserFullscreenCancelRef.current = false;
+    enterBrowserFullscreen();
+    toggleFullscreen?.(safeWin.id);
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const active = document.fullscreenElement === windowSurfaceRef.current;
+      setIsBrowserFullscreen(active);
+      if (!active) setImmersiveHeaderVisible(false);
+      if (!active && safeWin.isImmersive) {
+        toggleFullscreen?.(safeWin.id);
+      }
+    };
+    handleFullscreenChange();
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [safeWin.id, safeWin.isImmersive, toggleFullscreen]);
+
+  useEffect(() => {
+    if (!fullscreenChromeActive) return undefined;
+    const handlePointerMove = (event) => {
+      if (event.clientY <= 96) setImmersiveHeaderVisible(true);
+      if (event.clientY > 132) setImmersiveHeaderVisible(false);
+    };
+    window.addEventListener('mousemove', handlePointerMove, true);
+    window.addEventListener('pointermove', handlePointerMove, true);
+    return () => {
+      window.removeEventListener('mousemove', handlePointerMove, true);
+      window.removeEventListener('pointermove', handlePointerMove, true);
+    };
+  }, [fullscreenChromeActive]);
+
+  useEffect(() => () => {
+    clearMaximizeHoldTimer();
+  }, []);
 
   return (
     <Rnd
@@ -77,8 +178,10 @@ const NASWindow = ({
       }}
     >
       <Paper
+        ref={windowSurfaceRef}
         elevation={isActive ? 10 : 2}
         sx={{
+          position: 'relative',
           display: 'flex',
           flexDirection: 'column',
           height: '100%',
@@ -88,15 +191,43 @@ const NASWindow = ({
           bgcolor: 'background.paper',
         }}
       >
+        {fullscreenChromeActive && (
+          <Box
+            onMouseEnter={() => setImmersiveHeaderVisible(true)}
+            onMouseMove={() => setImmersiveHeaderVisible(true)}
+            onPointerEnter={() => setImmersiveHeaderVisible(true)}
+            onPointerMove={() => setImmersiveHeaderVisible(true)}
+            sx={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 96,
+              zIndex: 2147482999,
+              cursor: 'default',
+              pointerEvents: 'auto',
+            }}
+          />
+        )}
         <Box
           className="window-header"
+          onMouseEnter={() => setImmersiveHeaderVisible(true)}
+          onMouseLeave={() => setImmersiveHeaderVisible(false)}
           sx={{
             p: 1,
             display: 'flex',
+            position: fullscreenChromeActive ? 'fixed' : 'relative',
+            top: fullscreenChromeActive ? (immersiveHeaderVisible ? 0 : -72) : 0,
+            left: 0,
+            right: 0,
+            zIndex: 2147483000,
+            flexShrink: 0,
             alignItems: 'center',
             justifyContent: 'space-between',
             bgcolor: theme.palette.mode === 'dark' ? '#111827' : '#f8fafc',
             borderBottom: `1px solid ${theme.palette.divider}`,
+            boxShadow: fullscreenChromeActive ? theme.shadows[4] : 'none',
+            transition: fullscreenChromeActive ? 'top 180ms ease' : 'none',
             cursor: fillsParent ? 'default' : 'move',
           }}
         >
@@ -137,10 +268,25 @@ const NASWindow = ({
             <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleMinimize?.(safeWin.id); }} title="최소화">
               <RemoveIcon fontSize="small" />
             </IconButton>
-            <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleMaximize?.(safeWin.id); }} title="최대화">
+            <IconButton
+              size="small"
+              onClick={handleMaximizeClick}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                startMaximizeHold();
+              }}
+              onMouseUp={clearMaximizeHoldTimer}
+              onMouseLeave={clearMaximizeHoldTimer}
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                startMaximizeHold();
+              }}
+              onTouchEnd={clearMaximizeHoldTimer}
+              title="최대화 / 길게 누르면 전체화면"
+            >
               <CropSquareIcon fontSize="small" />
             </IconButton>
-            <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleFullscreen?.(safeWin.id); }} title="풀스크린">
+            <IconButton size="small" onClick={handleBrowserFullscreenToggle} title="브라우저 전체화면">
               <FilterNoneIcon fontSize="small" />
             </IconButton>
             <IconButton size="small" onClick={(e) => { e.stopPropagation(); closeWindow?.(safeWin.id); }} color="error" title="닫기">

@@ -1,13 +1,14 @@
 const fs = require('fs');
 const path = require('path');
+const config = require('./config/env');
 
-const NAS_ROOT = '/mnt/nas';
-const CHATDATA_ROOT = path.join(NAS_ROOT, 'chatdata');
+const NAS_ROOT = config.NAS_ROOT;
+const CHATDATA_ROOT = config.CHATDATA_ROOT;
 const CONVERSATIONS_FILE = path.join(__dirname, 'data', 'conversations.json');
 const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
 const MEMBERS_FILE = path.join(__dirname, 'data', 'members.json');
 const CHAT_ATTACHMENTS_FILE = path.join(__dirname, 'data', 'chatAttachments.json');
-const CHAT_TEMP_ROOT = path.join(NAS_ROOT, 'chat_tmp');
+const CHAT_TEMP_ROOT = config.CHAT_TEMP_ROOT;
 
 const MESSAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const ATTACHMENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;

@@ -11,8 +11,28 @@ const useShortcuts = ({
 }) => {
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // 입력창(input)이나 텍스트 편집기 안에서 타이핑 중일 때는 단축키 발동 안 함
-      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      // 입력창이나 코드/문서 편집기 안에서는 파일 단축키가 키 입력을 가로채지 않는다.
+      const target = e.target;
+      const targetTag = target?.tagName || '';
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+      const isEditingSurface =
+        ['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTag) ||
+        target?.isContentEditable ||
+        target?.getAttribute?.('role') === 'textbox' ||
+        target?.closest?.(
+          '.monaco-editor, .monaco-editor textarea, .view-lines, .inputarea, [contenteditable="true"], [role="textbox"]'
+        ) ||
+        path.some((node) => {
+          if (!node?.classList && !node?.getAttribute) return false;
+          return (
+            node.classList?.contains('monaco-editor') ||
+            node.classList?.contains('view-lines') ||
+            node.classList?.contains('inputarea') ||
+            node.getAttribute?.('contenteditable') === 'true' ||
+            node.getAttribute?.('role') === 'textbox'
+          );
+        });
+      if (isEditingSurface) return;
 
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;

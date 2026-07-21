@@ -1,10 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const config = require('./config/env');
 
 const DATA_FILE = path.join(__dirname, 'data', 'chatAttachments.json');
-const TEMP_ROOT = '/mnt/nas/chat_tmp';
-const INCOMING_ROOT = path.join(TEMP_ROOT, '_incoming');
+const TEMP_ROOT = config.CHAT_TEMP_ROOT;
+const INCOMING_ROOT = config.CHAT_INCOMING_ROOT;
 const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 
 const nowIso = () => new Date().toISOString();

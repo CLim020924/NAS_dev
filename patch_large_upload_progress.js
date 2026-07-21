@@ -9,7 +9,7 @@ const candidates = [
 const filePath = candidates.find(p => fs.existsSync(p));
 
 if (!filePath) {
-  console.error('❌ NAS.js 파일을 찾지 못했습니다.');
+  console.error('NAS.js 파일을 찾지 못했습니다.');
   console.error('찾은 경로 후보:', candidates);
   process.exit(1);
 }
@@ -17,7 +17,7 @@ if (!filePath) {
 let code = fs.readFileSync(filePath, 'utf8');
 const backupPath = `${filePath}.backup_${Date.now()}`;
 fs.writeFileSync(backupPath, code);
-console.log(`📦 백업 생성: ${backupPath}`);
+console.log(`백업 생성: ${backupPath}`);
 
 const newHandleFileUploadUseCallback = `const handleFileUpload = useCallback(async (e) => {
     const file = e.target.files[0];
@@ -155,16 +155,16 @@ const useCallbackRegex = /const handleFileUpload = useCallback\(async \(e\) => \
 
 if (useCallbackRegex.test(code)) {
   code = code.replace(useCallbackRegex, newHandleFileUploadUseCallback);
-  console.log('✅ handleFileUpload(useCallback 버전) 패치 완료');
+  console.log('handleFileUpload(useCallback 버전) 패치 완료');
   changed = true;
 } else {
   const normalRegex = /const handleFileUpload = async \(e\) => \{[\s\S]*?\n  \};\n\n  const handleDelete = async/;
   if (normalRegex.test(code)) {
     code = code.replace(normalRegex, newHandleFileUploadNormal);
-    console.log('✅ handleFileUpload(일반 함수 버전) 패치 완료');
+    console.log('handleFileUpload(일반 함수 버전) 패치 완료');
     changed = true;
   } else {
-    console.log('⚠️ handleFileUpload 자동 교체 실패: 함수 구조가 예상과 다릅니다.');
+    console.log('handleFileUpload 자동 교체 실패: 함수 구조가 예상과 다릅니다.');
   }
 }
 
@@ -221,6 +221,6 @@ code = code.replace(
 
 fs.writeFileSync(filePath, code);
 
-console.log('✅ NAS.js 대용량 업로드 퍼센트/413 안내 패치 완료');
+console.log('NAS.js 대용량 업로드 퍼센트/413 안내 패치 완료');
 console.log(`📄 수정 파일: ${filePath}`);
 console.log('다음 단계: 프론트엔드 빌드 후 배포하세요.');

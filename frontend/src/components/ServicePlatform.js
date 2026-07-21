@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Box, Button, IconButton, Tooltip, Typography } from '@mui/material';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Box, IconButton, Tooltip, Typography } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import HistoryIcon from '@mui/icons-material/History';
 import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
@@ -21,7 +21,8 @@ function ServicePlatform() {
   } = useWindows();
   const user = JSON.parse(localStorage.getItem('user')) || {};
   const canOpenBackup = user.role === 'MASTER' || user.Masters || user.globalAccess;
-  const openApp = (app) => {
+
+  const openApp = useCallback((app) => {
     const mode = appOpenMode();
 
     if (mode !== 'window' && app.component) {
@@ -41,25 +42,50 @@ function ServicePlatform() {
       return;
     }
     openAppWindow(app);
-  };
+  }, [navigate, openAppWindow]);
 
-  const apps = [
-    { id: 'files', title: '파일 관리자', icon: FolderIcon, route: '/nas', color: theme.palette.primary.main },
-    { id: 'pc-sync', title: 'PC 연동', icon: DesktopWindowsIcon, route: '/nas', color: theme.palette.secondary.main },
-    { id: 'meeting', title: '화상회의', icon: VideocamIcon, component: MeetingApp, color: theme.palette.info.main, width: 920, height: 640 },
-    { id: 'settings', title: '설정', icon: SettingsIcon, route: '/settings', color: theme.palette.text.secondary }
-  ];
+  const apps = useMemo(() => {
+    const baseApps = [
+      { id: 'files', title: '파일 관리자', icon: FolderIcon, route: '/nas', color: theme.palette.primary.main },
+      { id: 'pc-sync', title: 'PC 연동', icon: DesktopWindowsIcon, route: '/nas', color: theme.palette.secondary.main },
+      { id: 'meeting', title: '화상회의', icon: VideocamIcon, component: MeetingApp, color: theme.palette.info.main, width: 920, height: 640 },
+      { id: 'settings', title: '설정', icon: SettingsIcon, route: '/settings', color: theme.palette.text.secondary }
+    ];
 
-  if (canOpenBackup) {
-    apps.push({ id: 'backup', title: '백업', icon: HistoryIcon, route: '/nas/backup', color: theme.palette.error.main });
-  }
+    if (canOpenBackup) {
+      baseApps.push({ id: 'backup', title: '백업', icon: HistoryIcon, route: '/nas/backup', color: theme.palette.error.main });
+    }
+
+    return baseApps;
+  }, [
+    canOpenBackup,
+    theme.palette.error.main,
+    theme.palette.info.main,
+    theme.palette.primary.main,
+    theme.palette.secondary.main,
+    theme.palette.text.secondary
+  ]);
+
+  useEffect(() => {
+    const showDesktop = () => setInlineApp(null);
+    const openPlatformApp = (event) => {
+      const targetId = event.detail?.id;
+      const targetApp = apps.find((app) => app.id === targetId);
+      if (targetApp) openApp(targetApp);
+    };
+    window.addEventListener('platform:show-desktop', showDesktop);
+    window.addEventListener('platform:open-app', openPlatformApp);
+    return () => {
+      window.removeEventListener('platform:show-desktop', showDesktop);
+      window.removeEventListener('platform:open-app', openPlatformApp);
+    };
+  }, [apps, openApp]);
 
   if (inlineApp) {
     return (
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
         <Box sx={{ height: 54, px: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: 'background.paper', flexShrink: 0 }}>
           <Typography sx={{ fontWeight: 900 }}>{inlineApp.title}</Typography>
-          <Button variant="text" onClick={() => setInlineApp(null)}>바탕화면</Button>
         </Box>
         <Box sx={{ flex: 1, minHeight: 0 }}>
           {inlineApp.id === 'meeting' ? (

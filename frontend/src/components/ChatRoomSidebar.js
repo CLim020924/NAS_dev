@@ -76,17 +76,26 @@ const toDockedChat = (conversation) => {
     ? conversation.participantUids.length
     : 0;
 
-  return {
-    conversationId: conversation.conversationId,
-    conversationType: 'group',
-    userUid: null,
-    username: title,
+	  return {
+	    conversationId: conversation.conversationId,
+	    conversationType: 'group',
+	    userUid: null,
+	    username: title,
     displayName: title,
-    role: 'GROUP',
-    title,
-    subtitle: participantCount > 0 ? `참여자 ${participantCount}명` : '그룹 채팅',
-  };
-};
+	    role: 'GROUP',
+	    title,
+	    subtitle: participantCount > 0 ? `참여자 ${participantCount}명` : '그룹 채팅',
+	    ownerUid: conversation.ownerUid || conversation.createdByUid || '',
+	    coHostUids: conversation.coHostUids || [],
+	    participantUids: conversation.participantUids || [],
+	    pendingInviteUids: conversation.pendingInviteUids || [],
+	    participants: conversation.participants || [],
+	    pendingInvites: conversation.pendingInvites || [],
+	    viewerRole: conversation.viewerRole || 'member',
+	    viewerCanManage: !!conversation.viewerCanManage,
+	    viewerCanDelete: !!conversation.viewerCanDelete,
+	  };
+	};
 
 const ChatRoomSidebar = ({
   open,
@@ -313,13 +322,15 @@ const ChatRoomSidebar = ({
       PaperProps={{
         sx: {
           width: { xs: '88vw', sm: SIDEBAR_WIDTH },
+          height: 'var(--app-viewport-height)',
+          maxHeight: 'var(--app-viewport-height)',
           backgroundColor: 'background.paper',
           color: 'text.primary',
           overflow: 'visible',
         },
       }}
     >
-      <Box sx={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'visible' }}>
+      <Box sx={{ position: 'relative', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'visible' }}>
         <DockedChatPanel
           sidebarWidth={SIDEBAR_WIDTH}
           activeChat={activeChat}
@@ -328,6 +339,7 @@ const ChatRoomSidebar = ({
             if (!conversation?.conversationId) return;
             onActiveChatChange(toDockedChat(conversation));
           }}
+          onCloseChat={() => onActiveChatChange(null)}
         />
 
         <Box

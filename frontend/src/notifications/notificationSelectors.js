@@ -1,5 +1,7 @@
 export const groupNotificationsForDisplay = (items = []) => {
-  const unread = (Array.isArray(items) ? items : []).filter((n) => !n?.isRead);
+  const all = Array.isArray(items) ? items : [];
+  const unread = all.filter((n) => !n?.isRead);
+  const read = all.filter((n) => n?.isRead);
 
   const latestChatBySender = new Map();
   const others = [];
@@ -41,13 +43,14 @@ export const groupNotificationsForDisplay = (items = []) => {
     unreadGroupCount: entry.unreadGroupCount,
   }));
 
-  return [...others, ...groupedChats].sort(
+  return [...others, ...groupedChats, ...read].sort(
     (a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || ''))
   );
 };
 
 export const getNotificationBadgeCount = (items = []) => {
-  return groupNotificationsForDisplay(items).length;
+  const unread = (Array.isArray(items) ? items : []).filter((n) => !n?.isRead);
+  return groupNotificationsForDisplay(unread).length;
 };
 
 export const markNotificationGroupAsReadLocal = (items = [], notification = null) => {

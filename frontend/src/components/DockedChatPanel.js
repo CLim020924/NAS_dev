@@ -13,6 +13,7 @@ import {
   MenuItem,
   Chip,
   LinearProgress,
+  useMediaQuery,
 } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import AddIcon from '@mui/icons-material/Add';
@@ -22,6 +23,7 @@ import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import ImageIcon from '@mui/icons-material/Image';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useChat } from '../contexts/ChatContext';
 import { useWindows } from '../contexts/WindowContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
@@ -60,8 +62,10 @@ const DockedChatPanel = ({
   activeChat = null,
   onOpenWindow = () => {},
   onConversationReady = () => {},
+  onCloseChat = () => {},
 }) => {
   const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { openFolderWindowByPath, openFileWindowByPath, openAppWindow } = useWindows();
   const messageListRef = useRef(null);
   const deviceFilesInputRef = useRef(null);
@@ -80,12 +84,18 @@ const DockedChatPanel = ({
     markConversationRead,
     saveReceivedAttachments,
     createDeviceAttachmentBundle,
-    createNasAttachmentBundle,
-    removeAttachmentBundle,
-  } = useChat();
+	    createNasAttachmentBundle,
+	    removeAttachmentBundle,
+	    leaveConversation,
+	    transferConversationOwner,
+	    setConversationCoHost,
+	    kickConversationParticipant,
+	    deleteConversation,
+	  } = useChat();
 
-  const [attachMenuAnchorEl, setAttachMenuAnchorEl] = useState(null);
-  const [nasPickerOpen, setNasPickerOpen] = useState(false);
+	  const [attachMenuAnchorEl, setAttachMenuAnchorEl] = useState(null);
+	  const [roomMenuAnchorEl, setRoomMenuAnchorEl] = useState(null);
+	  const [nasPickerOpen, setNasPickerOpen] = useState(false);
   const [savingMessageIds, setSavingMessageIds] = useState({});
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
 
@@ -153,9 +163,85 @@ const DockedChatPanel = ({
     return () => clearTimeout(timer);
   }, [conversationId, messages, attachmentDrafts, attachmentUploads]);
 
-  if (!activeChat) return null;
+	  if (!activeChat) return null;
 
-  const closeAttachMenu = () => setAttachMenuAnchorEl(null);
+	  const closeAttachMenu = () => setAttachMenuAnchorEl(null);
+	  const closeRoomMenu = () => setRoomMenuAnchorEl(null);
+	  const isGroupChat = activeChat.conversationType === 'group';
+	  const roomParticipants = Array.isArray(activeChat.participants) ? activeChat.participants : [];
+	  const viewerRole = activeChat.viewerRole || 'member';
+	  const viewerCanManage = !!activeChat.viewerCanManage || viewerRole === 'owner' || viewerRole === 'cohost';
+	  const viewerCanDelete = !!activeChat.viewerCanDelete || viewerRole === 'owner';
+	  const coHostUids = Array.isArray(activeChat.coHostUids) ? activeChat.coHostUids : [];
+	  const ownerUid = activeChat.ownerUid || '';
+
+	  const refreshAfterRoomAction = (conversation) => {
+	    if (!conversation?.conversationId) {
+	      onCloseChat();
+	      return;
+	    }
+	    onConversationReady?.(conversation);
+	  };
+
+	  const handleLeaveRoom = async () => {
+	    if (!conversationId) return;
+	    if (!window.confirm('이 채팅방에서 나가시겠습니까?')) return;
+	    try {
+	      await leaveConversation(conversationId);
+	      closeRoomMenu();
+	      onCloseChat();
+	    } catch (err) {
+	      alert(err.response?.data?.error || '채팅방에서 나가지 못했습니다.');
+	    }
+	  };
+
+	  const handleDeleteRoom = async () => {
+	    if (!conversationId) return;
+	    const first = window.confirm('채팅방을 파기하면 모든 참가자의 목록에서 사라집니다. 계속할까요?');
+	    if (!first) return;
+	    const second = window.prompt('정말 파기하려면 "방 파기"를 입력하세요.');
+	    if (second !== '방 파기') return;
+	    try {
+	      await deleteConversation(conversationId);
+	      closeRoomMenu();
+	      onCloseChat();
+	    } catch (err) {
+	      alert(err.response?.data?.error || '채팅방을 파기하지 못했습니다.');
+	    }
+	  };
+
+	  const handleTransferOwner = async (member) => {
+	    if (!conversationId || !member?.userUid) return;
+	    if (!window.confirm(`${member.displayName || member.username}님에게 방장을 위임할까요?`)) return;
+	    try {
+	      const conversation = await transferConversationOwner(conversationId, member.userUid);
+	      refreshAfterRoomAction(conversation);
+	    } catch (err) {
+	      alert(err.response?.data?.error || '방장 위임에 실패했습니다.');
+	    }
+	  };
+
+	  const handleToggleCoHost = async (member) => {
+	    if (!conversationId || !member?.userUid) return;
+	    const enabled = !coHostUids.includes(member.userUid);
+	    try {
+	      const conversation = await setConversationCoHost(conversationId, member.userUid, enabled);
+	      refreshAfterRoomAction(conversation);
+	    } catch (err) {
+	      alert(err.response?.data?.error || '부방장 설정에 실패했습니다.');
+	    }
+	  };
+
+	  const handleKickMember = async (member) => {
+	    if (!conversationId || !member?.userUid) return;
+	    if (!window.confirm(`${member.displayName || member.username}님을 채팅방에서 내보낼까요?`)) return;
+	    try {
+	      const conversation = await kickConversationParticipant(conversationId, member.userUid);
+	      refreshAfterRoomAction(conversation);
+	    } catch (err) {
+	      alert(err.response?.data?.error || '내보내기에 실패했습니다.');
+	    }
+	  };
 
   const handleOpenMeeting = async () => {
     let finalConversationId = conversationId;
@@ -351,8 +437,8 @@ const DockedChatPanel = ({
                   ))}
                 </Box>
               </Box>
-              <IconButton
-                size="small"
+	          <IconButton
+	            size="small"
                 onClick={() => removeAttachmentBundle(conversationId, bundle.bundleId)}
               >
                 <CloseIcon fontSize="small" />
@@ -408,28 +494,28 @@ const DockedChatPanel = ({
         position: 'absolute',
         top: 0,
         bottom: 0,
-        left: 'auto',
-        right: '100%',
-        width: typeof window !== 'undefined' && window.innerWidth < 600
-          ? Math.min(360, Math.round(window.innerWidth * 0.86))
-          : sidebarWidth,
+        left: isMobile ? 0 : 'auto',
+        right: isMobile ? 0 : '100%',
+        width: isMobile ? '100%' : sidebarWidth,
         transform: 'none',
         boxSizing: 'border-box',
         borderRadius: 0,
         borderTop: `1px solid ${theme.palette.divider}`,
         borderRight: `1px solid ${theme.palette.divider}`,
+        borderLeft: isMobile ? 'none' : `1px solid ${theme.palette.divider}`,
         borderBottom: `1px solid ${theme.palette.divider}`,
         bgcolor: 'background.paper',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        zIndex: 0,
+        zIndex: isMobile ? 3 : 0,
         pointerEvents: 'none',
       }}
     >
       <Box
         sx={{
           height: '100%',
+          minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
           pointerEvents: 'auto',
@@ -467,6 +553,22 @@ const DockedChatPanel = ({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, gap: 1 }}>
+          {isMobile && (
+            <IconButton
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCloseChat();
+              }}
+              title="채팅 목록으로 돌아가기"
+              sx={{
+                border: `1px solid ${theme.palette.divider}`,
+                bgcolor: 'background.paper',
+              }}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          )}
           <Button
             size="small"
             variant="outlined"
@@ -507,9 +609,25 @@ const DockedChatPanel = ({
               border: `1px solid ${theme.palette.divider}`,
               bgcolor: 'background.paper',
             }}
-          >
-            <PersonAddIcon fontSize="small" />
-          </IconButton>
+	          >
+	            <PersonAddIcon fontSize="small" />
+	          </IconButton>
+	          {isGroupChat && (
+	            <IconButton
+	              size="small"
+	              onClick={(e) => {
+	                e.stopPropagation();
+	                setRoomMenuAnchorEl(e.currentTarget);
+	              }}
+	              title="채팅방 관리"
+	              sx={{
+	                border: `1px solid ${theme.palette.divider}`,
+	                bgcolor: 'background.paper',
+	              }}
+	            >
+	              <MoreVertIcon fontSize="small" />
+	            </IconButton>
+	          )}
           <Avatar
             sx={{
               width: 28,
@@ -555,6 +673,7 @@ const DockedChatPanel = ({
         ref={messageListRef}
         sx={{
           flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
           p: 1.5,
           bgcolor: 'background.default',
@@ -659,7 +778,7 @@ const DockedChatPanel = ({
 
       <Divider />
 
-      <Box sx={{ p: 1.25, display: 'flex', gap: 1, alignItems: 'flex-end', bgcolor: 'background.paper' }}>
+      <Box sx={{ p: 1.25, pb: 'calc(10px + var(--app-safe-bottom))', display: 'flex', gap: 1, alignItems: 'flex-end', bgcolor: 'background.paper', flexShrink: 0 }}>
         <IconButton onClick={(e) => setAttachMenuAnchorEl(e.currentTarget)}>
           <AddIcon />
         </IconButton>
@@ -684,7 +803,7 @@ const DockedChatPanel = ({
         </Button>
       </Box>
 
-      <Menu
+	      <Menu
         anchorEl={attachMenuAnchorEl}
         open={Boolean(attachMenuAnchorEl)}
         onClose={closeAttachMenu}
@@ -713,7 +832,68 @@ const DockedChatPanel = ({
         >
           NAS에서 선택
         </MenuItem>
-      </Menu>
+	      </Menu>
+
+	      <Menu
+	        anchorEl={roomMenuAnchorEl}
+	        open={Boolean(roomMenuAnchorEl)}
+	        onClose={closeRoomMenu}
+	        PaperProps={{ sx: { width: 320, maxWidth: 'calc(100vw - 24px)' } }}
+	      >
+	        <Box sx={{ px: 1.5, py: 1 }}>
+	          <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>채팅방 관리</Typography>
+	          <Typography variant="caption" color="text.secondary">
+	            {viewerRole === 'owner' ? '방장' : viewerRole === 'cohost' ? '부방장' : '멤버'}
+	          </Typography>
+	        </Box>
+	        <Divider />
+	        {roomParticipants.map((member) => {
+	          const isOwner = member.userUid === ownerUid;
+	          const isCoHost = coHostUids.includes(member.userUid);
+	          const isMe = member.userUid === currentUserUid;
+	          return (
+	            <Box key={member.userUid} sx={{ px: 1.25, py: 0.9 }}>
+	              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+	                <Avatar sx={{ width: 26, height: 26, fontSize: 12 }}>
+	                  {(member.displayName || member.username || '?').slice(0, 1)}
+	                </Avatar>
+	                <Box sx={{ flex: 1, minWidth: 0 }}>
+	                  <Typography variant="body2" sx={{ fontWeight: 800 }} noWrap>
+	                    {member.displayName || member.username}
+	                  </Typography>
+	                  <Typography variant="caption" color="text.secondary">
+	                    {isOwner ? '방장' : isCoHost ? '부방장' : '멤버'}{isMe ? ' · 나' : ''}
+	                  </Typography>
+	                </Box>
+	              </Box>
+	              {!isMe && viewerCanManage && !isOwner && (
+	                <Box sx={{ mt: 0.75, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+	                  {viewerCanDelete && (
+	                    <>
+	                      <Button size="small" variant="text" onClick={() => handleTransferOwner(member)}>
+	                        방장위임
+	                      </Button>
+	                      <Button size="small" variant="text" onClick={() => handleToggleCoHost(member)}>
+	                        {isCoHost ? '부방장 해제' : '부방장'}
+	                      </Button>
+	                    </>
+	                  )}
+	                  <Button size="small" color="error" variant="text" onClick={() => handleKickMember(member)}>
+	                    내보내기
+	                  </Button>
+	                </Box>
+	              )}
+	            </Box>
+	          );
+	        })}
+	        <Divider />
+	        <MenuItem onClick={handleLeaveRoom}>채팅방 나가기</MenuItem>
+	        {viewerCanDelete && (
+	          <MenuItem onClick={handleDeleteRoom} sx={{ color: 'error.main', fontWeight: 900 }}>
+	            채팅방 파기
+	          </MenuItem>
+	        )}
+	      </Menu>
 
       <ChatNasPickerDialog
         open={nasPickerOpen}

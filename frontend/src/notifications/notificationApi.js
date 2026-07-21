@@ -25,3 +25,11 @@ export const readNotificationGroup = async ({ notificationId, conversationId, fr
 export const readAllNotifications = async () => {
   await axios.post('/api/notifications/read-all', {}, { withCredentials: true });
 };
+
+export const deleteNotification = async (notificationId) => {
+  await axios.delete(`/api/notifications/${encodeURIComponent(notificationId)}`, { withCredentials: true });
+};
+
+export const deleteReadNotifications = async () => {
+  await axios.delete('/api/notifications/read', { withCredentials: true });
+};
