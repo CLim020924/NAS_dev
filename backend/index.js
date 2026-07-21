@@ -341,7 +341,8 @@ const aiAgentRoutes = require('./aiAgentRoutes');
 const publicApiPaths = new Set([
   '/login',
   '/signup-request',
-  '/onlyoffice/callback'
+  '/onlyoffice/callback',
+  '/onlyoffice/file'
 ]);
 
 const getTokenFromRequest = (req) => req.cookies?.token;

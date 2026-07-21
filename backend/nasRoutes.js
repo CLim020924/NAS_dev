@@ -741,14 +741,27 @@ const verifyToken = (req, res, next) => {
   if (req.query.oosecret === 'nas_office_2026') {
     const isActuallyAdmin = req.query.officeAdmin === 'true';
     const officeLoginId = req.query.officeUid || 'office';
-    req.user = normalizeQuotaFields({
+    const latestOfficeUser = findMemberByAnyId({
+      userUid: officeLoginId,
+      loginId: officeLoginId,
+      id: officeLoginId,
+      username: officeLoginId
+    });
+    req.user = normalizeQuotaFields(latestOfficeUser || {
       id: officeLoginId,
       loginId: officeLoginId,
       userUid: officeLoginId,
       Masters: isActuallyAdmin,
+      Managers: false,
+      role: isActuallyAdmin ? 'MASTER' : 'USER',
       globalAccess: isActuallyAdmin,
       rootPath: isActuallyAdmin ? '' : decodeURIComponent(req.query.officeRoot || '')
     });
+    if (isActuallyAdmin) {
+      req.user.Masters = true;
+      req.user.globalAccess = true;
+      req.user.role = 'MASTER';
+    }
     return next();
   }
   const token = req.cookies.token;
@@ -771,6 +784,60 @@ const getValidatedPath = (user, requestedPath) => {
 };
 
 const getUserBasePath = (user) => getAccessBasePath(normalizeQuotaFields(user || {}));
+
+const getOnlyOfficeUser = (req) => {
+  if (req.query.oosecret !== 'nas_office_2026') {
+    const err = new Error('invalid onlyoffice secret');
+    err.status = 401;
+    throw err;
+  }
+
+  const isActuallyAdmin = req.query.officeAdmin === 'true';
+  const officeLoginId = String(req.query.officeUid || req.query.uid || 'office');
+  const latestOfficeUser = findMemberByAnyId({
+    userUid: officeLoginId,
+    loginId: officeLoginId,
+    id: officeLoginId,
+    username: officeLoginId
+  });
+
+  const officeUser = normalizeQuotaFields(latestOfficeUser || {
+    id: officeLoginId,
+    loginId: officeLoginId,
+    userUid: officeLoginId,
+    Masters: isActuallyAdmin,
+    Managers: false,
+    role: isActuallyAdmin ? 'MASTER' : 'USER',
+    globalAccess: isActuallyAdmin,
+    rootPath: isActuallyAdmin ? '' : decodeURIComponent(req.query.officeRoot || '')
+  });
+
+  if (isActuallyAdmin) {
+    officeUser.Masters = true;
+    officeUser.globalAccess = true;
+    officeUser.role = 'MASTER';
+  }
+
+  return officeUser;
+};
+
+router.get('/onlyoffice/file', (req, res) => {
+  try {
+    const officeUser = getOnlyOfficeUser(req);
+    const basePath = getAccessBasePath(officeUser);
+    const requestedPath = req.query.path64
+      ? Buffer.from(String(req.query.path64), 'base64url').toString('utf8')
+      : (req.query.path || '');
+    const targetPath = resolveInside(basePath, requestedPath);
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+      return res.status(404).send('file not found');
+    }
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(path.basename(targetPath))}`);
+    return res.sendFile(targetPath);
+  } catch (err) {
+    return res.status(err.status || 403).send(err.message || 'forbidden');
+  }
+});
 
 const ensureFixedSystemFolders = (user) => {
   const basePath = getUserBasePath(user);

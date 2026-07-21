@@ -49,6 +49,21 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const currentUser = JSON.parse(localStorage.getItem('user')) || {};
   const isAdmin = currentUser.Masters || currentUser.Managers;
   const publicOfficeBase = (window.__OO_PUBLIC_BASE__ || window.location.origin).replace(/\/$/, '');
+  const officeUserId = String(
+    currentUser.userUid ||
+    currentUser.loginId ||
+    currentUser.id ||
+    currentUser.username ||
+    ''
+  );
+  const encodeBase64Url = (value) => {
+    const bytes = new TextEncoder().encode(String(value || ''));
+    let binary = '';
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte);
+    });
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  };
 
   const setFileDirty = useCallback((dirty) => {
     dirtyRef.current = !!dirty;
@@ -228,16 +243,18 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
 
     // 기존 url의 path 인코딩(%20 등)을 유지하기 위해 URL/searchParams 재직렬화를 피한다
     const absoluteUrl =
-      `${officeFetchBase}${url}` +
-      `${url.includes('?') ? '&' : '?'}oosecret=${encodeURIComponent('nas_office_2026')}` +
-      `&officeUid=${encodeURIComponent(currentUser.id || '')}` +
+      `${officeFetchBase}/api/onlyoffice/file` +
+      `?path64=${encodeURIComponent(encodeBase64Url(win.fullPath || ''))}` +
+      `&inline=true` +
+      `&oosecret=${encodeURIComponent('nas_office_2026')}` +
+      `&officeUid=${encodeURIComponent(officeUserId)}` +
       `&officeRoot=${encodeURIComponent(currentUser.rootPath || '')}` +
       `&officeAdmin=${isAdmin ? 'true' : 'false'}`;
 
     const callbackUrl =
       `${officeFetchBase}/api/onlyoffice/callback` +
       `?path=${encodeURIComponent(win.fullPath)}` +
-      `&uid=${encodeURIComponent(currentUser.id || '')}` +
+      `&uid=${encodeURIComponent(officeUserId)}` +
       `&isAdmin=${isAdmin ? 'true' : 'false'}`;
 
     return {
@@ -272,7 +289,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
         }
       }
     };
-  }, [ext, name, url, win.fullPath, isOffice, isMobile, currentUser.id, isAdmin, currentUser.rootPath, win.id, setFileDirty]);
+  }, [ext, name, url, win.fullPath, isOffice, isMobile, officeUserId, isAdmin, currentUser.rootPath, win.id, setFileDirty]);
 
   const documentServerUrl = `${publicOfficeBase}/onlyoffice`;
 
