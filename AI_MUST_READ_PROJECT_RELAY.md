@@ -593,3 +593,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 보안 경계: 프로필 이미지는 표준 User Data 하위의 검증된 프로필 폴더에 있는 4MB 이하 고정 파일만 읽는다. `Local State`의 제한된 공개 표시 메타데이터 외 Chrome 쿠키·비밀번호·인증 token·임의 avatar URL은 읽지 않는다. 브라우저를 선택하기 전에는 handoff를 만들지 않고, 프로필 선택 뒤에도 Agent가 executable realpath와 profile directory를 다시 확인한 후 기존 45초·1회용 device-bound handoff를 사용한다.
 - 현재 PC 실화면 E2E: 실제 Explorer 웹 바로가기를 열어 첫 화면에 Chrome·Edge·Windows 기본 브라우저 로고 카드 3개만 표시되는 화면을 확인했다. Chrome 로고 클릭 뒤 6개 실제 프로필 이미지/이름/대표 이메일 카드와 최근 사용 표시를 확인했다. 최근 사용 프로필 선택 경로는 1.10.19 `open-web-last.json`에서 `state=opened`, `browser=chrome`이고 Agent health는 `up-to-date`, `needsRelink=false`다.
 - 검증: C# compile, source/packaged Agent self-test, Setup self-test, desktop handoff/browser tests 4/4, `git diff --check`를 통과했다. workbook은 기존 `WIN-WEB-BROWSER-PROFILE-HANDOFF`를 1.10.19로 갱신하고 Request/Patch/Do_Not_Break/Code_Map만 보수적으로 추가했으며 관련 범위 렌더와 formula error 0을 확인했다.
+
+### 1.10.19 GitHub·NAS 최종 배포 검증
+
+- 기능·binary·workbook·relay commit `64ab208`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS에서 Agent source self-test와 backend tests 10/10을 통과했다. Windows 비관리자 환경에서 symlink 생성 EPERM이었던 `deviceSyncSecurity` 경계도 Linux에서 정상 통과했다.
+- `msp-backend`를 restart/save했다. 재시작 직후 0초 probe는 기동 전이라 한 번 HTTP 000이었지만 4초 뒤 PM2 online, 내부 3030·공개 HTTPS 모두 200으로 수렴했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다.
+- NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `20A11BF86EA9AAD3A615E81530207FD160166B186A82C3C20CF1F083B711DDB7`, Setup/launcher SHA-256은 `8508181B5C2245B46AC69BA381F9FCA750C2702460B905B94AAB660FE3DFBAA1`이다.
+- 최종 현재 PC 상태는 1.10.19 open-web 진단 `opened/chrome`, health `up-to-date`, `needsRelink=false`이고 launcher·Agent·Provider가 실행 중이다. 사용자 파일·활성 DPAPI credential과 이번 UI 외 Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
