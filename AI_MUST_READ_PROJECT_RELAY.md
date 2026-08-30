@@ -648,3 +648,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 HTTP 200이다.
 - NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `5D2095DAED0E7593B2AED249BBFB8FDB657704DBEEED75A6C1359F8F3D0297A5`, Setup/launcher SHA-256은 `3A88FC4E79C6FE703DD6B4D00584BA354B0B3AB824331DE53260C35E5FEC1EDB`다.
 - 최종 현재 PC는 launcher 1.10.22, health `up-to-date`, `needsRelink=false`이고 background launcher·Agent·Provider가 정상 실행 중이다. 사용자 파일·활성 credential은 보존됐다.
+
+## 2026-08-30 PDF.js API·Worker 버전 불일치 수정
+
+- 사용자 보고/실재현: NAS에서 `합친 PDF.pdf`를 열면 `The API version "4.8.69" does not match the Worker version "5.6.205".`가 표시되고 PDF가 렌더되지 않았다. 로그인된 공개 Chrome DOM에서 같은 문구를 직접 확인했다.
+- 원인 확정: 공개 backend가 제공하는 `/var/www/html/static/js/main.3e6c7157.js`에는 PDF.js API 4.8.69가 포함됐지만 그 index가 가리키는 `pdf.worker.min.e45a4926ca74ae14adf7.mjs`는 5.6.205였다. repo의 현재 lock과 `frontend/build` Worker는 4.8.69였다. 즉 PDF 파일 자체나 OnlyOffice 문제가 아니라, 직접 고정되지 않은 Worker dependency가 오염된 frontend build로 live 정적 경로에 들어간 문제다.
+- 재발 방지 구현: `frontend/package.json`에서 `react-pdf`를 9.2.1, `pdfjs-dist`를 4.8.69 exact dependency로 고정하고 lock root도 동일하게 맞췄다. 새 `frontend/scripts/verify-pdfjs-compat.mjs`는 package/lock의 직접 버전, react-pdf가 요구하는 pdfjs-dist, 실제 production `pdf.worker*.mjs` 내부 버전을 모두 대조한다. `npm run build` 마지막에 이 검사를 강제해 API와 Worker가 다르면 build가 실패한다.
+- 범위: NAS 작업공간 `FileViewer`와 공유 링크 `FilePreviewSurface`가 같은 react-pdf global Worker 설정을 사용하므로 같은 exact pin과 build gate로 함께 보호한다. OnlyOffice Docker/proxy, HWP, 사용자 PDF 원본은 변경하지 않았다.
+- 기록/사전 검증: dependency 검사 단독 실행은 react-pdf 9.2.1 / PDF.js 4.8.69 일치를 통과했다. workbook의 Request/Patch/Feature/Office_Viewers/Do_Not_Break/Code_Map을 갱신하고 formula error 0과 관련 렌더를 확인했다. 다음 단계는 GitHub push, NAS clean `npm ci`·production build gate, live index-last 배포, 공개 Worker와 실제 PDF 렌더 E2E다.
