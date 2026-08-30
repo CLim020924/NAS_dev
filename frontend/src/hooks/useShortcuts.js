@@ -8,6 +8,8 @@ const useShortcuts = ({
   onSelectAll,
   onDeselectAll,
   onNewFolder,
+  onNavigateSelection,
+  onToggleSelection,
 }) => {
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -20,7 +22,7 @@ const useShortcuts = ({
         target?.isContentEditable ||
         target?.getAttribute?.('role') === 'textbox' ||
         target?.closest?.(
-          '.monaco-editor, .monaco-editor textarea, .view-lines, .inputarea, [contenteditable="true"], [role="textbox"]'
+          '.monaco-editor, .monaco-editor textarea, .view-lines, .inputarea, [contenteditable="true"], [role="textbox"], .MuiDialog-root, .MuiModal-root, .MuiMenu-root, .MuiPopover-root'
         ) ||
         path.some((node) => {
           if (!node?.classList && !node?.getAttribute) return false;
@@ -36,6 +38,18 @@ const useShortcuts = ({
 
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;
+
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+        e.preventDefault();
+        onNavigateSelection?.({ key: e.key, shiftKey: e.shiftKey, ctrlOrCmd });
+        return;
+      }
+
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        onToggleSelection?.({ ctrlOrCmd });
+        return;
+      }
 
       // 1. 이름 바꾸기 (F2) - 단일 선택일 때만
       if (e.key === 'F2') {
@@ -74,9 +88,9 @@ const useShortcuts = ({
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedItems, onRename, onDelete, onOpen, onSelectAll, onDeselectAll, onNewFolder]);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [selectedItems, onRename, onDelete, onOpen, onSelectAll, onDeselectAll, onNewFolder, onNavigateSelection, onToggleSelection]);
 };
 
 export default useShortcuts;

@@ -32,11 +32,20 @@ import SearchIcon from '@mui/icons-material/Search';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import LinkIcon from '@mui/icons-material/Link';
 import SettingsIcon from '@mui/icons-material/Settings';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import RestoreIcon from '@mui/icons-material/Restore';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import HistoryIcon from '@mui/icons-material/History';
+import BackupIcon from '@mui/icons-material/Backup';
+import StarIcon from '@mui/icons-material/Star';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
 
 import { useWindows } from '../contexts/WindowContext';
 import { useTransfer } from '../contexts/TransferContext';
 import useShortcuts from '../hooks/useShortcuts';
 import { transferUrl } from '../transferBaseUrl';
+import { collectDroppedUploadItems } from './NAS/uploadDropCollector';
+import { moveKeyboardSelection, selectClickedPath, toggleFocusedPath } from './NAS/fileSelectionModel';
 
 const NAS = ({ showWorkspace = true }) => {
   const theme = useTheme();
@@ -77,7 +86,20 @@ const NAS = ({ showWorkspace = true }) => {
   const [actionMenuAnchor, setActionMenuAnchor] = useState(null);
   const [shareDialog, setShareDialog] = useState({ open: false, target: null, targets: [], initialPath: '/' });
   const [shareManagerOpen, setShareManagerOpen] = useState(false);
+  const [trashDialog, setTrashDialog] = useState({ open: false, loading: false, items: [] });
+  const [versionDialog, setVersionDialog] = useState({ open: false, loading: false, item: null, versions: [] });
+  const [recoveryDialog, setRecoveryDialog] = useState({ open: false, loading: false, busy: false, restorePoints: [], activities: [] });
+  const [quickDialog, setQuickDialog] = useState({ open: false, mode: 'recent', loading: false, items: [], limited: false });
+  const [favoritePaths, setFavoritePaths] = useState(new Set());
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
+
+  useEffect(() => {
+    let active = true;
+    axios.get('/api/favorites', { withCredentials: true }).then(({ data }) => {
+      if (active) setFavoritePaths(new Set((Array.isArray(data?.items) ? data.items : []).map(item => ensureSlash(item.fullPath))));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
   useEffect(() => {
@@ -121,6 +143,9 @@ const NAS = ({ showWorkspace = true }) => {
   const [contextMenu, setContextMenu] = useState(null);
   const [inlineEdit, setInlineEdit] = useState(null);
   const [selectedItems, setSelectedItems] = useState([]);
+  const [keyboardFocusPath, setKeyboardFocusPath] = useState(null);
+  const selectionAnchorRef = useRef(null);
+  const selectionFocusRef = useRef(null);
   const [dragOverTarget, setDragOverTarget] = useState(null);
   const [iconPositions, setIconPositions] = useState(() => JSON.parse(localStorage.getItem('msp_icon_positions') || '{}'));
   
@@ -195,7 +220,7 @@ const NAS = ({ showWorkspace = true }) => {
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.closest('.monaco-editor') || e.target?.closest('.onlyoffice-wrapper')) return;
 
-      if (e.key === 'Delete' || ((e.ctrlKey || e.metaKey) && ['c', 'v'].includes(e.key.toLowerCase()))) {
+      if ((e.ctrlKey || e.metaKey) && ['c', 'v'].includes(e.key.toLowerCase())) {
         console.log("⌨️ 단축키 감지됨:", e.key, "| 🎯 선택된 파일:", selectedItems, "| 📋 클립보드:", clipboard.paths);
       }
 
@@ -203,17 +228,6 @@ const NAS = ({ showWorkspace = true }) => {
       if (focusedContext && focusedContext !== 'desktop') {
         const win = openWindowsRef.current.find(w => w.id === focusedContext);
         if (win && win.currentPath) targetFolder = win.currentPath;
-      }
-
-      if (e.key === 'Delete' && selectedItems.length > 0) {
-        if (window.confirm(`선택한 ${selectedItems.length}개 항목을 삭제하시겠습니까?`)) {
-          try {
-            await Promise.all(selectedItems.map(item => axios.delete('/api/file', { data: { path: item }, withCredentials: true })));
-            setSelectedItems([]); 
-            if (typeof fetchFiles === 'function') { fetchFiles(targetFolder || '/'); if ((targetFolder || '/') !== '/') fetchFiles('/'); }
-            setSnackbar({ open: true, message: '삭제 완료!', severity: 'success' });
-          } catch(err) { showError('삭제', err); }
-        }
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && selectedItems.length > 0) {
@@ -1455,66 +1469,6 @@ const NAS = ({ showWorkspace = true }) => {
     });
   };
 
-  const collectDroppedUploadItems = async (dataTransfer) => {
-    const items = dataTransfer?.items ? Array.from(dataTransfer.items) : [];
-    const plainFiles = dataTransfer?.files ? Array.from(dataTransfer.files) : [];
-
-    const readAllEntries = async (reader) => {
-      let all = [];
-      while (true) {
-        const chunk = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
-        if (!chunk || chunk.length === 0) break;
-        all = all.concat(chunk);
-      }
-      return all;
-    };
-
-    const scanEntry = async (entry, prefix = '') => {
-      if (!entry) return [];
-
-      if (entry.isFile) {
-        try {
-          const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
-          if (!file) return [];
-          return [{ file, relPath: `${prefix}${file.name}` }];
-        } catch (err) {
-          console.warn('파일 엔트리 읽기 실패:', `${prefix}${entry.name || ''}`, err);
-          return [];
-        }
-      }
-
-      if (entry.isDirectory) {
-        const dirName = entry.name || '';
-        const dirPrefix = `${prefix}${dirName}/`;
-        const reader = entry.createReader();
-        const children = await readAllEntries(reader);
-
-        let out = [];
-        for (const child of children) {
-          out = out.concat(await scanEntry(child, dirPrefix));
-        }
-        return out;
-      }
-
-      return [];
-    };
-
-    if (items.length > 0 && items.some(item => item.webkitGetAsEntry && item.webkitGetAsEntry())) {
-      let uploadList = [];
-      for (const item of items) {
-        const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
-        if (!entry) continue;
-        uploadList = uploadList.concat(await scanEntry(entry, ''));
-      }
-      return uploadList;
-    }
-
-    return plainFiles.map(file => ({
-      file,
-      relPath: file.webkitRelativePath || file.name
-    }));
-  };
-
   const uploadFilesSequentialWithChunks = async ({
     uploadItems,
     targetPath,
@@ -1795,8 +1749,153 @@ const NAS = ({ showWorkspace = true }) => {
   };
 
   const handleDelete = async (itemsToDel, pathContext) => {
-    if (!itemsToDel || itemsToDel.length === 0) return; if (!window.confirm(itemsToDel.length === 1 ? `'${itemsToDel[0].name}' 삭제?` : `${itemsToDel.length}개 삭제?`)) return;
-    try { await Promise.all(itemsToDel.map(async (item) => { const safePath = ensureSlash(item.fullPath); await axios.delete(`/api/file?path=${encodeURIComponent(safePath)}`, { data: { path: safePath }, withCredentials: true }); if (!isMobile) setIconPositions(prev => { const n = {...prev}; delete n[safePath]; return n; }); })); refreshPath(ensureSlash(pathContext)); setSelectedItems([]); setSnackbar({ open: true, message: "삭제 완료", severity: 'success' }); } catch (err) { showError('삭제', err); }
+    if (!itemsToDel || itemsToDel.length === 0) return; if (!window.confirm(itemsToDel.length === 1 ? `'${itemsToDel[0].name}'을(를) 휴지통으로 이동할까요?` : `${itemsToDel.length}개 항목을 휴지통으로 이동할까요?`)) return;
+    try { await Promise.all(itemsToDel.map(async (item) => { const safePath = ensureSlash(item.fullPath); await axios.delete(`/api/file?path=${encodeURIComponent(safePath)}`, { data: { path: safePath }, withCredentials: true }); if (!isMobile) setIconPositions(prev => { const n = {...prev}; delete n[safePath]; return n; }); })); refreshPath(ensureSlash(pathContext)); setSelectedItems([]); setSnackbar({ open: true, message: "휴지통으로 이동했습니다. 30일 동안 복원할 수 있습니다.", severity: 'success' }); } catch (err) { showError('휴지통 이동', err); }
+  };
+
+  const loadTrash = async () => {
+    setTrashDialog(prev => ({ ...prev, open: true, loading: true }));
+    try {
+      const { data } = await axios.get('/api/trash', { withCredentials: true });
+      setTrashDialog({ open: true, loading: false, items: Array.isArray(data?.items) ? data.items : [] });
+    } catch (err) {
+      setTrashDialog(prev => ({ ...prev, loading: false }));
+      showError('휴지통', err);
+    }
+  };
+
+  const restoreTrashItem = async (item) => {
+    try {
+      const { data } = await axios.post(`/api/trash/${encodeURIComponent(item.trashId)}/restore`, {}, { withCredentials: true });
+      setSnackbar({ open: true, message: `복원했습니다: ${data?.path || item.name}`, severity: 'success' });
+      await loadTrash();
+      refreshPath('/');
+    } catch (err) { showError('휴지통 복원', err); }
+  };
+
+  const permanentlyDeleteTrashItem = async (item) => {
+    if (!window.confirm(`'${item.name}'을(를) 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
+    try {
+      await axios.delete(`/api/trash/${encodeURIComponent(item.trashId)}`, { withCredentials: true });
+      setSnackbar({ open: true, message: '영구 삭제했습니다.', severity: 'success' });
+      await loadTrash();
+      refreshStorageUsage('/');
+    } catch (err) { showError('영구 삭제', err); }
+  };
+
+  const loadVersionHistory = async (item) => {
+    if (!item || item.type !== 'file') return;
+    setVersionDialog({ open: true, loading: true, item, versions: [] });
+    try {
+      const safePath = ensureSlash(item.fullPath);
+      const { data } = await axios.get(`/api/file/versions?path=${encodeURIComponent(safePath)}`, { withCredentials: true });
+      setVersionDialog({ open: true, loading: false, item, versions: Array.isArray(data?.versions) ? data.versions : [] });
+    } catch (err) {
+      setVersionDialog(prev => ({ ...prev, loading: false }));
+      showError('버전 기록', err);
+    }
+  };
+
+  const restoreFileVersionItem = async (version) => {
+    const item = versionDialog.item;
+    if (!item || !window.confirm(`${new Date(version.createdAt).toLocaleString()} 버전으로 복원할까요? 현재 파일도 복원 직전 버전으로 보존됩니다.`)) return;
+    try {
+      await axios.post(`/api/file/versions/${encodeURIComponent(version.versionId)}/restore`, { path: ensureSlash(item.fullPath) }, { withCredentials: true });
+      setSnackbar({ open: true, message: '이전 버전으로 복원했습니다. 복원 직전 파일도 버전 기록에 남았습니다.', severity: 'success' });
+      await loadVersionHistory(item);
+      refreshPath(getParentPath(item));
+    } catch (err) { showError('버전 복원', err); }
+  };
+
+  const downloadFileVersion = (version) => {
+    const item = versionDialog.item;
+    if (!item) return;
+    const a = document.createElement('a');
+    a.href = transferUrl(`/api/file/versions/${encodeURIComponent(version.versionId)}/download?path=${encodeURIComponent(ensureSlash(item.fullPath))}`);
+    a.download = item.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const loadRecoveryCenter = async () => {
+    setRecoveryDialog(prev => ({ ...prev, open: true, loading: true }));
+    try {
+      const [pointsResponse, activityResponse] = await Promise.all([
+        axios.get('/api/drive/restore-points', { withCredentials: true }),
+        axios.get('/api/activity?limit=100', { withCredentials: true })
+      ]);
+      setRecoveryDialog(prev => ({
+        ...prev,
+        open: true,
+        loading: false,
+        restorePoints: Array.isArray(pointsResponse.data?.restorePoints) ? pointsResponse.data.restorePoints : [],
+        activities: Array.isArray(activityResponse.data?.activities) ? activityResponse.data.activities : []
+      }));
+    } catch (err) {
+      setRecoveryDialog(prev => ({ ...prev, loading: false }));
+      showError('복구 센터', err);
+    }
+  };
+
+  const createRecoveryPoint = async () => {
+    setRecoveryDialog(prev => ({ ...prev, busy: true }));
+    try {
+      await axios.post('/api/drive/restore-points', { label: `사용자 복구 지점 ${new Date().toLocaleString('ko-KR')}` }, { withCredentials: true });
+      setSnackbar({ open: true, message: '현재 드라이브 상태를 복구 지점으로 보존했습니다.', severity: 'success' });
+      await loadRecoveryCenter();
+    } catch (err) { showError('복구 지점 만들기', err); }
+    finally { setRecoveryDialog(prev => ({ ...prev, busy: false })); }
+  };
+
+  const restoreDrivePoint = async (restorePoint) => {
+    const confirmed = window.confirm(`'${restorePoint.label}' 시점으로 전체 드라이브를 복원할까요? 현재 상태는 자동 복구 지점으로 먼저 보존됩니다.`);
+    if (!confirmed) return;
+    setRecoveryDialog(prev => ({ ...prev, busy: true }));
+    try {
+      await axios.post(`/api/drive/restore-points/${encodeURIComponent(restorePoint.restorePointId)}/restore`, { confirmation: 'RESTORE_DRIVE' }, { withCredentials: true });
+      setSnackbar({ open: true, message: '드라이브 복원이 완료됐습니다. 복원 직전 상태도 복구 지점에 남아 있습니다.', severity: 'success' });
+      setSelectedItems([]);
+      refreshPath('/');
+      await loadRecoveryCenter();
+    } catch (err) { showError('드라이브 복원', err); }
+    finally { setRecoveryDialog(prev => ({ ...prev, busy: false })); }
+  };
+
+  const loadQuickAccess = async (mode) => {
+    setQuickDialog({ open: true, mode, loading: true, items: [], limited: false });
+    try {
+      const endpoint = mode === 'favorites' ? '/api/favorites' : '/api/recent?limit=100';
+      const { data } = await axios.get(endpoint, { withCredentials: true });
+      const items = Array.isArray(data?.items) ? data.items : [];
+      if (mode === 'favorites') setFavoritePaths(new Set(items.map(item => ensureSlash(item.fullPath))));
+      setQuickDialog({ open: true, mode, loading: false, items, limited: !!data?.limited });
+    } catch (err) {
+      setQuickDialog(prev => ({ ...prev, loading: false }));
+      showError(mode === 'favorites' ? '즐겨찾기' : '최근 파일', err);
+    }
+  };
+
+  const toggleFavorite = async (item) => {
+    if (!item) return;
+    const safePath = ensureSlash(item.fullPath);
+    const favorite = !favoritePaths.has(safePath);
+    try {
+      await axios.put('/api/favorites', { path: safePath, favorite }, { withCredentials: true });
+      setFavoritePaths(prev => {
+        const next = new Set(prev);
+        if (favorite) next.add(safePath); else next.delete(safePath);
+        return next;
+      });
+      setSnackbar({ open: true, message: favorite ? '즐겨찾기에 추가했습니다.' : '즐겨찾기에서 제거했습니다.', severity: 'success' });
+      if (quickDialog.open && quickDialog.mode === 'favorites') await loadQuickAccess('favorites');
+    } catch (err) { showError('즐겨찾기', err); }
+  };
+
+  const openQuickItem = (item) => {
+    setQuickDialog(prev => ({ ...prev, open: false }));
+    if (item.type === 'folder') openFolderWindow(item);
+    else openFileWindow(item, false);
   };
 
   const handleDownload = (item) => { 
@@ -2009,14 +2108,94 @@ const NAS = ({ showWorkspace = true }) => {
   };
 
   const handleContextMenuClose = () => setContextMenu(null);
-  const handleContextMenu = (e, type, ctxData) => { e.preventDefault(); e.stopPropagation(); setFocusedContext(ctxData.windowId || 'desktop'); setContextMenu({ mouseX: e.clientX, mouseY: e.clientY, type, ...ctxData }); const safePath = ctxData.item ? ensureSlash(ctxData.item.fullPath) : null; if (safePath && !selectedItems.includes(safePath)) setSelectedItems([safePath]); };
-  const handleItemClick = (e, safePath, item) => { e.stopPropagation(); if (isLongPressTriggered.current) return; if (e.ctrlKey || e.metaKey) setSelectedItems(prev => prev.includes(safePath) ? prev.filter(p => p !== safePath) : [...prev, safePath]); else setSelectedItems([safePath]); if (isMobile && !inlineEdit) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false); };
+  const getActiveSelectablePaths = useCallback(() => {
+    if (focusedContext === 'desktop' || !focusedContext) {
+      return ['system_root', ...desktopItems.map(item => ensureSlash(item.fullPath))];
+    }
+    const active = openWindowsRef.current.find(win => win.id === focusedContext);
+    return (active?.files || []).map(item => ensureSlash(item.fullPath));
+  }, [desktopItems, focusedContext]);
+
+  const applySelectionResult = useCallback((result) => {
+    setSelectedItems(result.selectedPaths);
+    selectionAnchorRef.current = result.anchorPath;
+    selectionFocusRef.current = result.focusPath;
+    setKeyboardFocusPath(result.focusPath);
+    if (result.focusPath) {
+      window.requestAnimationFrame(() => {
+        const item = Array.from(document.querySelectorAll('.selectable-item'))
+          .find(node => node.getAttribute('data-path') === result.focusPath);
+        item?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      });
+    }
+  }, []);
+
+  const clearFileSelection = useCallback(() => {
+    setSelectedItems([]);
+    selectionAnchorRef.current = null;
+    selectionFocusRef.current = null;
+    setKeyboardFocusPath(null);
+  }, []);
+
+  const handleContextMenu = (e, type, ctxData) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFocusedContext(ctxData.windowId || 'desktop');
+    setContextMenu({ mouseX: e.clientX, mouseY: e.clientY, type, ...ctxData });
+    const safePath = ctxData.item ? ensureSlash(ctxData.item.fullPath) : null;
+    if (safePath && !selectedItems.includes(safePath)) {
+      setSelectedItems([safePath]);
+      selectionAnchorRef.current = safePath;
+      selectionFocusRef.current = safePath;
+      setKeyboardFocusPath(safePath);
+    }
+  };
+  const handleItemClick = (e, safePath, item) => {
+    e.stopPropagation();
+    if (isLongPressTriggered.current) return;
+    const result = selectClickedPath({
+      paths: getActiveSelectablePaths(),
+      selectedPaths: selectedItems,
+      clickedPath: safePath,
+      anchorPath: selectionAnchorRef.current,
+      ctrlOrMeta: e.ctrlKey || e.metaKey,
+      shiftKey: e.shiftKey,
+    });
+    applySelectionResult(result);
+    if (isMobile && !inlineEdit) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false);
+  };
+
+  const handleNavigateSelection = useCallback(({ key, shiftKey, ctrlOrCmd }) => {
+    const paths = getActiveSelectablePaths();
+    const isDesktopContext = focusedContext === 'desktop' || !focusedContext;
+    const columns = isDesktopContext
+      ? Math.max(1, Math.floor((desktopRef.current?.clientWidth || 148) / 148))
+      : 1;
+    applySelectionResult(moveKeyboardSelection({
+      paths,
+      selectedPaths: selectedItems,
+      focusPath: selectionFocusRef.current,
+      anchorPath: selectionAnchorRef.current,
+      key,
+      columns,
+      extend: shiftKey,
+      preserveSelection: ctrlOrCmd,
+    }));
+  }, [applySelectionResult, focusedContext, getActiveSelectablePaths, selectedItems]);
+
+  const handleToggleSelection = useCallback(() => {
+    applySelectionResult(toggleFocusedPath({
+      paths: getActiveSelectablePaths(),
+      selectedPaths: selectedItems,
+      focusPath: selectionFocusRef.current,
+    }));
+  }, [applySelectionResult, getActiveSelectablePaths, selectedItems]);
 
   const navigateFileManagerPath = (path) => {
     const safePath = ensureSlash(path || '/');
     setFileManagerPath(safePath);
     setFocusedContext('desktop');
-    setSelectedItems([]);
+    clearFileSelection();
     setInlineEdit(null);
   };
 
@@ -2029,7 +2208,7 @@ const NAS = ({ showWorkspace = true }) => {
 
   const fileManagerSegments = currentFileManagerPath.split('/').filter(Boolean);
 
-  useShortcuts({ selectedItems, onRename: () => { const items = getSelectedItemsData(); if (items.length === 1) handleRenameStart(items[0], items[0].fullPath.substring(0, items[0].fullPath.lastIndexOf('/')) || '/'); }, onDelete: () => { const items = getSelectedItemsData(); if (items.length > 0) handleDelete(items, getActiveTargetPath()); }, onOpen: () => { const items = getSelectedItemsData(); if (items.length === 1) (items[0].type === 'folder' || items[0].type === 'linked-device') ? openFolderWindow(items[0]) : openFileWindow(items[0], false); }, onSelectAll: () => setSelectedItems((focusedContext === 'desktop' || !focusedContext ? desktopItems : (openWindows.find(w => w.id === focusedContext)?.files || [])).map(f => ensureSlash(f.fullPath))), onDeselectAll: () => { setSelectedItems([]); setInlineEdit(null); setContextMenu(null); }, onNewFolder: () => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null) });
+  useShortcuts({ selectedItems, onRename: () => { const items = getSelectedItemsData(); if (items.length === 1 && selectedItems[0] !== 'system_root') handleRenameStart(items[0], items[0].fullPath.substring(0, items[0].fullPath.lastIndexOf('/')) || '/'); }, onDelete: () => { const items = getSelectedItemsData(); if (items.length > 0 && !selectedItems.includes('system_root')) handleDelete(items, getActiveTargetPath()); }, onOpen: () => { if (selectedItems[0] === 'system_root') { openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); return; } const items = getSelectedItemsData(); if (items.length === 1) (items[0].type === 'folder' || items[0].type === 'linked-device') ? openFolderWindow(items[0]) : openFileWindow(items[0], false); }, onSelectAll: () => { const paths = getActiveSelectablePaths(); setSelectedItems(paths); const focusPath = paths[paths.length - 1] || null; selectionAnchorRef.current = paths[0] || null; selectionFocusRef.current = focusPath; setKeyboardFocusPath(focusPath); }, onDeselectAll: () => { clearFileSelection(); setInlineEdit(null); setContextMenu(null); }, onNewFolder: () => handleCreateFolderStart(getActiveTargetPath(), focusedContext, getActiveTargetPath() === '/' ? getAvailableDesktopSlot() : null), onNavigateSelection: handleNavigateSelection, onToggleSelection: handleToggleSelection });
 
   const activeWindow = openWindows.find(w => w.id === focusedContext);
   const activeTargetPath = getActiveTargetPath();
@@ -2154,6 +2333,8 @@ const NAS = ({ showWorkspace = true }) => {
               <Button fullWidth variant={focusedContext === 'desktop' ? 'contained' : 'text'} color="primary" onClick={() => { setFocusedContext('desktop'); setSelectedItems([]); }} startIcon={<StorageIcon />} sx={{ justifyContent: 'flex-start', mb: 0.75 }}>
                 {rootLabel}
               </Button>
+              <Button fullWidth color="inherit" onClick={() => loadQuickAccess('recent')} startIcon={<AccessTimeIcon />} sx={{ justifyContent: 'flex-start', mb: 0.25 }}>최근 파일</Button>
+              <Button fullWidth color="inherit" onClick={() => loadQuickAccess('favorites')} startIcon={<StarIcon color="warning" />} sx={{ justifyContent: 'flex-start', mb: 0.75 }}>즐겨찾기</Button>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', px: 1, mt: 1, fontWeight: 900 }}>빠른 접근</Typography>
               {visibleDesktopItems.map((item) => {
                 const safePath = ensureSlash(item.fullPath);
@@ -2241,9 +2422,9 @@ const NAS = ({ showWorkspace = true }) => {
             </Box>
           )}
 
-          <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, currentFileManagerPath, 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); setSelectedItems([]); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, minHeight: 0, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: 'grid', gridTemplateColumns: { xs: 'repeat(auto-fill, minmax(92px, 1fr))', sm: 'repeat(auto-fill, minmax(132px, 1fr))', lg: 'repeat(auto-fill, minmax(148px, 1fr))' }, alignContent: 'flex-start', gap: { xs: 1.25, sm: 1.75 }, px: { xs: 1.5, sm: 3 }, pb: { xs: 8, sm: 3 } }}>
-        <motion.div onClick={(e) => { e.stopPropagation(); setSelectedItems(['system_root']); if (isMobile) openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); }} onDoubleClick={(e) => { e.stopPropagation(); if(!isMobile) openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); }} style={desktopCardStyle}>
-          <Box sx={{ ...desktopIconBaseSx, minHeight: { xs: 108, sm: 128 }, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.background.paper, 0.72), borderColor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.34) : theme.palette.divider, boxShadow: `0 10px 30px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.24 : 0.07)}` }}><StorageIcon sx={{ fontSize: isMobile ? 40 : 50, color: isAdmin ? theme.palette.error.main : theme.palette.primary.main }} /><Typography variant="body2" sx={{ mt: 1, fontWeight: 800, fontSize: isMobile ? '0.74rem' : '0.86rem', lineHeight: 1.2 }}>{rootLabel}</Typography>
+          <Box ref={desktopRef} onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, currentFileManagerPath, 'desktop')} onContextMenu={(e) => handleContextMenu(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if (e.target === e.currentTarget) { setFocusedContext('desktop'); clearFileSelection(); setInlineEdit(null); } }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: currentFileManagerPath, windowId: 'desktop' }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, minHeight: 0, position: 'relative', overflowX: 'hidden', overflowY: 'auto', display: 'grid', gridTemplateColumns: { xs: 'repeat(auto-fill, minmax(92px, 1fr))', sm: 'repeat(auto-fill, minmax(132px, 1fr))', lg: 'repeat(auto-fill, minmax(148px, 1fr))' }, alignContent: 'flex-start', gap: { xs: 1.25, sm: 1.75 }, px: { xs: 1.5, sm: 3 }, pb: { xs: 8, sm: 3 } }}>
+        <motion.div className="selectable-item" data-path="system_root" tabIndex={-1} aria-selected={selectedItems.includes('system_root')} onClick={(e) => handleItemClick(e, 'system_root', { id: 'system_root', name: rootLabel, path: '/', fullPath: '/', type: 'folder' })} onDoubleClick={(e) => { e.stopPropagation(); if(!isMobile) openFolderWindow({ id: 'system_root', name: rootLabel, path: '/' }); }} style={desktopCardStyle}>
+          <Box sx={{ ...desktopIconBaseSx, minHeight: { xs: 108, sm: 128 }, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.background.paper, 0.72), borderColor: selectedItems.includes('system_root') ? alpha(theme.palette.primary.main, 0.34) : theme.palette.divider, outline: keyboardFocusPath === 'system_root' ? `2px solid ${alpha(theme.palette.primary.main, 0.72)}` : 'none', outlineOffset: 2, boxShadow: `0 10px 30px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.24 : 0.07)}` }}><StorageIcon sx={{ fontSize: isMobile ? 40 : 50, color: isAdmin ? theme.palette.error.main : theme.palette.primary.main }} /><Typography variant="body2" sx={{ mt: 1, fontWeight: 800, fontSize: isMobile ? '0.74rem' : '0.86rem', lineHeight: 1.2 }}>{rootLabel}</Typography>
 </Box>
 
         </motion.div>
@@ -2251,9 +2432,9 @@ const NAS = ({ showWorkspace = true }) => {
         {visibleDesktopItems.map((item) => {
           const safePath = ensureSlash(item.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === 'desktop'); const isSelected = selectedItems.includes(safePath);
           return (
-            <motion.div key={safePath} className="selectable-item" data-path={safePath} draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, item, 'desktop') }} onDragOver={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragOver(e, item.fullPath); }} onDragLeave={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragLeave(e, item.fullPath); }} onDrop={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDrop(e, item.fullPath, 'desktop'); }} onClick={(e) => handleItemClick(e, safePath, item)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} style={{ ...desktopCardStyle, cursor: isEditing ? 'default' : 'pointer', zIndex: isSelected ? 20 : (isEditing ? 15 : 10) }}>
+            <motion.div key={safePath} className="selectable-item" data-path={safePath} tabIndex={-1} aria-selected={isSelected} draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, item, 'desktop') }} onDragOver={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragOver(e, item.fullPath); }} onDragLeave={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDragLeave(e, item.fullPath); }} onDrop={(e) => { if ((item.type === 'folder' || item.type === 'linked-device') && !isMobile) handleDrop(e, item.fullPath, 'desktop'); }} onClick={(e) => handleItemClick(e, safePath, item)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (item.type === 'folder' || item.type === 'linked-device') ? openFolderWindow(item) : openFileWindow(item, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, item.type, { item, path: '/', windowId: 'desktop' }) }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} style={{ ...desktopCardStyle, cursor: isEditing ? 'default' : 'pointer', zIndex: isSelected ? 20 : (isEditing ? 15 : 10) }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <Box sx={{ ...desktopIconBaseSx, width: '100%', minHeight: { xs: 108, sm: 128 }, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: dragOverTarget === safePath ? `2px dashed ${theme.palette.warning.main}` : (isSelected ? `1px solid ${alpha(theme.palette.primary.main, 0.32)}` : `1px solid ${theme.palette.divider}`), backgroundColor: dragOverTarget === safePath ? alpha(theme.palette.warning.main, 0.12) : (isSelected ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.background.paper, 0.76)), boxShadow: `0 10px 30px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.22 : 0.07)}` }}>{item.type === 'linked-device' ? <DesktopWindowsIcon sx={{ fontSize: !isMobile ? 50 : 40, color: deviceColor }} /> : ((item.type === 'folder' || item.type === 'linked-device') ? <FolderIcon sx={{ fontSize: !isMobile ? 50 : 40, color: folderColor }} /> : <InsertDriveFileIcon sx={{ fontSize: !isMobile ? 50 : 40, color: fileColor }} />)}
+                <Box sx={{ ...desktopIconBaseSx, width: '100%', minHeight: { xs: 108, sm: 128 }, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: dragOverTarget === safePath ? `2px dashed ${theme.palette.warning.main}` : (isSelected ? `1px solid ${alpha(theme.palette.primary.main, 0.32)}` : `1px solid ${theme.palette.divider}`), outline: keyboardFocusPath === safePath ? `2px solid ${alpha(theme.palette.primary.main, 0.72)}` : 'none', outlineOffset: 2, backgroundColor: dragOverTarget === safePath ? alpha(theme.palette.warning.main, 0.12) : (isSelected ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.background.paper, 0.76)), boxShadow: `0 10px 30px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.22 : 0.07)}` }}>{item.type === 'linked-device' ? <DesktopWindowsIcon sx={{ fontSize: !isMobile ? 50 : 40, color: deviceColor }} /> : ((item.type === 'folder' || item.type === 'linked-device') ? <FolderIcon sx={{ fontSize: !isMobile ? 50 : 40, color: folderColor }} /> : <InsertDriveFileIcon sx={{ fontSize: !isMobile ? 50 : 40, color: fileColor }} />)}
 </Box>
 
                 {isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={true} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography variant="body2" sx={{ mt: 0.75, fontWeight: 800, color: 'text.primary', wordBreak: 'break-word', overflowWrap: 'anywhere', maxWidth: '100%', lineHeight: 1.25, fontSize: isMobile ? '0.74rem' : '0.84rem' }}>{isSelected || isMobile ? getDisplayName(item) : (getDisplayName(item).length > 14 ? getDisplayName(item).substring(0, 14) + '...' : getDisplayName(item))}</Typography>}
@@ -2348,13 +2529,13 @@ const NAS = ({ showWorkspace = true }) => {
                             </motion.div>
                           )}
                         </AnimatePresence>
-                        <TableContainer className="window-content-area" onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} onContextMenu={(e) => handleContextMenu(e, 'background', { path: win.currentPath, windowId: win.id })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if(e.target === e.currentTarget) setSelectedItems([]); }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, background: 'transparent', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                        <TableContainer className="window-content-area" onDragOver={(e) => handleDragOver(e, null)} onDrop={(e) => handleDrop(e, win.currentPath, win.id)} onContextMenu={(e) => handleContextMenu(e, 'background', { path: win.currentPath, windowId: win.id })} onMouseDown={(e) => { if (isLongPressTriggered.current) return; if(e.target === e.currentTarget) clearFileSelection(); }} onTouchStart={(e) => { if (e.target === e.currentTarget) handleTouchStart(e, 'background', { path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ flex: 1, background: 'transparent', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
                           <Table stickyHeader size="small">
                             <TableBody>
                               {win.files.map((file, idx) => {
                                 const safePath = ensureSlash(file.fullPath); const isEditing = (inlineEdit?.mode === 'rename' && ensureSlash(inlineEdit.oldPath) === safePath && inlineEdit.windowId === win.id); const isSelected = selectedItems.includes(safePath); const isDragTarget = dragOverTarget === safePath;
                                 return (
-                                  <TableRow key={idx} className="selectable-item" data-path={safePath} hover draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, file, win.id) }} onDragOver={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragOver(e, file.fullPath) }} onDragLeave={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragLeave(e, file.fullPath) }} onDrop={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDrop(e, file.fullPath, win.id) }} onClick={(e) => handleItemClick(e, safePath, file)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (file.type === 'folder' || file.type === 'linked-device') ? fetchFiles(win.id, ensureSlash(file.fullPath)) : openFileWindow(file, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, file.type, { item: file, path: win.currentPath, windowId: win.id }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, file.type, { item: file, path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ cursor: isEditing ? 'default' : 'pointer', backgroundColor: isDragTarget ? alpha(theme.palette.warning.main, 0.14) : (isSelected ? alpha(theme.palette.primary.main, 0.10) : 'inherit'), borderLeft: isSelected ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent', outline: isDragTarget ? `2px dashed ${theme.palette.warning.main}` : 'none', '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.06) } }}>
+                                  <TableRow key={idx} className="selectable-item" data-path={safePath} tabIndex={-1} aria-selected={isSelected} hover draggable={!isEditing && !isMobile} onDragStart={(e) => { if(!isEditing && !isMobile) handleDragStart(e, file, win.id) }} onDragOver={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragOver(e, file.fullPath) }} onDragLeave={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDragLeave(e, file.fullPath) }} onDrop={(e) => { if((file.type === 'folder' || file.type === 'linked-device') && !isMobile) handleDrop(e, file.fullPath, win.id) }} onClick={(e) => handleItemClick(e, safePath, file)} onDoubleClick={(e) => { e.stopPropagation(); if(!isEditing && !isMobile) (file.type === 'folder' || file.type === 'linked-device') ? fetchFiles(win.id, ensureSlash(file.fullPath)) : openFileWindow(file, false); }} onContextMenu={(e) => { if(!isEditing) handleContextMenu(e, file.type, { item: file, path: win.currentPath, windowId: win.id }) }} onTouchStart={(e) => { if(!isEditing) handleTouchStart(e, file.type, { item: file, path: win.currentPath, windowId: win.id }); }} onTouchMove={cancelTouch} onTouchEnd={cancelTouch} onTouchCancel={cancelTouch} sx={{ cursor: isEditing ? 'default' : 'pointer', backgroundColor: isDragTarget ? alpha(theme.palette.warning.main, 0.14) : (isSelected ? alpha(theme.palette.primary.main, 0.10) : 'inherit'), borderLeft: isSelected ? `3px solid ${theme.palette.primary.main}` : '3px solid transparent', outline: isDragTarget ? `2px dashed ${theme.palette.warning.main}` : (keyboardFocusPath === safePath ? `2px solid ${alpha(theme.palette.primary.main, 0.72)}` : 'none'), outlineOffset: -2, '&:hover': { backgroundColor: alpha(theme.palette.primary.main, 0.06) } }}>
                                     <TableCell sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: isMobile ? 1.35 : 1.2, minHeight: isMobile ? 52 : 44, borderBottom: `1px solid ${theme.palette.divider}` }}>{file.type === 'linked-device' ? <DesktopWindowsIcon sx={{ color: deviceColor, flexShrink: 0 }} /> : ((file.type === 'folder' || file.type === 'linked-device') ? <FolderIcon sx={{ color: folderColor, flexShrink: 0 }} /> : <InsertDriveFileIcon sx={{ color: fileColor, flexShrink: 0 }} />)}{isEditing ? <InlineInput defaultValue={inlineEdit.name} isDesktop={false} onSubmit={(val) => handleInlineSubmit(val, inlineEdit)} onCancel={() => setInlineEdit(null)} /> : <Typography sx={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', fontWeight: isSelected ? 700 : 500 }}>{getDisplayName(file)}</Typography>}</TableCell>
                                   </TableRow>
                                 );
@@ -2422,7 +2603,146 @@ const NAS = ({ showWorkspace = true }) => {
           <ListItemIcon><SettingsIcon fontSize="small" color="action" /></ListItemIcon>
           <ListItemText>공유 링크 관리</ListItemText>
         </MenuItem>
+        <Divider />
+        <MenuItem onClick={() => { closeActionMenu(); loadQuickAccess('recent'); }}>
+          <ListItemIcon><AccessTimeIcon fontSize="small" color="action" /></ListItemIcon>
+          <ListItemText>최근 파일</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeActionMenu(); loadQuickAccess('favorites'); }}>
+          <ListItemIcon><StarIcon fontSize="small" color="warning" /></ListItemIcon>
+          <ListItemText>즐겨찾기</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeActionMenu(); loadTrash(); }}>
+          <ListItemIcon><DeleteOutlineIcon fontSize="small" color="action" /></ListItemIcon>
+          <ListItemText>휴지통</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { closeActionMenu(); loadRecoveryCenter(); }}>
+          <ListItemIcon><BackupIcon fontSize="small" color="action" /></ListItemIcon>
+          <ListItemText>복구 센터</ListItemText>
+        </MenuItem>
       </Menu>
+      <Dialog open={trashDialog.open} onClose={() => setTrashDialog(prev => ({ ...prev, open: false }))} maxWidth="sm" fullWidth fullScreen={isMobile}>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, fontWeight: 900 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><DeleteOutlineIcon />휴지통</Box>
+          <IconButton onClick={() => setTrashDialog(prev => ({ ...prev, open: false }))} aria-label="휴지통 닫기"><CloseIcon /></IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          <Box sx={{ px: 2, py: 1.25, bgcolor: alpha(theme.palette.info.main, 0.08), borderBottom: `1px solid ${theme.palette.divider}` }}>
+            <Typography variant="body2" color="text.secondary">삭제한 항목은 30일 동안 보관됩니다. 같은 위치에 같은 이름이 있으면 별도 이름으로 복원합니다.</Typography>
+          </Box>
+          {trashDialog.loading ? (
+            <Box sx={{ py: 6, display: 'grid', placeItems: 'center' }}><CircularProgress size={28} /></Box>
+          ) : trashDialog.items.length === 0 ? (
+            <Box sx={{ py: 7, px: 2, textAlign: 'center' }}>
+              <DeleteOutlineIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} />
+              <Typography sx={{ fontWeight: 800 }}>휴지통이 비어 있습니다.</Typography>
+            </Box>
+          ) : (
+            <List disablePadding>
+              {trashDialog.items.map(item => (
+                <ListItem key={item.trashId} divider sx={{ px: 2, py: 1.25, gap: 1, alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' } }}>
+                  <ListItemIcon sx={{ minWidth: 36, mt: { xs: 0.25, sm: 0 } }}>{item.type === 'folder' ? <FolderIcon color="warning" /> : <InsertDriveFileIcon color="action" />}</ListItemIcon>
+                  <ListItemText
+                    primary={<Typography sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>{item.name}</Typography>}
+                    secondary={<Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{item.originalPath} · {new Date(item.deletedAt).toLocaleString()}</Typography>}
+                    sx={{ my: 0, minWidth: 0, flex: 1 }}
+                  />
+                  <Box sx={{ display: 'flex', gap: 0.75, width: { xs: '100%', sm: 'auto' }, justifyContent: { xs: 'flex-end', sm: 'initial' } }}>
+                    <Button size="small" variant="outlined" startIcon={<RestoreIcon />} onClick={() => restoreTrashItem(item)}>복원</Button>
+                    <IconButton size="small" color="error" onClick={() => permanentlyDeleteTrashItem(item)} aria-label={`${item.name} 영구 삭제`}><DeleteForeverIcon /></IconButton>
+                  </Box>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 2, py: 1.25 }}><Button color="inherit" onClick={() => setTrashDialog(prev => ({ ...prev, open: false }))}>닫기</Button></DialogActions>
+      </Dialog>
+      <Dialog open={quickDialog.open} onClose={() => setQuickDialog(prev => ({ ...prev, open: false }))} maxWidth="sm" fullWidth fullScreen={isMobile}>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, fontWeight: 900 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>{quickDialog.mode === 'favorites' ? <StarIcon color="warning" /> : <AccessTimeIcon />}{quickDialog.mode === 'favorites' ? '즐겨찾기' : '최근 파일'}</Box>
+          <IconButton onClick={() => setQuickDialog(prev => ({ ...prev, open: false }))} aria-label="빠른 접근 닫기"><CloseIcon /></IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          {quickDialog.loading ? <Box sx={{ py: 7, display: 'grid', placeItems: 'center' }}><CircularProgress size={28} /></Box> : quickDialog.items.length === 0 ? (
+            <Box sx={{ py: 7, px: 2, textAlign: 'center' }}>{quickDialog.mode === 'favorites' ? <StarIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} /> : <AccessTimeIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} />}<Typography sx={{ fontWeight: 800 }}>{quickDialog.mode === 'favorites' ? '즐겨찾는 항목이 없습니다.' : '최근 파일이 없습니다.'}</Typography></Box>
+          ) : <List disablePadding>{quickDialog.items.map(item => (
+            <ListItemButton key={ensureSlash(item.fullPath)} divider onClick={() => openQuickItem(item)} sx={{ px: 2, py: 1.1 }}>
+              <ListItemIcon sx={{ minWidth: 38 }}>{item.type === 'folder' ? <FolderIcon color="warning" /> : <InsertDriveFileIcon color="action" />}</ListItemIcon>
+              <ListItemText primary={<Typography sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>{item.name}</Typography>} secondary={<Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{item.fullPath}{item.modified ? ` · ${new Date(item.modified).toLocaleString()}` : ''}</Typography>} />
+              <IconButton size="small" color={favoritePaths.has(ensureSlash(item.fullPath)) ? 'warning' : 'default'} onClick={(event) => { event.stopPropagation(); toggleFavorite(item); }} aria-label={favoritePaths.has(ensureSlash(item.fullPath)) ? '즐겨찾기 해제' : '즐겨찾기 추가'}><StarIcon fontSize="small" /></IconButton>
+            </ListItemButton>
+          ))}</List>}
+          {quickDialog.limited && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, py: 1 }}>파일이 많아 최근 항목 일부만 표시했습니다.</Typography>}
+        </DialogContent>
+        <DialogActions><Button color="inherit" onClick={() => setQuickDialog(prev => ({ ...prev, open: false }))}>닫기</Button></DialogActions>
+      </Dialog>
+      <Dialog open={versionDialog.open} onClose={() => setVersionDialog(prev => ({ ...prev, open: false }))} maxWidth="sm" fullWidth fullScreen={isMobile}>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, fontWeight: 900 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}><HistoryIcon /><Typography noWrap sx={{ fontWeight: 900 }}>{versionDialog.item?.name || '파일'} 버전 기록</Typography></Box>
+          <IconButton onClick={() => setVersionDialog(prev => ({ ...prev, open: false }))} aria-label="버전 기록 닫기"><CloseIcon /></IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          <Box sx={{ px: 2, py: 1.25, bgcolor: alpha(theme.palette.info.main, 0.08), borderBottom: `1px solid ${theme.palette.divider}` }}>
+            <Typography variant="body2" color="text.secondary">덮어쓰기 전 파일을 최대 100개, 30일 동안 보존합니다. 복원해도 현재 파일은 사라지지 않고 새 버전으로 남습니다.</Typography>
+          </Box>
+          {versionDialog.loading ? (
+            <Box sx={{ py: 6, display: 'grid', placeItems: 'center' }}><CircularProgress size={28} /></Box>
+          ) : versionDialog.versions.length === 0 ? (
+            <Box sx={{ py: 7, px: 2, textAlign: 'center' }}><HistoryIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} /><Typography sx={{ fontWeight: 800 }}>아직 저장된 이전 버전이 없습니다.</Typography></Box>
+          ) : (
+            <List disablePadding>
+              {versionDialog.versions.map(version => (
+                <ListItem key={version.versionId} divider sx={{ px: 2, py: 1.25, gap: 1, alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' } }}>
+                  <ListItemIcon sx={{ minWidth: 36 }}><HistoryIcon color="action" /></ListItemIcon>
+                  <ListItemText primary={<Typography sx={{ fontWeight: 800 }}>{new Date(version.createdAt).toLocaleString()}</Typography>} secondary={<Typography variant="caption" color="text.secondary">{formatBytes(version.size)} · {version.source || 'NAS Drive'} · {version.reason || '변경 전 보존'}</Typography>} sx={{ my: 0, minWidth: 0, flex: 1 }} />
+                  <Box sx={{ display: 'flex', gap: 0.75, width: { xs: '100%', sm: 'auto' }, justifyContent: { xs: 'flex-end', sm: 'initial' } }}>
+                    <Button size="small" color="inherit" onClick={() => downloadFileVersion(version)}>다운로드</Button>
+                    <Button size="small" variant="outlined" startIcon={<RestoreIcon />} onClick={() => restoreFileVersionItem(version)}>복원</Button>
+                  </Box>
+                </ListItem>
+              ))}
+            </List>
+          )}
+        </DialogContent>
+        <DialogActions><Button color="inherit" onClick={() => setVersionDialog(prev => ({ ...prev, open: false }))}>닫기</Button></DialogActions>
+      </Dialog>
+      <Dialog open={recoveryDialog.open} onClose={() => !recoveryDialog.busy && setRecoveryDialog(prev => ({ ...prev, open: false }))} maxWidth="md" fullWidth fullScreen={isMobile}>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, fontWeight: 900 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><BackupIcon />복구 센터</Box>
+          <IconButton disabled={recoveryDialog.busy} onClick={() => setRecoveryDialog(prev => ({ ...prev, open: false }))} aria-label="복구 센터 닫기"><CloseIcon /></IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          <Box sx={{ px: 2, py: 1.5, display: 'flex', gap: 1.5, alignItems: { xs: 'stretch', sm: 'center' }, justifyContent: 'space-between', flexDirection: { xs: 'column', sm: 'row' }, bgcolor: alpha(theme.palette.info.main, 0.08) }}>
+            <Box><Typography sx={{ fontWeight: 900 }}>드라이브 전체 복구</Typography><Typography variant="body2" color="text.secondary">복원하기 전에 현재 상태도 자동으로 보존하므로 다시 되돌릴 수 있습니다.</Typography></Box>
+            <Button variant="contained" startIcon={recoveryDialog.busy ? <CircularProgress size={16} color="inherit" /> : <BackupIcon />} disabled={recoveryDialog.busy} onClick={createRecoveryPoint}>현재 복구 지점 만들기</Button>
+          </Box>
+          {recoveryDialog.loading ? (
+            <Box sx={{ py: 7, display: 'grid', placeItems: 'center' }}><CircularProgress size={30} /></Box>
+          ) : (
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, minHeight: { md: 420 } }}>
+              <Box sx={{ borderRight: { md: `1px solid ${theme.palette.divider}` }, borderBottom: { xs: `1px solid ${theme.palette.divider}`, md: 'none' } }}>
+                <Typography sx={{ px: 2, py: 1.25, fontWeight: 900 }}>복구 지점 · 30일</Typography>
+                {recoveryDialog.restorePoints.length === 0 ? <Typography color="text.secondary" sx={{ px: 2, py: 4, textAlign: 'center' }}>저장된 복구 지점이 없습니다.</Typography> : <List disablePadding sx={{ maxHeight: 390, overflow: 'auto' }}>{recoveryDialog.restorePoints.map(point => (
+                  <ListItem key={point.restorePointId} divider sx={{ px: 2, py: 1.25, gap: 1 }}>
+                    <ListItemText primary={<Typography sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>{point.label}</Typography>} secondary={<Typography variant="caption" color="text.secondary">{new Date(point.createdAt).toLocaleString()} · 파일 {Number(point.fileCount || 0).toLocaleString()}개 · {formatBytes(point.logicalBytes)}</Typography>} />
+                    <Button size="small" variant="outlined" disabled={recoveryDialog.busy} onClick={() => restoreDrivePoint(point)}>전체 복원</Button>
+                  </ListItem>
+                ))}</List>}
+              </Box>
+              <Box>
+                <Typography sx={{ px: 2, py: 1.25, fontWeight: 900 }}>최근 활동</Typography>
+                {recoveryDialog.activities.length === 0 ? <Typography color="text.secondary" sx={{ px: 2, py: 4, textAlign: 'center' }}>기록된 활동이 없습니다.</Typography> : <List disablePadding sx={{ maxHeight: 390, overflow: 'auto' }}>{recoveryDialog.activities.map(activity => (
+                  <ListItem key={activity.activityId} divider sx={{ px: 2, py: 1 }}>
+                    <ListItemText primary={<Typography sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{activity.path || activity.label || activity.type}</Typography>} secondary={<Typography variant="caption" color="text.secondary">{new Date(activity.at).toLocaleString()} · {activity.type}</Typography>} />
+                  </ListItem>
+                ))}</List>}
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions><Button color="inherit" disabled={recoveryDialog.busy} onClick={() => setRecoveryDialog(prev => ({ ...prev, open: false }))}>닫기</Button></DialogActions>
+      </Dialog>
       <ShareLinkDialog
         open={shareDialog.open}
         initialTarget={shareDialog.target}
@@ -2434,7 +2754,7 @@ const NAS = ({ showWorkspace = true }) => {
         open={shareManagerOpen}
         onClose={() => setShareManagerOpen(false)}
       />
-      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleShowProperties={handleShowProperties} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} handleOpenShareDialog={openShareDialog} />
+      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleShowProperties={handleShowProperties} handleOpenVersionHistory={loadVersionHistory} handleToggleFavorite={toggleFavorite} favoritePaths={favoritePaths} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} handleOpenShareDialog={openShareDialog} />
       <Snackbar open={snackbar.open} autoHideDuration={snackbar.severity === 'info' ? null : 3000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}><Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', display: 'flex', alignItems: 'center' }}>{snackbar.severity === 'info' && <CircularProgress size={20} sx={{ mr: 2, color: 'inherit' }} />}{snackbar.message}</Alert></Snackbar>
       {/* 파일/폴더 정보 다이얼로그 */}
       <Dialog

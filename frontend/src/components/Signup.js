@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Container, TextField, Button, Typography, Box } from '@mui/material';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 // 현재 호스트에 따라 백엔드 URL 분기 처리
 const hostname = window.location.hostname;
@@ -13,6 +13,7 @@ console.log("Using backend URL:", backendUrl);
 
 function Signup() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [id, setId] = useState('');
   const [nickname, setNickname] = useState('');
   const [password, setPassword] = useState('');
@@ -20,6 +21,11 @@ function Signup() {
   const [error, setError] = useState('');
   const [idAvailable, setIdAvailable] = useState(null);
   const [nicknameAvailable, setNicknameAvailable] = useState(null);
+  const requestedNext = searchParams.get('next');
+  const safeNext = requestedNext?.startsWith('/') && !requestedNext.startsWith('//')
+    ? requestedNext
+    : '/platform';
+  const loginPath = `/login?next=${encodeURIComponent(safeNext)}`;
 
   const checkIdentity = async (field) => {
     try {
@@ -39,6 +45,14 @@ function Signup() {
       setError('아이디, 닉네임, 비밀번호를 모두 입력해주세요.');
       return;
     }
+    if (password.length < 10) {
+      setError('비밀번호는 최소 10자 이상이어야 합니다.');
+      return;
+    }
+    if (password !== passwordConfirm) {
+      setError('비밀번호 확인이 일치하지 않습니다.');
+      return;
+    }
     const availability = await checkIdentity('id');
     setNicknameAvailable(availability?.nicknameAvailable ?? null);
     if (!availability?.idAvailable || !availability?.nicknameAvailable) {
@@ -50,7 +64,7 @@ function Signup() {
       .then(response => {
         // alert 메시지 표시 후 로그인 페이지로 이동
         alert("회원가입 요청을 보냈습니다.");
-        navigate('/login');
+        navigate(loginPath);
       })
       .catch(err => {
         setError(err.response?.data?.error || '회원가입 실패');
@@ -88,6 +102,7 @@ function Signup() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           fullWidth
+          helperText="최소 10자 이상 입력해주세요."
         />
         <TextField
           label="비밀번호 확인"
@@ -98,6 +113,9 @@ function Signup() {
         />
         <Button variant="contained" onClick={handleSignup}>
           회원가입 요청
+        </Button>
+        <Button variant="text" onClick={() => navigate(loginPath)}>
+          이미 계정이 있나요? 로그인
         </Button>
       </Box>
     </Container>

@@ -1,10 +1,12 @@
 {
   "name": "nas-sync-agent",
-  "version": "1.0.0",
-  "description": "Windows NAS Sync Agent",
+  "version": "1.10.11",
+  "description": "NAS Drive for Windows",
   "main": "index.js",
   "scripts": {
-    "build": "pkg index.js --targets node18-win-x64 --output dist/NAS-Sync-Agent.exe"
+    "build": "pkg . --targets node18-win-x64 --output ../dist/NAS-Sync-Agent.exe",
+    "verify": "node index.js --self-test",
+    "sign": "powershell -NoProfile -ExecutionPolicy Bypass -File sign-release.ps1"
   },
   "keywords": [],
   "author": "",
@@ -13,5 +15,10 @@
   "bin": "index.js",
   "devDependencies": {
     "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [
+      "assets/nas-drive.ico"
+    ]
   }
 }

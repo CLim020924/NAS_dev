@@ -29,7 +29,11 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const [pdfPageCount, setPdfPageCount] = useState(0);
   const [pdfError, setPdfError] = useState('');
   const [pdfPageWidth, setPdfPageWidth] = useState(720);
+  const [officeAccessToken, setOfficeAccessToken] = useState('');
+  const [officeDocumentRevisionKey, setOfficeDocumentRevisionKey] = useState('');
+  const [officeAccessError, setOfficeAccessError] = useState('');
   const editorRef = useRef(null);
+  const officeSaveResolveRef = useRef(null);
   const pdfContainerRef = useRef(null);
   const dirtyRef = useRef(!!win.hasUnsavedChanges);
   const saveHandlerRef = useRef(null);
@@ -46,16 +50,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const isMarkdown = ext === 'md';
   const isTextEditable = !isBinary && !isOffice && !isPDF;
 
-  const currentUser = JSON.parse(localStorage.getItem('user')) || {};
-  const isAdmin = currentUser.Masters || currentUser.Managers;
   const publicOfficeBase = (window.__OO_PUBLIC_BASE__ || window.location.origin).replace(/\/$/, '');
-  const officeUserId = String(
-    currentUser.userUid ||
-    currentUser.loginId ||
-    currentUser.id ||
-    currentUser.username ||
-    ''
-  );
   const encodeBase64Url = (value) => {
     const bytes = new TextEncoder().encode(String(value || ''));
     let binary = '';
@@ -64,6 +59,17 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     });
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   };
+
+  const createOnlyOfficeDocumentKey = useCallback((value) => {
+    const text = String(value || '');
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    const encoded = encodeBase64Url(text).replace(/[^a-zA-Z0-9]/g, '').slice(0, 80);
+    return `nas${ext}${(hash >>> 0).toString(16)}${encoded}`.slice(0, 120);
+  }, [ext]);
 
   const setFileDirty = useCallback((dirty) => {
     dirtyRef.current = !!dirty;
@@ -82,12 +88,30 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
 
   const handleNasSave = useCallback(async () => {
     if (editorRef.current && isOffice && ext !== 'pdf') {
+      if (!dirtyRef.current) return true;
       setIsSaving(true);
-      editorRef.current.serviceCommand('forceSave');
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-      setIsSaving(false);
-      setFileDirty(false);
-      return true;
+      try {
+        const saved = await new Promise((resolve) => {
+          let settled = false;
+          const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            if (officeSaveResolveRef.current === finish) officeSaveResolveRef.current = null;
+            resolve(result);
+          };
+          const timeoutId = setTimeout(() => finish(false), 10000);
+          officeSaveResolveRef.current = finish;
+          editorRef.current.serviceCommand('forceSave');
+        });
+        if (saved) setFileDirty(false);
+        return saved;
+      } catch (error) {
+        console.warn('OnlyOffice 강제 저장 실패', error);
+        return false;
+      } finally {
+        setIsSaving(false);
+      }
     }
 
     if (!isBinary && !isOffice && mode === 'edit' && typeof saveFile === 'function') {
@@ -126,6 +150,10 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     });
     if (!targetPath) setFileDirty(false);
   };
+
+  const handleRhwpDirtyChange = useCallback((dirty) => {
+    setFileDirty(dirty);
+  }, [setFileDirty]);
 
   useEffect(() => {
     if (isTextEditable && mode === 'edit') {
@@ -209,9 +237,18 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
 
   useEffect(() => {
     return () => {
-      if (isOffice && editorRef.current && ext !== 'pdf') {
-        editorRef.current.serviceCommand('forceSave');
+      const editor = editorRef.current;
+      editorRef.current = null;
+      officeSaveResolveRef.current?.(false);
+      officeSaveResolveRef.current = null;
+      if (!isOffice || !editor || ext === 'pdf') return;
+
+      try {
+        if (dirtyRef.current) editor.serviceCommand('forceSave');
+      } catch (error) {
+        console.warn('OnlyOffice 종료 저장 실패', error);
       }
+      setTimeout(() => editor.destroyEditor?.(), dirtyRef.current ? 500 : 0);
     };
   }, [isOffice, ext]);
 
@@ -232,8 +269,44 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     };
   }, [isPDF, win.id]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!isOffice || !win.fullPath) {
+      setOfficeAccessToken('');
+      setOfficeDocumentRevisionKey('');
+      setOfficeAccessError('');
+      return () => controller.abort();
+    }
+    setOfficeAccessToken('');
+    setOfficeDocumentRevisionKey('');
+    setOfficeAccessError('');
+    dirtyRef.current = false;
+    axios.post('/api/onlyoffice/access', { path: win.fullPath }, {
+      withCredentials: true,
+      signal: controller.signal
+    })
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        setOfficeAccessToken(String(response.data?.token || ''));
+        setOfficeDocumentRevisionKey(String(response.data?.documentKey || ''));
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setOfficeAccessError(error.response?.data?.error || 'OnlyOffice 접근 권한을 확인하지 못했습니다.');
+      });
+    return () => controller.abort();
+  }, [isOffice, win.fullPath]);
+
+  const officeDocumentKey = useMemo(() => {
+    if (!isOffice) return '';
+    return officeDocumentRevisionKey || createOnlyOfficeDocumentKey(win.fullPath || win.id);
+  }, [createOnlyOfficeDocumentKey, isOffice, officeDocumentRevisionKey, win.fullPath, win.id]);
+
+  const officeEditorId = useMemo(() => (
+    `editor-${createOnlyOfficeDocumentKey(`${win.id}:${officeDocumentKey || win.fullPath || ''}`)}`
+  ), [createOnlyOfficeDocumentKey, officeDocumentKey, win.fullPath, win.id]);
+
   const officeConfig = useMemo(() => {
-    if (!isOffice) return null;
+    if (!isOffice || !officeAccessToken) return null;
 
     const officeFetchBase = (
       window.__OO_INTERNAL_BASE__ ||
@@ -242,26 +315,24 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     ).replace(/\/$/, '');
 
     // 기존 url의 path 인코딩(%20 등)을 유지하기 위해 URL/searchParams 재직렬화를 피한다
+    const officeFileName = encodeURIComponent(name || `document.${ext}`);
     const absoluteUrl =
-      `${officeFetchBase}/api/onlyoffice/file` +
+      `${officeFetchBase}/api/onlyoffice/file/${officeFileName}` +
       `?path64=${encodeURIComponent(encodeBase64Url(win.fullPath || ''))}` +
       `&inline=true` +
-      `&oosecret=${encodeURIComponent('nas_office_2026')}` +
-      `&officeUid=${encodeURIComponent(officeUserId)}` +
-      `&officeRoot=${encodeURIComponent(currentUser.rootPath || '')}` +
-      `&officeAdmin=${isAdmin ? 'true' : 'false'}`;
+      `&v=${encodeURIComponent(officeDocumentKey)}` +
+      `&officeToken=${encodeURIComponent(officeAccessToken)}`;
 
     const callbackUrl =
       `${officeFetchBase}/api/onlyoffice/callback` +
       `?path=${encodeURIComponent(win.fullPath)}` +
-      `&uid=${encodeURIComponent(officeUserId)}` +
-      `&isAdmin=${isAdmin ? 'true' : 'false'}`;
+      `&officeToken=${encodeURIComponent(officeAccessToken)}`;
 
     return {
       type: isMobile ? 'mobile' : 'desktop',
       document: {
         fileType: ext,
-        key: (win.fullPath || win.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 120),
+        key: officeDocumentKey,
         title: name,
         url: absoluteUrl
       },
@@ -279,7 +350,13 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
       },
       events: {
         onDocumentStateChange: (event) => {
-          setFileDirty(!!event?.data);
+          const dirty = !!event?.data;
+          setFileDirty(dirty);
+          if (!dirty && officeSaveResolveRef.current) {
+            const resolveSave = officeSaveResolveRef.current;
+            officeSaveResolveRef.current = null;
+            resolveSave(true);
+          }
         },
         onRequestSaveAs: () => {
           saveHandlerRef.current?.();
@@ -289,7 +366,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
         }
       }
     };
-  }, [ext, name, url, win.fullPath, isOffice, isMobile, officeUserId, isAdmin, currentUser.rootPath, win.id, setFileDirty]);
+  }, [ext, name, win.fullPath, isOffice, isMobile, officeAccessToken, officeDocumentKey, setFileDirty]);
 
   const documentServerUrl = `${publicOfficeBase}/onlyoffice`;
 
@@ -300,12 +377,15 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     if (isHwp) {
       const fullPath = String(win.fullPath || '');
       const currentFolderPath = fullPath.includes('/') ? (fullPath.substring(0, fullPath.lastIndexOf('/')) || '/') : '/';
-      return <RhwpDocumentViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} onSave={handleRhwpSave} onDirtyChange={(dirty) => setFileDirty(dirty)} initialFolderPath={currentFolderPath} />;
+      return <RhwpDocumentViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} nasPath={fullPath} onSave={handleRhwpSave} onDirtyChange={handleRhwpDirtyChange} initialFolderPath={currentFolderPath} />;
+    }
+    if (isOffice && !officeConfig) {
+      return <Box sx={{ p: 3 }}><Typography color={officeAccessError ? 'error' : 'text.secondary'}>{officeAccessError || '문서 접근 권한을 확인하는 중입니다...'}</Typography></Box>;
     }
     if (isOffice && officeConfig) {
       return (
         <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-          <DocumentEditor id={`editor-${win.id}`} documentServerUrl={documentServerUrl} config={officeConfig} onLoadComponent={(editor) => { editorRef.current = editor; }} />
+          <DocumentEditor key={officeEditorId} id={officeEditorId} documentServerUrl={documentServerUrl} config={officeConfig} onLoadComponent={(editor) => { editorRef.current = editor; }} />
         </Box>
       );
     }

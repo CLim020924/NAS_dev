@@ -118,11 +118,16 @@ const readUsageCache = () => {
 
 const writeUsageCache = (cache) => writeJson(USAGE_CACHE_FILE, cache || {});
 
-const countPathSize = (targetPath) => {
+const countPathSize = (targetPath, seenInodes = new Set()) => {
   if (!fs.existsSync(targetPath)) return 0;
   const stat = fs.lstatSync(targetPath);
   if (stat.isSymbolicLink()) return 0;
-  if (stat.isFile()) return stat.size;
+  if (stat.isFile()) {
+    const inodeKey = `${stat.dev}:${stat.ino}`;
+    if (seenInodes.has(inodeKey)) return 0;
+    seenInodes.add(inodeKey);
+    return stat.size;
+  }
   if (!stat.isDirectory()) return 0;
 
   let total = 0;
@@ -130,8 +135,15 @@ const countPathSize = (targetPath) => {
     const fullPath = path.join(targetPath, entry.name);
     try {
       if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) total += countPathSize(fullPath);
-      else if (entry.isFile()) total += fs.lstatSync(fullPath).size;
+      if (entry.isDirectory()) total += countPathSize(fullPath, seenInodes);
+      else if (entry.isFile()) {
+        const childStat = fs.lstatSync(fullPath);
+        const inodeKey = `${childStat.dev}:${childStat.ino}`;
+        if (!seenInodes.has(inodeKey)) {
+          seenInodes.add(inodeKey);
+          total += childStat.size;
+        }
+      }
     } catch (err) {}
   }
   return total;
@@ -272,5 +284,6 @@ module.exports = {
   getCachedPathUsage,
   getUserStorageSummary,
   invalidateUsageCache,
-  assertQuotaAvailable
+  assertQuotaAvailable,
+  _test: { countPathSize }
 };

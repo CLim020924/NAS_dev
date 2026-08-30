@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config/env');
 const http = require('http');           
+const net = require('net');
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -28,6 +29,8 @@ const {
   getUserStorageSummary
 } = require('./storageQuota');
 const { getAiStatus } = require('./services/aiService');
+const { hashPassword, verifyPassword } = require('./passwordSecurity');
+const { consumeDesktopWebSession } = require('./desktopWebSession');
 
 const app = express();
 const server = http.createServer(app);
@@ -38,9 +41,146 @@ app.set('io', io);
 
 const JWT_SECRET = config.JWT_SECRET;
 const nasPath = config.NAS_ROOT;
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 8;
+
+const getLoginAttemptKey = (req, loginId) => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(loginId || '').toLowerCase()}`;
+const getActiveLoginAttempt = (key) => {
+  const current = loginAttempts.get(key);
+  if (!current || Date.now() - current.firstFailureAt > LOGIN_WINDOW_MS) {
+    loginAttempts.delete(key);
+    return null;
+  }
+  return current;
+};
+const recordLoginFailure = (key) => {
+  const current = getActiveLoginAttempt(key) || { count: 0, firstFailureAt: Date.now() };
+  current.count += 1;
+  loginAttempts.set(key, current);
+  return current;
+};
 // 서버 시작 시 루트 백업 폴더 생성
 const systemBackupPath = config.NAS_BACKUP_PATH;
 if (!fs.existsSync(systemBackupPath)) fs.mkdirSync(systemBackupPath, { recursive: true });
+
+const ONLYOFFICE_ORIGIN = process.env.ONLYOFFICE_ORIGIN || 'http://127.0.0.1:8080';
+const onlyOfficeTarget = new URL(ONLYOFFICE_ORIGIN);
+
+const stripOnlyOfficePrefix = (requestUrl = '/') => {
+  const stripped = String(requestUrl || '/').replace(/^\/onlyoffice(?=\/|$)/, '') || '/';
+  return stripped.startsWith('/') ? stripped : `/${stripped}`;
+};
+
+const copyProxyHeaders = (headers = {}) => {
+  const next = { ...headers };
+  delete next.host;
+  delete next.connection;
+  delete next['content-length'];
+  next.host = onlyOfficeTarget.host;
+  next['x-forwarded-host'] = headers['x-forwarded-host'] || headers.host || '';
+  next['x-forwarded-proto'] = headers['x-forwarded-proto'] || 'https';
+  return next;
+};
+
+const rewriteOnlyOfficeLocation = (locationValue, requestHeaders = {}) => {
+  if (!locationValue) return locationValue;
+
+  try {
+    const resolved = new URL(String(locationValue), onlyOfficeTarget);
+    const forwardedHost = String(requestHeaders['x-forwarded-host'] || requestHeaders.host || '')
+      .split(',')[0]
+      .trim();
+    const allowedHosts = new Set([onlyOfficeTarget.host, forwardedHost].filter(Boolean));
+    if (!allowedHosts.has(resolved.host)) return locationValue;
+
+    const targetPath = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+    if (targetPath === '/onlyoffice' || targetPath.startsWith('/onlyoffice/') || targetPath.startsWith('/cache/')) {
+      return targetPath;
+    }
+    return `/onlyoffice${targetPath.startsWith('/') ? targetPath : `/${targetPath}`}`;
+  } catch (err) {
+    return locationValue;
+  }
+};
+
+app.use('/onlyoffice', (req, res) => {
+  const targetPath = stripOnlyOfficePrefix(req.originalUrl);
+  const proxyReq = http.request({
+    protocol: onlyOfficeTarget.protocol,
+    hostname: onlyOfficeTarget.hostname,
+    port: onlyOfficeTarget.port || 80,
+    method: req.method,
+    path: targetPath,
+    headers: copyProxyHeaders(req.headers),
+  }, (proxyRes) => {
+    res.statusCode = proxyRes.statusCode || 502;
+    Object.entries(proxyRes.headers || {}).forEach(([key, value]) => {
+      if (value === undefined) return;
+      res.setHeader(key, key.toLowerCase() === 'location' ? rewriteOnlyOfficeLocation(value, req.headers) : value);
+    });
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error('[onlyoffice proxy] request failed', err.message);
+    if (!res.headersSent) res.status(502).send('OnlyOffice proxy failed');
+    else res.end();
+  });
+
+  req.pipe(proxyReq);
+});
+
+app.use('/cache', (req, res) => {
+  const proxyReq = http.request({
+    protocol: onlyOfficeTarget.protocol,
+    hostname: onlyOfficeTarget.hostname,
+    port: onlyOfficeTarget.port || 80,
+    method: req.method,
+    path: req.originalUrl,
+    headers: copyProxyHeaders(req.headers),
+  }, (proxyRes) => {
+    res.statusCode = proxyRes.statusCode || 502;
+    Object.entries(proxyRes.headers || {}).forEach(([key, value]) => {
+      if (value !== undefined) res.setHeader(key, value);
+    });
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error('[onlyoffice cache proxy] request failed', err.message);
+    if (!res.headersSent) res.status(502).send('OnlyOffice cache proxy failed');
+    else res.end();
+  });
+
+  req.pipe(proxyReq);
+});
+
+server.on('upgrade', (req, socket, head) => {
+  if (!String(req.url || '').startsWith('/onlyoffice')) return;
+
+  const targetPath = stripOnlyOfficePrefix(req.url);
+  const targetSocket = net.connect(Number(onlyOfficeTarget.port || 80), onlyOfficeTarget.hostname, () => {
+    const requestLine = `${req.method} ${targetPath} HTTP/${req.httpVersion}\r\n`;
+    const headers = {
+      ...req.headers,
+      host: onlyOfficeTarget.host,
+      'x-forwarded-host': req.headers['x-forwarded-host'] || req.headers.host || '',
+      'x-forwarded-proto': req.headers['x-forwarded-proto'] || 'https',
+    };
+    const headerLines = Object.entries(headers)
+      .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+      .join('\r\n');
+    targetSocket.write(`${requestLine}${headerLines}\r\n\r\n`);
+    if (head?.length) targetSocket.write(head);
+    socket.pipe(targetSocket).pipe(socket);
+  });
+
+  targetSocket.on('error', (err) => {
+    console.error('[onlyoffice proxy] upgrade failed', err.message);
+    socket.destroy();
+  });
+});
  
 
 app.use(express.json());
@@ -48,7 +188,18 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 
 const FRONTEND_BUILD_PATH = config.FRONTEND_BUILD_PATH;
-app.use(express.static(FRONTEND_BUILD_PATH));
+app.use(express.static(FRONTEND_BUILD_PATH, {
+  setHeaders: (res, filePath) => {
+    const normalizedPath = String(filePath || '').replace(/\\/g, '/');
+    if (normalizedPath.endsWith('/index.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      return;
+    }
+    if (normalizedPath.includes('/static/js/') || normalizedPath.includes('/static/css/')) {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    }
+  }
+}));
 
 // 데이터 로드
 const membersFilePath = path.join(__dirname, 'data', 'members.json');
@@ -227,6 +378,7 @@ const normalizeApprovedUser = (user = {}) => {
   normalized.globalAccess = !!user.globalAccess;
   normalized.isPasswordEnabled = !!user.isPasswordEnabled;
   normalized.loginPersistenceEnabled = !!user.loginPersistenceEnabled;
+  normalized.password = hashPassword(user.password);
   normalized.activeSessions = getUserActiveSessions(user);
   normalized.activeSessionId = user.activeSessionId || '';
   normalized.activeSessionIssuedAt = user.activeSessionIssuedAt || '';
@@ -250,6 +402,7 @@ const normalizeSignupRequest = (user = {}) => {
   normalized.status = 'PENDING';
   normalized.requestedAt = user.requestedAt || user.createdAt || user.date || nowIso();
   normalized.createdAt = user.createdAt || user.date || nowIso();
+  normalized.password = hashPassword(user.password);
 
   return normalized;
 };
@@ -281,7 +434,7 @@ function loadData() {
           disabled: false,
           globalAccess: true,
           rootPassword: '',
-          masterKey: 'admin1234',
+          masterKey: '',
           role: 'MASTER'
         })
       ];
@@ -416,6 +569,61 @@ const enforceSingleActiveSession = (req, res, next) => {
 
   next();
 };
+
+app.get('/api/auth/desktop-handoff', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  const handoff = consumeDesktopWebSession(req.query.token);
+  if (!handoff) return res.redirect('/login?desktopHandoff=expired');
+
+  try {
+    const devicesFile = path.join(__dirname, 'data', 'linked_devices.json');
+    const devices = JSON.parse(fs.readFileSync(devicesFile, 'utf8'));
+    const device = Array.isArray(devices) ? devices.find(item => item.deviceId === handoff.deviceId) : null;
+    if (!device || device.status === 'revoked' || device.revokedAt) return res.redirect('/login?desktopHandoff=revoked');
+    const deviceOwnerKey = String(device.userUid || device.ownerKey || device.loginId || '');
+    if (![handoff.userUid, handoff.ownerKey, handoff.loginId].filter(Boolean).includes(deviceOwnerKey)) {
+      return res.redirect('/login?desktopHandoff=owner-mismatch');
+    }
+
+    const user = findApprovedUserByAnyId(handoff.userUid || handoff.ownerKey || handoff.loginId);
+    if (!user || user.disabled) return res.redirect('/login?desktopHandoff=disabled');
+    const role = getUserRole(user);
+    const loginId = getUserLoginId(user);
+    const sessionId = generateSessionId();
+    addUserActiveSession(user, {
+      sessionId,
+      deviceId: handoff.deviceId,
+      issuedAt: nowIso(),
+      lastSeenAt: nowIso(),
+      persistent: true,
+      source: 'nas-drive'
+    });
+    saveMembers();
+    const token = jwt.sign({
+      userUid: user.userUid,
+      sessionId,
+      id: loginId,
+      loginId,
+      username: loginId,
+      displayName: user.displayName || loginId,
+      nickname: user.nickname || '',
+      role,
+      Masters: user.Masters,
+      Managers: user.Managers,
+      globalAccess: user.globalAccess,
+      rootPath: user.rootPath,
+      persistent: true,
+      desktopHandoff: true,
+      desktopDeviceId: handoff.deviceId
+    }, JWT_SECRET, { expiresIn: '30d' });
+    res.cookie('token', token, getAuthCookieOptions(req, true));
+    return res.redirect(handoff.next || '/nas');
+  } catch (err) {
+    console.error('[desktop handoff] failed', err.message);
+    return res.redirect('/login?desktopHandoff=failed');
+  }
+});
 
 app.get('/api/auth/session', (req, res) => {
   const token = getTokenFromRequest(req);
@@ -587,10 +795,19 @@ app.get('/api/icons', (req, res) => {
 app.post('/api/login', (req, res) => {
   const { id, password } = req.body;
   const loginId = (id || '').trim();
-  const user = approvedUsers.find(u => getUserLoginId(u) === loginId && u.password === password);
+  const attemptKey = getLoginAttemptKey(req, loginId);
+  const activeAttempt = getActiveLoginAttempt(attemptKey);
+  if (activeAttempt?.count >= LOGIN_MAX_FAILURES) {
+    return res.status(429).json({ error: '로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.' });
+  }
+  const user = approvedUsers.find(u => getUserLoginId(u) === loginId);
 
-  if (!user) return res.status(401).json({ error: '아이디/비번이 틀렸습니다.' });
+  if (!user || !verifyPassword(password, user.password)) {
+    recordLoginFailure(attemptKey);
+    return res.status(401).json({ error: '아이디/비번이 틀렸습니다.' });
+  }
   if (user.disabled) return res.status(403).json({ error: '비활성화된 계정입니다.' });
+  loginAttempts.delete(attemptKey);
 
   // Legacy accounts receive a stable nickname on their first login after migration.
   if (!normalizeNickname(user.nickname)) user.nickname = loginId;
@@ -656,10 +873,20 @@ app.post('/api/login', (req, res) => {
   }, JWT_SECRET, { expiresIn: persistent ? '30d' : '1d' });
 
   res.cookie('token', token, getAuthCookieOptions(req, persistent));
+  const {
+    password: _password,
+    rootPassword: _rootPassword,
+    masterKey: _masterKey,
+    activeSessions: _activeSessions,
+    activeSessionId: _activeSessionId,
+    activeSessionIssuedAt: _activeSessionIssuedAt,
+    activeSessionDeviceId: _activeSessionDeviceId,
+    ...safeUser
+  } = user;
   res.json({
     message: '성공',
     user: {
-      ...user,
+      ...safeUser,
       id: loginIdForToken,
       loginId: loginIdForToken,
       username: loginIdForToken,
@@ -677,7 +904,7 @@ app.post('/api/signup-request', (req, res) => {
 
   if (!loginId) return res.status(400).json({ error: '아이디가 필요합니다.' });
   if (!password) return res.status(400).json({ error: '비밀번호가 필요합니다.' });
-  if (password.length < 4) return res.status(400).json({ error: '비밀번호는 최소 4자 이상이어야 합니다.' });
+  if (password.length < 10) return res.status(400).json({ error: '비밀번호는 최소 10자 이상이어야 합니다.' });
   if (passwordConfirm !== undefined && password !== passwordConfirm) return res.status(400).json({ error: '비밀번호 확인이 일치하지 않습니다.' });
   if (safeNickname.length < 2) return res.status(400).json({ error: '닉네임은 2자 이상 입력해주세요.' });
 
@@ -798,11 +1025,11 @@ app.put('/api/users/update', requireManager, (req, res) => {
 
 // [보안 계정 삭제 & 폴더 백업]
 app.post('/api/users/delete', requireManager, (req, res) => {
-  const { targetId, adminId, adminPassword } = req.body;
-  const admin = findApprovedUserByAnyId(adminId);
+  const { targetId, adminPassword } = req.body;
+  const admin = req.authUser;
   const targetUser = findApprovedUserByAnyId(targetId);
 
-  if (!admin || admin.password !== adminPassword) return res.status(401).json({ error: '비밀번호 불일치' });
+  if (!admin || !verifyPassword(adminPassword, admin.password)) return res.status(401).json({ error: '비밀번호 불일치' });
   if (!targetUser) return res.status(404).json({ error: '삭제 대상 없음' });
 
   const targetLoginId = getUserLoginId(targetUser);
@@ -829,8 +1056,18 @@ app.post('/api/users/delete', requireManager, (req, res) => {
 // 🔐 [보안] 루트 폴더 비밀번호 및 마스터 키 설정
 app.put('/api/users/security-settings', (req, res) => {
   const { id, rootPassword, masterKey, isPasswordEnabled } = req.body;
+  let authUser;
+  try {
+    authUser = getAuthenticatedUserFromRequest(req);
+  } catch (err) {
+    return res.status(401).json({ error: '로그인 필요' });
+  }
+  if (!authUser) return res.status(401).json({ error: '로그인 필요' });
   const user = findApprovedUserByAnyId(id);
   if (!user) return res.status(404).json({ error: '유저 없음' });
+  const authRole = getUserRole(authUser || {});
+  const canManage = authRole === 'MASTER' || authRole === 'MANAGER' || authUser?.Masters || authUser?.Managers;
+  if (!authUser || (!canManage && authUser.userUid !== user.userUid)) return res.status(403).json({ error: '권한 없음' });
 
   if (rootPassword !== undefined) user.rootPassword = rootPassword;
   if (isPasswordEnabled !== undefined) user.isPasswordEnabled = !!isPasswordEnabled;
@@ -843,9 +1080,18 @@ app.put('/api/users/security-settings', (req, res) => {
 // [비밀번호 변경]
 app.put('/api/users/password', (req, res) => {
   const { id, currentPassword, newPassword } = req.body;
+  let authUser;
+  try {
+    authUser = getAuthenticatedUserFromRequest(req);
+  } catch (err) {
+    return res.status(401).json({ error: '로그인 필요' });
+  }
+  if (!authUser) return res.status(401).json({ error: '로그인 필요' });
   const user = findApprovedUserByAnyId(id);
-  if (!user || user.password !== currentPassword) return res.status(401).json({ error: '비밀번호 틀림' });
-  user.password = newPassword;
+  if (!authUser || !user || authUser.userUid !== user.userUid) return res.status(403).json({ error: '본인 계정의 비밀번호만 변경할 수 있습니다.' });
+  if (!user || !verifyPassword(currentPassword, user.password)) return res.status(401).json({ error: '비밀번호 틀림' });
+  if (String(newPassword || '').length < 10) return res.status(400).json({ error: '새 비밀번호는 최소 10자 이상이어야 합니다.' });
+  user.password = hashPassword(newPassword);
   saveMembers();
   res.json({ success: true });
 });

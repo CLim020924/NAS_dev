@@ -86,7 +86,7 @@ const TopBar = ({
   const handlePasswordChange = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) return alert("모든 필드를 입력해주세요.");
     if (newPassword !== confirmPassword) return alert("새 비밀번호가 일치하지 않습니다.");
-    if (newPassword.length < 4) return alert("비밀번호는 최소 4자 이상이어야 합니다.");
+    if (newPassword.length < 10) return alert("비밀번호는 최소 10자 이상이어야 합니다.");
 
     try {
       const res = await axios.put('/api/users/password', {

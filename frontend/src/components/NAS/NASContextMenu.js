@@ -14,11 +14,13 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import LinkIcon from '@mui/icons-material/Link';
+import HistoryIcon from '@mui/icons-material/History';
+import StarIcon from '@mui/icons-material/Star';
 
 const NASContextMenu = ({ 
   contextMenu, handleContextMenuClose, refreshPath, handleCreateFolderStart, 
   handleUploadClick, openFolderWindow, openFileWindow, handleRenameStart, 
-  handleDelete, handleDownload, handleShowProperties, getItemsToProcess,
+  handleDelete, handleDownload, handleShowProperties, handleOpenVersionHistory, handleToggleFavorite, favoritePaths, getItemsToProcess,
   handleCopy, handlePaste, clipboard, handleCreateLinkedDeviceFolder, handleOpenShareDialog
 }) => {
   if (!contextMenu) return null;
@@ -109,6 +111,9 @@ const NASContextMenu = ({
         <MenuItem key="properties" onClick={() => { handleContextMenuClose(); setTimeout(() => handleShowProperties(contextMenu.item), 10); }}>
           <ListItemIcon><InfoIcon fontSize="small" color="info" /></ListItemIcon><ListItemText>폴더 정보</ListItemText>
         </MenuItem>,
+        <MenuItem key="favorite" onClick={() => { handleContextMenuClose(); setTimeout(() => handleToggleFavorite(contextMenu.item), 10); }}>
+          <ListItemIcon><StarIcon fontSize="small" color={favoritePaths?.has('/' + String(contextMenu.item?.fullPath || '').replace(/^\/+/, '')) ? 'warning' : 'action'} /></ListItemIcon><ListItemText>{favoritePaths?.has('/' + String(contextMenu.item?.fullPath || '').replace(/^\/+/, '')) ? '즐겨찾기 해제' : '즐겨찾기 추가'}</ListItemText>
+        </MenuItem>,
         <MenuItem key="copy" onClick={() => { handleContextMenuClose(); setTimeout(() => handleCopy(getItemsToProcess(contextMenu.item)), 10); }}>
           <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon><ListItemText>복사</ListItemText>
         </MenuItem>,
@@ -153,6 +158,12 @@ const NASContextMenu = ({
         </MenuItem>,
         <MenuItem key="properties" onClick={() => { handleContextMenuClose(); setTimeout(() => handleShowProperties(contextMenu.item), 10); }}>
           <ListItemIcon><InfoIcon fontSize="small" color="info" /></ListItemIcon><ListItemText>파일 정보</ListItemText>
+        </MenuItem>,
+        <MenuItem key="versions" onClick={() => { handleContextMenuClose(); setTimeout(() => handleOpenVersionHistory(contextMenu.item), 10); }}>
+          <ListItemIcon><HistoryIcon fontSize="small" color="action" /></ListItemIcon><ListItemText>버전 기록</ListItemText>
+        </MenuItem>,
+        <MenuItem key="favorite" onClick={() => { handleContextMenuClose(); setTimeout(() => handleToggleFavorite(contextMenu.item), 10); }}>
+          <ListItemIcon><StarIcon fontSize="small" color={favoritePaths?.has('/' + String(contextMenu.item?.fullPath || '').replace(/^\/+/, '')) ? 'warning' : 'action'} /></ListItemIcon><ListItemText>{favoritePaths?.has('/' + String(contextMenu.item?.fullPath || '').replace(/^\/+/, '')) ? '즐겨찾기 해제' : '즐겨찾기 추가'}</ListItemText>
         </MenuItem>,
         <Divider key="d3" />,
         <MenuItem key="copy" onClick={() => { handleContextMenuClose(); setTimeout(() => handleCopy(getItemsToProcess(contextMenu.item)), 10); }}>

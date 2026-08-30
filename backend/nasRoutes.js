@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
@@ -7,7 +8,22 @@ const archiver = require('archiver');
 const { exec } = require('child_process');
 const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
+const { pathToFileURL } = require('url');
 const config = require('./config/env');
+const {
+  hashToken,
+  secureHashEquals,
+  hashPairingToken,
+  findPairingIndexByToken,
+  assertRealPathInside,
+  hasConcurrentFileChange,
+  buildConflictFileName
+} = require('./deviceSyncSecurity');
+const {
+  normalizeOfficePath,
+  createOfficeAccessToken,
+  verifyOfficeAccessToken
+} = require('./officeAccessSecurity');
 const {
   NAS_ROOT,
   getLoginId,
@@ -21,6 +37,23 @@ const {
   invalidateUsageCache,
   assertQuotaAvailable
 } = require('./storageQuota');
+const {
+  VERSION_ROOT_DIR,
+  captureFileVersion,
+  listFileVersions,
+  getFileVersion,
+  restoreFileVersion,
+  createDriveRestorePoint,
+  listDriveRestorePoints,
+  restoreDriveFromPoint,
+  appendActivity,
+  listActivity,
+  listFavorites,
+  setFavorite,
+  listRecentFiles
+} = require('./fileVersioning');
+const { verifyPassword } = require('./passwordSecurity');
+const { createDesktopWebSession } = require('./desktopWebSession');
 
 const router = express.Router();
 
@@ -48,24 +81,94 @@ router.use('/files', (req, res, next) => {
 
 const nasPath = NAS_ROOT;
 const JWT_SECRET = config.JWT_SECRET;
+const USER_TRASH_DIR = '.nas_trash';
+const USER_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const canceledSessions = new Set();
+let serverRhwpPromise = null;
+
+const ensureServerRhwp = async () => {
+  if (!serverRhwpPromise) {
+    serverRhwpPromise = (async () => {
+      const corePath = path.join(__dirname, '..', 'frontend', 'node_modules', '@rhwp', 'core', 'rhwp.js');
+      const wasmPath = path.join(__dirname, '..', 'frontend', 'node_modules', '@rhwp', 'core', 'rhwp_bg.wasm');
+      const mod = await import(pathToFileURL(corePath).href);
+      globalThis.measureTextWidth = globalThis.measureTextWidth || ((font, text) => String(text || '').length * 10);
+      await mod.default({ module_or_path: fs.readFileSync(wasmPath) });
+      return mod;
+    })();
+  }
+  return serverRhwpPromise;
+};
 // =========================================================
 // PC 바탕화면 연동 / Device Pairing 기초 구조
 // =========================================================
 const LINKED_DEVICE_META = '.msp-linked-device.json';
 const DEVICE_DATA_DIR = path.join(__dirname, 'data');
-const MEMBERS_FILE = path.join(DEVICE_DATA_DIR, 'members.json');
 const DEVICE_PAIRINGS_FILE = path.join(DEVICE_DATA_DIR, 'device_pairings.json');
 const LINKED_DEVICES_FILE = path.join(DEVICE_DATA_DIR, 'linked_devices.json');
 const UNLINKED_SYNC_ROOTS_FILE = path.join(DEVICE_DATA_DIR, 'unlinked_sync_roots.json');
 const AGENT_INCOMING_ROOT = path.join(nasPath, '.agent_incoming');
+const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
+const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
+const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
+const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+const WINDOWS_AGENT_VERSION = '1.10.11';
+let windowsAgentBuildCache = null;
+const agentMutationWindows = new Map();
+const agentLoginAttempts = new Map();
+const AGENT_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const AGENT_LOGIN_MAX_FAILURES = 5;
+const getActivityActor = (user = {}) => String(user.userUid || user.loginId || user.id || user.username || 'web-user');
+
+const assertAgentMutationAllowed = (device, operation) => {
+  if (device.syncPaused) {
+    const err = new Error('NAS Drive 동기화가 일시 중지되어 있습니다. 웹의 PC 연결 관리에서 다시 시작하세요.');
+    err.status = 423;
+    throw err;
+  }
+  const now = Date.now();
+  const cutoff = now - 60_000;
+  const previous = (agentMutationWindows.get(device.deviceId) || []).filter(event => event.at >= cutoff);
+  previous.push({ at: now, operation });
+  agentMutationWindows.set(device.deviceId, previous);
+  const writes = previous.filter(event => event.operation === 'write').length;
+  const deletes = previous.filter(event => event.operation === 'delete').length;
+  if (writes <= 500 && deletes <= 50) return;
+  const updated = {
+    ...device,
+    syncPaused: true,
+    syncState: 'error',
+    lastError: '비정상적으로 많은 파일 변경을 감지해 데이터 보호를 위해 자동으로 중지했습니다.',
+    pausedAt: new Date().toISOString()
+  };
+  updateLinkedDeviceRecord(updated);
+  const err = new Error(updated.lastError);
+  err.status = 423;
+  throw err;
+};
 
 const createAgentToken = () => {
   return 'agt_' + crypto.randomBytes(32).toString('hex');
 };
 
+const getWindowsAgentBuild = () => {
+  const filePath = path.join(__dirname, 'agents', 'dist', 'NAS-Sync-Agent.exe');
+  if (!fs.existsSync(filePath)) return null;
+  const stat = fs.statSync(filePath);
+  if (!windowsAgentBuildCache || windowsAgentBuildCache.mtimeMs !== stat.mtimeMs || windowsAgentBuildCache.size !== stat.size) {
+    windowsAgentBuildCache = {
+      version: WINDOWS_AGENT_VERSION,
+      filePath,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+    };
+  }
+  return windowsAgentBuildCache;
+};
+
 const hashAgentToken = (token) => {
-  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+  return hashToken(token);
 };
 
 const normalizeAgentRelPath = (relPath) => {
@@ -103,11 +206,36 @@ const getAgentDeviceByToken = (deviceId, agentToken) => {
   const devices = readJsonArrayFile(LINKED_DEVICES_FILE);
   const device = devices.find(d => d.deviceId === deviceId);
 
-  if (!device || !device.agentTokenHash) return null;
-  if (device.agentTokenHash !== hashAgentToken(agentToken)) return null;
+  if (!device || device.status === 'revoked' || device.revokedAt || !device.agentTokenHash) return null;
+  if (!secureHashEquals(device.agentTokenHash, hashAgentToken(agentToken))) return null;
 
   return device;
 };
+
+router.post('/devices/agent/web-session', express.json(), (req, res) => {
+  try {
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const agentToken = String(req.headers['x-agent-token'] || '').trim();
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    const owner = getCurrentDeviceOwner(device);
+    const created = createDesktopWebSession({
+      deviceId: device.deviceId,
+      ownerKey: getDeviceOwnerKey(owner),
+      userUid: owner.userUid,
+      loginId: getUserLoginId(owner),
+      next: req.body?.next
+    });
+    const publicBase = String(config.PUBLIC_BASE_URL || 'https://filemanager-nas.com').replace(/\/$/, '');
+    return res.json({
+      success: true,
+      expiresInMs: created.expiresInMs,
+      openUrl: `${publicBase}/api/auth/desktop-handoff?token=${encodeURIComponent(created.token)}`
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '웹 로그인 주소 생성 실패' });
+  }
+});
 
 const agentUpload = multer({
   storage: multer.diskStorage({
@@ -128,6 +256,25 @@ const agentUpload = multer({
   }
 });
 
+const agentChunkUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      try {
+        if (!fs.existsSync(AGENT_INCOMING_ROOT)) fs.mkdirSync(AGENT_INCOMING_ROOT, { recursive: true });
+        cb(null, AGENT_INCOMING_ROOT);
+      } catch (err) {
+        cb(err);
+      }
+    },
+    filename: (req, file, cb) => {
+      cb(null, Date.now() + '_' + Math.random().toString(36).slice(2) + '.agentchunk');
+    }
+  }),
+  limits: {
+    fileSize: AGENT_MAX_CHUNK_BYTES
+  }
+});
+
 
 const ensureDeviceDataFiles = () => {
   if (!fs.existsSync(DEVICE_DATA_DIR)) fs.mkdirSync(DEVICE_DATA_DIR, { recursive: true });
@@ -140,7 +287,26 @@ const readJsonArrayFile = (filePath) => {
   try {
     ensureDeviceDataFiles();
     const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    return Array.isArray(data) ? data : [];
+    if (!Array.isArray(data)) return [];
+    if (filePath !== DEVICE_PAIRINGS_FILE) return data;
+
+    let changed = false;
+    const sanitized = data.map((row) => {
+      const next = { ...row };
+      if (next.token && !next.tokenHash) {
+        next.tokenHash = hashPairingToken(next.token);
+        next.tokenHint = String(next.token).slice(-8);
+        delete next.token;
+        changed = true;
+      }
+      if (next.userSnapshot) {
+        delete next.userSnapshot;
+        changed = true;
+      }
+      return next;
+    });
+    if (changed) fs.writeFileSync(filePath, JSON.stringify(sanitized, null, 2));
+    return sanitized;
   } catch (err) {
     return [];
   }
@@ -157,35 +323,74 @@ const getDeviceOwnerKey = (user = {}) => {
 
 const getUserLoginId = (user = {}) => getLoginId(user);
 
-const normalizeAgentUser = (user = {}) => {
+const getDeviceUserBasePath = (user = {}) => {
   const loginId = getUserLoginId(user);
-  return {
-    ...user,
-    id: loginId,
-    loginId,
-    username: user.username || loginId,
-    userUid: user.userUid || `usr_${crypto.createHash('sha256').update(loginId).digest('hex').slice(0, 32)}`,
-    displayName: user.displayName || user.nickname || user.username || loginId,
-    rootPath: user.rootPath || path.join('users', loginId)
-  };
+  const relativeRoot = String(user.rootPath || path.join('users', loginId || 'default')).replace(/^(\/|\\)+/, '');
+  return resolveInside(nasPath, relativeRoot);
 };
 
-const readApprovedUsersForAgent = () => {
-  try {
-    const rows = JSON.parse(fs.readFileSync(MEMBERS_FILE, 'utf8'));
-    return Array.isArray(rows) ? rows.map(normalizeAgentUser) : [];
-  } catch (err) {
-    return [];
+const getValidatedDeviceUserPath = (user, requestedPath = '/') => {
+  const basePath = getDeviceUserBasePath(user);
+  const targetPath = resolveInside(basePath, requestedPath);
+  assertRealPathInside(basePath, targetPath);
+  return { basePath, targetPath };
+};
+
+const getCurrentDeviceOwner = (device = {}) => {
+  const owner = findMemberByAnyId({
+    userUid: device.userUid || device.ownerKey,
+    loginId: device.loginId || device.ownerKey,
+    id: device.ownerKey,
+    username: device.ownerKey
+  });
+  if (!owner || owner.disabled) {
+    const err = new Error('장치 소유자 계정이 없거나 비활성화되었습니다.');
+    err.status = 403;
+    throw err;
   }
+  return normalizeQuotaFields(owner);
 };
 
-const findAgentLoginUser = (loginId, password) => {
-  const safeLoginId = String(loginId || '').trim();
-  return readApprovedUsersForAgent().find(user => (
-    getUserLoginId(user) === safeLoginId &&
-    String(user.password || '') === String(password || '') &&
-    !user.disabled
-  ));
+const getDeviceConnectionState = (device = {}) => {
+  if (device.status === 'revoked' || device.revokedAt) return 'revoked';
+  const lastSeenMs = new Date(device.lastSeenAt || 0).getTime();
+  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return 'offline';
+  return Date.now() - lastSeenMs <= 9 * 1000 ? 'online' : 'offline';
+};
+
+const sanitizeDeviceForResponse = (device = {}) => ({
+  deviceId: device.deviceId,
+  deviceName: device.deviceName || device.name || '',
+  osType: device.osType || 'unknown',
+  status: device.status || 'unknown',
+  connectionState: getDeviceConnectionState(device),
+  syncState: device.syncPaused ? 'paused' : (device.syncState || 'unknown'),
+  syncPaused: !!device.syncPaused,
+  lastError: device.lastError || '',
+  syncMode: device.syncMode || 'safe-bidirectional',
+  createdAt: device.createdAt || null,
+  lastSeenAt: device.lastSeenAt || null,
+  revokedAt: device.revokedAt || null,
+  syncRoots: normalizeDeviceSyncRoots(device).map(root => ({
+    syncRootId: root.syncRootId,
+    name: root.name,
+    kind: root.kind || 'folder-sync',
+    localPath: root.localPath || '',
+    linkedNasPath: root.linkedNasPath || '',
+    createdAt: root.createdAt || null,
+    lastSeenAt: root.lastSeenAt || null
+  }))
+});
+
+const emitDeviceStatus = (req, device) => {
+  const io = req?.app?.get?.('io');
+  if (!io || !device) return;
+  const payload = {
+    device: sanitizeDeviceForResponse(device),
+    serverTime: new Date().toISOString()
+  };
+  const roomKeys = new Set([device.userUid, device.ownerKey, device.loginId].filter(Boolean).map(String));
+  for (const key of roomKeys) io.to(`user:${key}`).emit('device:status', payload);
 };
 
 const createPairingToken = () => {
@@ -193,6 +398,29 @@ const createPairingToken = () => {
     return 'pair_' + crypto.randomUUID().replace(/-/g, '');
   }
   return 'pair_' + crypto.randomBytes(16).toString('hex');
+};
+
+const getAgentLoginAttemptKey = (req, loginId) => {
+  const forwarded = String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const sourceIp = forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
+  return `${sourceIp}:${String(loginId || '').toLowerCase()}`;
+};
+
+const getActiveAgentLoginAttempt = (key) => {
+  const current = agentLoginAttempts.get(key);
+  if (!current || current.expiresAt <= Date.now()) {
+    agentLoginAttempts.delete(key);
+    return null;
+  }
+  return current;
+};
+
+const recordAgentLoginFailure = (key) => {
+  const current = getActiveAgentLoginAttempt(key);
+  agentLoginAttempts.set(key, {
+    count: (current?.count || 0) + 1,
+    expiresAt: Date.now() + AGENT_LOGIN_WINDOW_MS
+  });
 };
 
 const createDeviceId = () => {
@@ -244,6 +472,8 @@ const readLinkedDeviceMeta = (folderPath) => {
 
 const writeLinkedDeviceMeta = (device) => {
   if (!device?.absolutePath) return;
+  const personalRoot = normalizeDeviceSyncRoots(device).find(root => root.kind === 'personal-drive');
+  if (personalRoot?.absolutePath && path.resolve(personalRoot.absolutePath) === path.resolve(device.absolutePath)) return;
   if (!fs.existsSync(device.absolutePath)) fs.mkdirSync(device.absolutePath, { recursive: true });
   fs.writeFileSync(path.join(device.absolutePath, LINKED_DEVICE_META), JSON.stringify(device, null, 2));
 };
@@ -262,6 +492,7 @@ const normalizeDeviceSyncRoots = (device = {}) => {
   return [{
     syncRootId: device.syncRootId || 'root_default',
     name: device.syncRootName || device.deviceName || device.name || 'Synced Folder',
+    kind: device.syncMode === 'personal-drive' ? 'personal-drive' : 'folder-sync',
     localPath: device.syncRootPath || device.desktopPath || '',
     linkedNasPath: device.linkedNasPath || '',
     absolutePath: device.absolutePath,
@@ -466,7 +697,7 @@ const migrateLegacyDeviceContentsToSyncRoot = (device = {}) => {
 };
 
 const getActiveLinkedDevice = (device = {}) => {
-  if (!device) return null;
+  if (!device || device.status === 'revoked' || device.revokedAt) return null;
   let current = migrateLegacyDeviceContentsToSyncRoot(device);
   const pruned = pruneMissingSyncRoots(current);
   if (pruned.deviceMissing) {
@@ -478,8 +709,10 @@ const getActiveLinkedDevice = (device = {}) => {
 };
 
 const addSyncRootToDevice = (device, user, localPath, summary = {}) => {
-  const basePath = getUserBasePath(user);
+  const basePath = getDeviceUserBasePath(user);
   const deviceRoot = path.resolve(device.absolutePath);
+  resolveInside(basePath, path.relative(basePath, deviceRoot));
+  assertRealPathInside(basePath, deviceRoot);
   const hasExplicitRoots = Array.isArray(device.syncRoots);
   const hasLegacyContents = !hasExplicitRoots && fs.existsSync(deviceRoot)
     ? fs.readdirSync(deviceRoot).some(name => name !== LINKED_DEVICE_META)
@@ -524,8 +757,76 @@ const addSyncRootToDevice = (device, user, localPath, summary = {}) => {
   return { device: updated, syncRoot, alreadyLinked: false };
 };
 
+const ensurePersonalDriveRoot = (device, user, localPath) => {
+  const basePath = getDeviceUserBasePath(user);
+  if (!fs.existsSync(basePath)) fs.mkdirSync(basePath, { recursive: true });
+  assertRealPathInside(basePath, basePath);
+  const roots = normalizeDeviceSyncRoots(device);
+  const existing = roots.find(root => root.kind === 'personal-drive');
+  const loginId = getUserLoginId(user) || '개인';
+  const now = new Date().toISOString();
+  const syncRoot = existing ? {
+    ...existing,
+    localPath: localPath || existing.localPath || '',
+    absolutePath: basePath,
+    linkedNasPath: '',
+    kind: 'personal-drive',
+    lastSeenAt: now
+  } : {
+    syncRootId: createSyncRootId(),
+    name: `NAS Drive - ${loginId}`,
+    kind: 'personal-drive',
+    localPath: localPath || '',
+    linkedNasPath: '',
+    absolutePath: basePath,
+    createdAt: now,
+    lastSeenAt: now,
+    fileCount: 0,
+    folderCount: 0,
+    sizeBytes: 0
+  };
+  const nextRoots = roots.filter(root => root.syncRootId !== syncRoot.syncRootId && root.kind !== 'personal-drive');
+  const updated = {
+    ...device,
+    syncMode: 'personal-drive',
+    direction: 'bidirectional',
+    deletePolicy: 'trash-first',
+    conflictPolicy: 'keep-conflict-copy',
+    syncRoots: [...nextRoots, syncRoot],
+    status: 'connected',
+    lastSeenAt: now
+  };
+  updateLinkedDeviceRecord(updated);
+  return { device: updated, syncRoot, alreadyLinked: !!existing };
+};
+
+const createPersonalDriveDevice = (user, deviceInfo = {}) => {
+  const basePath = getDeviceUserBasePath(user);
+  if (!fs.existsSync(basePath)) fs.mkdirSync(basePath, { recursive: true });
+  const now = new Date().toISOString();
+  return {
+    deviceId: deviceInfo.deviceId || createDeviceId(),
+    deviceName: sanitizeDeviceFolderName(deviceInfo.deviceName || 'Windows-PC'),
+    originalDeviceName: deviceInfo.deviceName || 'Windows-PC',
+    osType: deviceInfo.osType || 'windows',
+    ownerKey: getDeviceOwnerKey(user),
+    userUid: user.userUid || '',
+    loginId: getUserLoginId(user),
+    linkedNasPath: '',
+    absolutePath: basePath,
+    syncMode: 'personal-drive',
+    direction: 'bidirectional',
+    deletePolicy: 'trash-first',
+    conflictPolicy: 'keep-conflict-copy',
+    status: 'connected',
+    createdAt: now,
+    lastSeenAt: now,
+    syncRoots: []
+  };
+};
+
 const createLinkedDeviceFolder = (user, parentReqPath, deviceInfo = {}) => {
-  const { basePath, targetPath: parentDir } = getValidatedPath(user, parentReqPath || '/');
+  const { basePath, targetPath: parentDir } = getValidatedDeviceUserPath(user, parentReqPath || '/');
 
   if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
   if (!fs.statSync(parentDir).isDirectory()) {
@@ -738,32 +1039,6 @@ const chunkUpload = multer({
 
 
 const verifyToken = (req, res, next) => {
-  if (req.query.oosecret === 'nas_office_2026') {
-    const isActuallyAdmin = req.query.officeAdmin === 'true';
-    const officeLoginId = req.query.officeUid || 'office';
-    const latestOfficeUser = findMemberByAnyId({
-      userUid: officeLoginId,
-      loginId: officeLoginId,
-      id: officeLoginId,
-      username: officeLoginId
-    });
-    req.user = normalizeQuotaFields(latestOfficeUser || {
-      id: officeLoginId,
-      loginId: officeLoginId,
-      userUid: officeLoginId,
-      Masters: isActuallyAdmin,
-      Managers: false,
-      role: isActuallyAdmin ? 'MASTER' : 'USER',
-      globalAccess: isActuallyAdmin,
-      rootPath: isActuallyAdmin ? '' : decodeURIComponent(req.query.officeRoot || '')
-    });
-    if (isActuallyAdmin) {
-      req.user.Masters = true;
-      req.user.globalAccess = true;
-      req.user.role = 'MASTER';
-    }
-    return next();
-  }
   const token = req.cookies.token;
   if (!token) return res.status(401).json({ error: '???? ?????.' });
   try {
@@ -786,48 +1061,64 @@ const getValidatedPath = (user, requestedPath) => {
 const getUserBasePath = (user) => getAccessBasePath(normalizeQuotaFields(user || {}));
 
 const getOnlyOfficeUser = (req) => {
-  if (req.query.oosecret !== 'nas_office_2026') {
-    const err = new Error('invalid onlyoffice secret');
+  const access = verifyOfficeAccessToken(JWT_SECRET, req.query.officeToken);
+  const latestOfficeUser = findMemberByAnyId({
+    userUid: access.userUid,
+    loginId: access.loginId,
+    id: access.loginId,
+    username: access.loginId
+  });
+  if (!latestOfficeUser || latestOfficeUser.disabled) {
+    const err = new Error('onlyoffice account is missing or disabled');
     err.status = 401;
     throw err;
   }
-
-  const isActuallyAdmin = req.query.officeAdmin === 'true';
-  const officeLoginId = String(req.query.officeUid || req.query.uid || 'office');
-  const latestOfficeUser = findMemberByAnyId({
-    userUid: officeLoginId,
-    loginId: officeLoginId,
-    id: officeLoginId,
-    username: officeLoginId
-  });
-
-  const officeUser = normalizeQuotaFields(latestOfficeUser || {
-    id: officeLoginId,
-    loginId: officeLoginId,
-    userUid: officeLoginId,
-    Masters: isActuallyAdmin,
-    Managers: false,
-    role: isActuallyAdmin ? 'MASTER' : 'USER',
-    globalAccess: isActuallyAdmin,
-    rootPath: isActuallyAdmin ? '' : decodeURIComponent(req.query.officeRoot || '')
-  });
-
-  if (isActuallyAdmin) {
-    officeUser.Masters = true;
-    officeUser.globalAccess = true;
-    officeUser.role = 'MASTER';
-  }
-
-  return officeUser;
+  req.officeAccess = access;
+  return normalizeQuotaFields(latestOfficeUser);
 };
 
-router.get('/onlyoffice/file', (req, res) => {
+router.post('/onlyoffice/access', verifyToken, (req, res) => {
+  try {
+    const requestedPath = normalizeOfficePath(req.body?.path);
+    const { targetPath } = getValidatedPath(req.user, requestedPath);
+    if (!fs.existsSync(targetPath)) {
+      return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+    }
+    const fileStat = fs.statSync(targetPath);
+    if (!fileStat.isFile()) {
+      return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+    }
+    const token = createOfficeAccessToken(JWT_SECRET, req.user, requestedPath);
+    const documentKey = crypto
+      .createHash('sha256')
+      .update(`${requestedPath}\0${fileStat.size}\0${Math.trunc(fileStat.mtimeMs)}`)
+      .digest('base64url')
+      .slice(0, 40);
+    return res.json({
+      success: true,
+      token,
+      documentKey,
+      fileRevision: {
+        size: fileStat.size,
+        mtimeMs: Math.trunc(fileStat.mtimeMs)
+      },
+      expiresInSeconds: 12 * 60 * 60
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'OnlyOffice 접근 토큰 발급 실패' });
+  }
+});
+
+router.get(['/onlyoffice/file', '/onlyoffice/file/:fileName'], (req, res) => {
   try {
     const officeUser = getOnlyOfficeUser(req);
     const basePath = getAccessBasePath(officeUser);
     const requestedPath = req.query.path64
       ? Buffer.from(String(req.query.path64), 'base64url').toString('utf8')
       : (req.query.path || '');
+    if (normalizeOfficePath(requestedPath) !== req.officeAccess.path) {
+      return res.status(403).send('onlyoffice token path mismatch');
+    }
     const targetPath = resolveInside(basePath, requestedPath);
     if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
       return res.status(404).send('file not found');
@@ -863,6 +1154,9 @@ const SEARCH_MAX_RESULTS = 200;
 const SEARCH_MAX_VISITED = 60000;
 const SEARCH_SKIP_NAMES = new Set([
   '.agent_incoming',
+  '.agent_trash',
+  VERSION_ROOT_DIR,
+  USER_TRASH_DIR,
   '.msp_chunk_uploads',
   '.msp_chunk_canceled'
 ]);
@@ -995,16 +1289,12 @@ const upload = multer({ storage: multer.diskStorage({
     if (sessionId && canceledSessions.has(sessionId)) {
       return cb(new Error('CANCELED_SESSION')); // 🛑 Nginx가 보내는 좀비 파일 원천 차단!
     }
-    try { 
-      const targetDir = getValidatedPath(req.user, req.body.path || req.query.path, req.headers['x-nas-password']).targetPath;
-      // 🔥 [폴더 자동 생성] 경로가 없으면 하위 폴더까지 싹 다 생성
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-      cb(null, targetDir); 
+    try {
+      fs.mkdirSync(WEB_INCOMING_ROOT, { recursive: true });
+      cb(null, WEB_INCOMING_ROOT);
     } catch(e){ cb(e); }
   },
-  filename: (req, file, cb) => cb(null, Buffer.from(file.originalname, 'latin1').toString('utf8'))
+  filename: (req, file, cb) => cb(null, `${Date.now()}_${crypto.randomBytes(10).toString('hex')}.webupload`)
 })});
 
 // [1] 파일 목록 조회
@@ -1017,7 +1307,7 @@ router.get('/files', verifyToken, (req, res) => {
     if (currentLinkedMeta) migrateLegacyDeviceContentsToSyncRoot(currentLinkedMeta);
     const ownerKey = getDeviceOwnerKey(req.user);
     const items = fs.readdirSync(targetPath).map(item => {
-      if (item === LINKED_DEVICE_META) return null;
+      if (item === LINKED_DEVICE_META || SEARCH_SKIP_NAMES.has(item)) return null;
 
       const full = path.join(targetPath, item);
 
@@ -1057,14 +1347,28 @@ router.post('/file', verifyToken, upload.single('file'), (req, res) => {
   if (req.file) {
     (async () => {
       try {
-        invalidateUsageCache(req.file.path);
-        const summary = await getUserStorageSummary(req.user);
-        if (summary.quotaMode === 'limited' && summary.usedBytes > summary.quotaBytes) {
+        const fileName = sanitizeUploadFileName(Buffer.from(req.file.originalname, 'latin1').toString('utf8'));
+        if (!fileName) {
           safeRmSync(req.file.path);
-          invalidateUsageCache(req.file.path);
-          return res.status(413).json({ error: `저장공간이 부족합니다. 기본 할당량은 ${Math.round(summary.quotaBytes / 1024 / 1024 / 1024)}GB입니다.` });
+          return res.status(400).json({ error: '올바른 파일 이름이 필요합니다.' });
         }
-        return res.json({ success: true });
+        const folderPath = req.body.path || req.query.path || '/';
+        const { basePath, targetPath: targetDir } = getValidatedPath(req.user, folderPath, req.headers['x-nas-password']);
+        const finalPath = resolveInside(targetDir, fileName);
+        assertRealPathInside(basePath, path.dirname(finalPath));
+        if (fs.existsSync(finalPath) && !fs.statSync(finalPath).isFile()) {
+          safeRmSync(req.file.path);
+          return res.status(409).json({ error: '같은 이름의 폴더가 이미 있습니다.' });
+        }
+        await assertQuotaAvailable(req.user, req.file.size, finalPath);
+        const previousVersion = fs.existsSync(finalPath)
+          ? captureFileVersion(basePath, finalPath, { source: 'web-upload', actor: getActivityActor(req.user), reason: 'overwrite' })
+          : null;
+        fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+        fs.renameSync(req.file.path, finalPath);
+        invalidateUsageCache(finalPath);
+        appendActivity(basePath, { type: previousVersion ? 'file-updated' : 'file-created', path: toNasRelativePath(basePath, finalPath), actor: getActivityActor(req.user), source: 'web-upload' });
+        return res.json({ success: true, versionId: previousVersion?.versionId || null });
       } catch (e) {
         safeRmSync(req.file.path);
         return res.status(e.status || 500).json({ error: e.message || '저장공간 제한을 확인하지 못했습니다.' });
@@ -1073,14 +1377,135 @@ router.post('/file', verifyToken, upload.single('file'), (req, res) => {
     return;
   }
   try {
-    const { targetPath } = getValidatedPath(req.user, path.join(req.body.path || '', req.body.folderName), req.headers['x-nas-password']);
+    const { basePath, targetPath } = getValidatedPath(req.user, path.join(req.body.path || '', req.body.folderName), req.headers['x-nas-password']);
     if (!fs.existsSync(targetPath)) fs.mkdirSync(targetPath, { recursive: true });
     invalidateUsageCache(targetPath);
+    appendActivity(basePath, { type: 'folder-created', path: toNasRelativePath(basePath, targetPath), actor: getActivityActor(req.user), source: 'web' });
     res.json({ success: true });
   } catch (e) { res.status(403).json({ error: e.message }); }
 });
 
-// [3] 파일/폴더 삭제 (🚨 강력한 보호막 적용 완료)
+const getUserTrashRoot = (basePath) => path.join(basePath, USER_TRASH_DIR);
+
+const cleanupExpiredUserTrash = (basePath) => {
+  const trashRoot = getUserTrashRoot(basePath);
+  if (!fs.existsSync(trashRoot)) return;
+  const cutoff = Date.now() - USER_TRASH_RETENTION_MS;
+  for (const entry of fs.readdirSync(trashRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^[a-f0-9-]{20,80}$/i.test(entry.name)) continue;
+    const dir = path.join(trashRoot, entry.name);
+    try {
+      const metaPath = path.join(dir, 'meta.json');
+      const meta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8')) : {};
+      const deletedAt = Date.parse(meta.deletedAt || 0) || fs.statSync(dir).mtimeMs;
+      if (deletedAt < cutoff) fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+};
+
+const moveToUserTrash = (basePath, targetPath, requestPath) => {
+  const trashRoot = getUserTrashRoot(basePath);
+  const relative = path.relative(basePath, targetPath).replace(/\\/g, '/');
+  if (!relative || relative === USER_TRASH_DIR || relative.startsWith(USER_TRASH_DIR + '/')) {
+    const err = new Error('휴지통 자체는 일반 삭제할 수 없습니다.');
+    err.status = 400;
+    throw err;
+  }
+  cleanupExpiredUserTrash(basePath);
+  fs.mkdirSync(trashRoot, { recursive: true });
+  const trashId = `${Date.now().toString(16)}-${crypto.randomBytes(10).toString('hex')}`;
+  const itemRoot = path.join(trashRoot, trashId);
+  const contentPath = path.join(itemRoot, 'content');
+  fs.mkdirSync(itemRoot, { recursive: true });
+  fs.renameSync(targetPath, contentPath);
+  const stat = fs.statSync(contentPath);
+  fs.writeFileSync(path.join(itemRoot, 'meta.json'), JSON.stringify({
+    trashId,
+    originalPath: requestPath.startsWith('/') ? requestPath : `/${requestPath}`,
+    originalRelativePath: relative,
+    name: path.basename(targetPath),
+    type: stat.isDirectory() ? 'folder' : 'file',
+    size: stat.isFile() ? stat.size : null,
+    deletedAt: new Date().toISOString()
+  }, null, 2), 'utf8');
+  invalidateUsageCache(targetPath);
+  invalidateUsageCache(trashRoot);
+  return { trashId, deletedAt: new Date().toISOString() };
+};
+
+const readUserTrashItem = (basePath, trashIdValue) => {
+  const trashId = String(trashIdValue || '');
+  if (!/^[a-f0-9-]{20,80}$/i.test(trashId)) throw Object.assign(new Error('잘못된 휴지통 항목입니다.'), { status: 400 });
+  const trashRoot = getUserTrashRoot(basePath);
+  const itemRoot = path.resolve(trashRoot, trashId);
+  if (!itemRoot.startsWith(path.resolve(trashRoot) + path.sep)) throw Object.assign(new Error('잘못된 휴지통 경로입니다.'), { status: 400 });
+  const metaPath = path.join(itemRoot, 'meta.json');
+  const contentPath = path.join(itemRoot, 'content');
+  if (!fs.existsSync(metaPath) || !fs.existsSync(contentPath)) throw Object.assign(new Error('휴지통 항목을 찾을 수 없습니다.'), { status: 404 });
+  return { trashId, itemRoot, contentPath, meta: JSON.parse(fs.readFileSync(metaPath, 'utf8')) };
+};
+
+const restoreUserTrashItem = (basePath, trashId) => {
+  const item = readUserTrashItem(basePath, trashId);
+  const requestedTarget = resolveInside(basePath, item.meta.originalRelativePath);
+  let restoreTarget = requestedTarget;
+  if (fs.existsSync(restoreTarget)) {
+    const parsed = path.parse(restoreTarget);
+    let attempt = 1;
+    do {
+      restoreTarget = path.join(parsed.dir, `${parsed.name} (복원됨 ${attempt})${parsed.ext}`);
+      attempt += 1;
+    } while (fs.existsSync(restoreTarget));
+  }
+  assertRealPathInside(basePath, path.dirname(restoreTarget));
+  fs.mkdirSync(path.dirname(restoreTarget), { recursive: true });
+  fs.renameSync(item.contentPath, restoreTarget);
+  fs.rmSync(item.itemRoot, { recursive: true, force: true });
+  invalidateUsageCache(restoreTarget);
+  return restoreTarget;
+};
+
+router.get('/trash', verifyToken, (req, res) => {
+  try {
+    const { basePath } = getValidatedPath(req.user, '/');
+    cleanupExpiredUserTrash(basePath);
+    const trashRoot = getUserTrashRoot(basePath);
+    if (!fs.existsSync(trashRoot)) return res.json({ success: true, items: [], retentionDays: 30 });
+    const items = fs.readdirSync(trashRoot, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => {
+      try { return readUserTrashItem(basePath, entry.name).meta; } catch { return null; }
+    }).filter(Boolean).sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+    return res.json({ success: true, items, retentionDays: 30 });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '휴지통을 불러오지 못했습니다.' });
+  }
+});
+
+router.post('/trash/:trashId/restore', verifyToken, express.json(), (req, res) => {
+  try {
+    const { basePath } = getValidatedPath(req.user, '/');
+    const restoreTarget = restoreUserTrashItem(basePath, req.params.trashId);
+    appendActivity(basePath, { type: 'trash-restored', path: toNasRelativePath(basePath, restoreTarget), actor: getActivityActor(req.user), source: 'web' });
+    return res.json({ success: true, path: toNasRelativePath(basePath, restoreTarget) });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '휴지통 항목을 복원하지 못했습니다.' });
+  }
+});
+
+router.delete('/trash/:trashId', verifyToken, (req, res) => {
+  try {
+    const { basePath } = getValidatedPath(req.user, '/');
+    const item = readUserTrashItem(basePath, req.params.trashId);
+    const deletedPath = item.meta.originalPath || item.meta.originalRelativePath || item.meta.name;
+    fs.rmSync(item.itemRoot, { recursive: true, force: true });
+    invalidateUsageCache(getUserTrashRoot(basePath));
+    appendActivity(basePath, { type: 'trash-permanently-deleted', path: deletedPath, actor: getActivityActor(req.user), source: 'web' });
+    return res.json({ success: true, permanentlyDeleted: true });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '휴지통 항목을 삭제하지 못했습니다.' });
+  }
+});
+
+// [3] 파일/폴더 삭제: 즉시 영구 삭제하지 않고 계정별 30일 휴지통으로 이동한다.
 router.delete('/file', verifyToken, (req, res) => {
   try {
     const requestPath = req.query.path || (req.body && req.body.path);
@@ -1110,17 +1535,139 @@ router.delete('/file', verifyToken, (req, res) => {
     cleanupLinkedDeviceDeletion(targetPath);
 
     if (fs.existsSync(targetPath)) {
-      fs.rmSync(targetPath, { recursive: true, force: true });
-      invalidateUsageCache(targetPath);
+      const trash = moveToUserTrash(basePath, targetPath, requestPath);
+      appendActivity(basePath, { type: 'moved-to-trash', path: requestPath, trashId: trash.trashId, actor: getActivityActor(req.user), source: 'web' });
+      return res.json({ success: true, trashed: true, ...trash });
     }
-    res.json({ success: true });
+    res.json({ success: true, missing: true });
   } catch (e) { res.status(403).json({ error: e.message }); }
+});
+
+router.get('/file/versions', verifyToken, (req, res) => {
+  try {
+    const { basePath, targetPath } = getValidatedPath(req.user, req.query.path, req.headers['x-nas-password']);
+    const versions = listFileVersions(basePath, targetPath);
+    return res.json({ success: true, path: toNasRelativePath(basePath, targetPath), retentionDays: 30, maxVersions: 100, versions });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '파일 버전 기록을 불러오지 못했습니다.' });
+  }
+});
+
+router.get('/file/versions/:versionId/download', verifyToken, (req, res) => {
+  try {
+    const { basePath, targetPath } = getValidatedPath(req.user, req.query.path, req.headers['x-nas-password']);
+    const version = getFileVersion(basePath, targetPath, req.params.versionId);
+    return res.download(version.contentPath, version.meta.name || path.basename(targetPath));
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '파일 버전을 다운로드하지 못했습니다.' });
+  }
+});
+
+router.post('/file/versions/:versionId/restore', verifyToken, express.json(), async (req, res) => {
+  try {
+    const { basePath, targetPath } = getValidatedPath(req.user, req.body?.path, req.headers['x-nas-password']);
+    const version = getFileVersion(basePath, targetPath, req.params.versionId);
+    await assertQuotaAvailable(req.user, Number(version.meta.size || 0), targetPath);
+    const restored = restoreFileVersion(basePath, targetPath, req.params.versionId, { actor: getActivityActor(req.user), source: 'web' });
+    invalidateUsageCache(targetPath);
+    return res.json({ success: true, path: toNasRelativePath(basePath, targetPath), restoredVersion: restored });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '파일 버전을 복원하지 못했습니다.' });
+  }
+});
+
+router.get('/drive/restore-points', verifyToken, (req, res) => {
+  try {
+    const basePath = getDeviceUserBasePath(req.user);
+    fs.mkdirSync(basePath, { recursive: true });
+    assertRealPathInside(basePath, basePath);
+    return res.json({ success: true, retentionDays: 30, restorePoints: listDriveRestorePoints(basePath) });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '드라이브 복구 지점을 불러오지 못했습니다.' });
+  }
+});
+
+router.post('/drive/restore-points', verifyToken, express.json(), (req, res) => {
+  try {
+    const basePath = getDeviceUserBasePath(req.user);
+    fs.mkdirSync(basePath, { recursive: true });
+    assertRealPathInside(basePath, basePath);
+    const restorePoint = createDriveRestorePoint(basePath, {
+      label: req.body?.label || '사용자 복구 지점',
+      source: 'web',
+      actor: getActivityActor(req.user)
+    });
+    invalidateUsageCache(basePath);
+    return res.json({ success: true, restorePoint });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '드라이브 복구 지점을 만들지 못했습니다.' });
+  }
+});
+
+router.post('/drive/restore-points/:restorePointId/restore', verifyToken, express.json(), (req, res) => {
+  try {
+    if (req.body?.confirmation !== 'RESTORE_DRIVE') {
+      return res.status(400).json({ error: '전체 드라이브 복원 확인 값이 필요합니다.' });
+    }
+    const basePath = getDeviceUserBasePath(req.user);
+    fs.mkdirSync(basePath, { recursive: true });
+    assertRealPathInside(basePath, basePath);
+    const result = restoreDriveFromPoint(basePath, req.params.restorePointId, { actor: getActivityActor(req.user) });
+    invalidateUsageCache(basePath);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '드라이브를 복원하지 못했습니다.' });
+  }
+});
+
+router.get('/activity', verifyToken, (req, res) => {
+  try {
+    const basePath = getDeviceUserBasePath(req.user);
+    fs.mkdirSync(basePath, { recursive: true });
+    assertRealPathInside(basePath, basePath);
+    return res.json({ success: true, activities: listActivity(basePath, req.query.limit) });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '활동 기록을 불러오지 못했습니다.' });
+  }
+});
+
+router.get('/favorites', verifyToken, (req, res) => {
+  try {
+    const basePath = getDeviceUserBasePath(req.user);
+    fs.mkdirSync(basePath, { recursive: true });
+    assertRealPathInside(basePath, basePath);
+    return res.json({ success: true, items: listFavorites(basePath) });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '즐겨찾기를 불러오지 못했습니다.' });
+  }
+});
+
+router.put('/favorites', verifyToken, express.json(), (req, res) => {
+  try {
+    const { basePath, targetPath } = getValidatedDeviceUserPath(req.user, req.body?.path);
+    const result = setFavorite(basePath, targetPath, req.body?.favorite !== false);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '즐겨찾기를 변경하지 못했습니다.' });
+  }
+});
+
+router.get('/recent', verifyToken, (req, res) => {
+  try {
+    const basePath = getDeviceUserBasePath(req.user);
+    fs.mkdirSync(basePath, { recursive: true });
+    assertRealPathInside(basePath, basePath);
+    return res.json({ success: true, ...listRecentFiles(basePath, req.query.limit) });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '최근 파일을 불러오지 못했습니다.' });
+  }
 });
 
 // [4] 단일 파일 다운로드
 router.get('/file/download', verifyToken, (req, res) => {
   try { 
-    const { targetPath } = getValidatedPath(req.user, req.query.path, req.headers['x-nas-password']);
+    const { basePath, targetPath } = getValidatedPath(req.user, req.query.path, req.headers['x-nas-password']);
+    appendActivity(basePath, { type: req.query.inline === 'true' ? 'file-opened' : 'file-downloaded', path: toNasRelativePath(basePath, targetPath), actor: getActivityActor(req.user), source: 'web' });
     if (req.query.inline === 'true') {
       res.sendFile(targetPath); // 브라우저 자체 뷰어로 열기 (모바일 43페이지 스크롤 가능!)
     } else {
@@ -1128,6 +1675,39 @@ router.get('/file/download', verifyToken, (req, res) => {
     }
   } 
   catch(e){ res.status(403).send(); }
+});
+
+router.get('/hwp/render', verifyToken, async (req, res) => {
+  try {
+    const { targetPath } = getValidatedPath(req.user, req.query.path, req.headers['x-nas-password']);
+    const ext = path.extname(targetPath).toLowerCase();
+    if (!['.hwp', '.hwpx'].includes(ext)) {
+      return res.status(400).json({ error: '지원하지 않는 한글 문서 형식입니다.' });
+    }
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+      return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+    }
+
+    const { HwpDocument } = await ensureServerRhwp();
+    const bytes = fs.readFileSync(targetPath);
+    const doc = new HwpDocument(new Uint8Array(bytes));
+    const pageCount = Math.max(0, Number(doc.pageCount?.() || 0));
+    const pages = [];
+    for (let index = 0; index < pageCount; index += 1) {
+      pages.push(doc.renderPageSvg(index));
+    }
+
+    return res.json({
+      success: true,
+      fileName: path.basename(targetPath),
+      size: bytes.length,
+      pageCount,
+      pages
+    });
+  } catch (e) {
+    console.error('[RHWP] server render failed', e);
+    return res.status(e.status || 500).json({ error: e.message || '한글 문서를 렌더링하지 못했습니다.' });
+  }
 });
 
 // [5] 파일/폴더 복사 (Ctrl+C / Ctrl+V)
@@ -1138,7 +1718,7 @@ router.post('/file/copy', verifyToken, async (req, res) => {
 
     let destReqPath = destinationFolder;
     if (!destReqPath || destReqPath === 'undefined') destReqPath = '/';
-    const { targetPath: destDir } = getValidatedPath(req.user, destReqPath);
+    const { basePath, targetPath: destDir } = getValidatedPath(req.user, destReqPath);
 
     if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
@@ -1168,6 +1748,7 @@ router.post('/file/copy', verifyToken, async (req, res) => {
     preparedCopies.forEach(({ srcPath, finalDest }) => {
       fs.cpSync(srcPath, finalDest, { recursive: true });
       invalidateUsageCache(finalDest);
+      appendActivity(basePath, { type: 'item-copied', path: toNasRelativePath(basePath, finalDest), actor: getActivityActor(req.user), source: 'web' });
     });
     res.json({ message: '복사 완료' });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1329,7 +1910,7 @@ router.put('/file', verifyToken, (req, res) => {
     const { oldPath, newPath } = req.body;
     if (!oldPath || !newPath) return res.status(400).json({ error: '경로가 누락되었습니다.' });
 
-    const { targetPath: fullOldPath } = getValidatedPath(req.user, oldPath);
+    const { basePath, targetPath: fullOldPath } = getValidatedPath(req.user, oldPath);
     const { targetPath: fullNewPath } = getValidatedPath(req.user, newPath);
     const fixedFolders = ensureFixedSystemFolders(req.user);
     const fs = require('fs');
@@ -1349,6 +1930,7 @@ router.put('/file', verifyToken, (req, res) => {
       fs.renameSync(fullOldPath, fullNewPath);
       invalidateUsageCache(fullOldPath);
       invalidateUsageCache(fullNewPath);
+      appendActivity(basePath, { type: 'item-moved', path: toNasRelativePath(basePath, fullNewPath), previousPath: toNasRelativePath(basePath, fullOldPath), actor: getActivityActor(req.user), source: 'web' });
     }
     res.json({ success: true });
   } catch (err) {
@@ -1360,9 +1942,17 @@ router.put('/file', verifyToken, (req, res) => {
 // 🔥 [복구] ONLYOFFICE 저장 콜백 API (문서 편집 후 저장 담당)
 router.post('/onlyoffice/callback', async (req, res) => {
   const { status, url } = req.body;
-  const relPath = req.query.path;
-  const uid = req.query.uid;
-  const isAdmin = req.query.isAdmin === 'true';
+  let officeAccess;
+  try {
+    officeAccess = verifyOfficeAccessToken(JWT_SECRET, req.query.officeToken);
+  } catch (err) {
+    return res.status(401).json({ error: 1, message: 'invalid onlyoffice callback token' });
+  }
+  const relPath = normalizeOfficePath(req.query.path);
+  if (relPath !== officeAccess.path) {
+    return res.status(403).json({ error: 1, message: 'onlyoffice callback path mismatch' });
+  }
+  const uid = officeAccess.userUid || officeAccess.loginId;
 
   if (status === 2 || status === 6) { 
     try {
@@ -1371,14 +1961,16 @@ router.post('/onlyoffice/callback', async (req, res) => {
       const fs = require('fs');
       const path = require('path');
       
-      const officeUser = normalizeQuotaFields(findMemberByAnyId({ loginId: uid, id: uid, username: uid }) || {
-        id: uid || 'office',
-        loginId: uid || 'office',
-        username: uid || 'office',
-        role: isAdmin ? 'MASTER' : 'USER',
-        Masters: isAdmin,
-        globalAccess: isAdmin
+      const latestOfficeUser = findMemberByAnyId({
+        userUid: officeAccess.userUid,
+        loginId: officeAccess.loginId,
+        id: officeAccess.loginId,
+        username: officeAccess.loginId
       });
+      if (!latestOfficeUser || latestOfficeUser.disabled) {
+        return res.status(401).json({ error: 1, message: 'onlyoffice account is missing or disabled' });
+      }
+      const officeUser = normalizeQuotaFields(latestOfficeUser);
       const basePath = getAccessBasePath(officeUser);
       const absoluteFilePath = resolveInside(basePath, relPath || '');
       const parentDir = path.dirname(absoluteFilePath);
@@ -1388,12 +1980,17 @@ router.post('/onlyoffice/callback', async (req, res) => {
         status,
         relPath,
         uid,
-        isAdmin,
+        isAdmin: !!(officeUser.Masters || officeUser.Managers || officeUser.globalAccess),
         target: absoluteFilePath,
         downloadUrl: url
       });
 
-      const response = await axios.get(url, {
+      const downloadUrl = String(url || '').replace(
+        /^https?:\/\/(?:www\.)?filemanager-nas\.com\/cache\//i,
+        'http://127.0.0.1:8080/cache/'
+      );
+
+      const response = await axios.get(downloadUrl, {
         responseType: 'stream',
         timeout: 120000,
         maxRedirects: 5,
@@ -1401,14 +1998,28 @@ router.post('/onlyoffice/callback', async (req, res) => {
       });
       const contentLength = Number(response.headers['content-length'] || 0);
       if (contentLength > 0) await assertQuotaAvailable(officeUser, contentLength, absoluteFilePath);
-      const writer = fs.createWriteStream(absoluteFilePath);
+      fs.mkdirSync(WEB_INCOMING_ROOT, { recursive: true });
+      const officeIncomingPath = path.join(WEB_INCOMING_ROOT, `${Date.now()}_${crypto.randomBytes(10).toString('hex')}.office`);
+      const writer = fs.createWriteStream(officeIncomingPath);
       response.data.pipe(writer);
       
       writer.on('finish', () => {
-        invalidateUsageCache(absoluteFilePath);
-        res.json({ error: 0 });
+        try {
+          const previousVersion = fs.existsSync(absoluteFilePath) && fs.statSync(absoluteFilePath).isFile()
+            ? captureFileVersion(basePath, absoluteFilePath, { source: 'onlyoffice', actor: getActivityActor(officeUser), reason: 'office-save' })
+            : null;
+          fs.renameSync(officeIncomingPath, absoluteFilePath);
+          invalidateUsageCache(absoluteFilePath);
+          appendActivity(basePath, { type: previousVersion ? 'file-updated' : 'file-created', path: `/${relPath}`, versionId: previousVersion?.versionId || undefined, actor: getActivityActor(officeUser), source: 'onlyoffice' });
+          res.json({ error: 0 });
+        } catch (finishError) {
+          safeRmSync(officeIncomingPath);
+          console.error('[onlyoffice callback] atomic commit failed', finishError);
+          res.json({ error: 1 });
+        }
       });
       writer.on('error', (err) => {
+        safeRmSync(officeIncomingPath);
         console.error('[onlyoffice callback] write failed', err);
         res.json({ error: 1 });
       });
@@ -1719,14 +2330,20 @@ router.post('/file/chunk/complete', verifyToken, (req, res) => {
     const finalDir = path.dirname(meta.finalPath);
     if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
+    const { basePath } = getValidatedPath(req.user, '/');
+    const previousVersion = fs.existsSync(meta.finalPath) && fs.statSync(meta.finalPath).isFile()
+      ? captureFileVersion(basePath, meta.finalPath, { source: 'web-chunk-upload', actor: getActivityActor(req.user), reason: 'overwrite' })
+      : null;
     fs.renameSync(meta.tempPath, meta.finalPath);
     invalidateUsageCache(meta.finalPath);
+    appendActivity(basePath, { type: previousVersion ? 'file-updated' : 'file-created', path: toNasRelativePath(basePath, meta.finalPath), actor: getActivityActor(req.user), source: 'web-chunk-upload' });
     safeRmSync(getChunkDir(uploadId));
 
     return res.json({
       success: true,
       fileName: meta.fileName,
-      size: meta.fileSize
+      size: meta.fileSize,
+      versionId: previousVersion?.versionId || null
     });
   } catch (err) {
     return res.status(err.status || 500).json({
@@ -1769,6 +2386,76 @@ router.post('/file/chunk/cancel', verifyToken, (req, res) => {
 // PC 바탕화면 연동 Pairing API
 // =========================================================
 
+router.get('/devices', verifyToken, (req, res) => {
+  try {
+    const ownerKey = getDeviceOwnerKey(req.user);
+    const devices = readJsonArrayFile(LINKED_DEVICES_FILE)
+      .filter(device => device.ownerKey === ownerKey)
+      .map(sanitizeDeviceForResponse);
+    return res.json({ success: true, devices });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || '등록 장치 조회 실패' });
+  }
+});
+
+router.delete('/devices/:deviceId', verifyToken, (req, res) => {
+  try {
+    const ownerKey = getDeviceOwnerKey(req.user);
+    const deviceId = String(req.params.deviceId || '').trim();
+    const devices = readJsonArrayFile(LINKED_DEVICES_FILE);
+    const idx = devices.findIndex(device => device.deviceId === deviceId && device.ownerKey === ownerKey);
+    if (idx < 0) return res.status(404).json({ error: '등록 장치를 찾을 수 없습니다.' });
+
+    const revokedAt = new Date().toISOString();
+    devices[idx] = {
+      ...devices[idx],
+      status: 'revoked',
+      revokedAt,
+      agentTokenHash: null
+    };
+    writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
+    try { writeLinkedDeviceMeta(devices[idx]); } catch (err) {}
+    emitDeviceStatus(req, devices[idx]);
+
+    const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE).map(pairing => (
+      pairing.ownerKey === ownerKey && pairing.device?.deviceId === deviceId
+        ? { ...pairing, status: 'revoked', revokedAt }
+        : pairing
+    ));
+    writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
+
+    return res.json({ success: true, device: sanitizeDeviceForResponse(devices[idx]) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || '장치 연결 해제 실패' });
+  }
+});
+
+router.patch('/devices/:deviceId/sync', verifyToken, express.json(), (req, res) => {
+  try {
+    const ownerKey = getDeviceOwnerKey(req.user);
+    const deviceId = String(req.params.deviceId || '').trim();
+    const action = String(req.body?.action || '').trim();
+    if (!['pause', 'resume'].includes(action)) return res.status(400).json({ error: '지원하지 않는 동기화 작업입니다.' });
+    const devices = readJsonArrayFile(LINKED_DEVICES_FILE);
+    const idx = devices.findIndex(device => device.deviceId === deviceId && device.ownerKey === ownerKey && device.status !== 'revoked');
+    if (idx < 0) return res.status(404).json({ error: '등록 장치를 찾을 수 없습니다.' });
+    const now = new Date().toISOString();
+    devices[idx] = {
+      ...devices[idx],
+      syncPaused: action === 'pause',
+      syncState: action === 'pause' ? 'paused' : 'pending',
+      pausedAt: action === 'pause' ? now : null,
+      lastError: action === 'resume' ? '' : (devices[idx].lastError || '')
+    };
+    writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
+    if (action === 'resume') agentMutationWindows.delete(deviceId);
+    emitDeviceStatus(req, devices[idx]);
+    return res.json({ success: true, device: sanitizeDeviceForResponse(devices[idx]) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || '동기화 상태 변경 실패' });
+  }
+});
+
 // 웹에서 연동 시작
 router.post('/devices/pair/start', verifyToken, (req, res) => {
   try {
@@ -1779,14 +2466,17 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
     const ownerKey = getDeviceOwnerKey(req.user);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
-    const { targetPath: pairingTargetAbs } = getValidatedPath(req.user, targetPath, req.headers['x-nas-password']);
+    const { targetPath: pairingTargetAbs } = getValidatedDeviceUserPath(req.user, targetPath);
     const targetDevice = fs.existsSync(pairingTargetAbs) && fs.statSync(pairingTargetAbs).isDirectory()
       ? findLinkedDeviceByAbsolutePath(ownerKey, pairingTargetAbs)
       : null;
-    const pairingMode = targetDevice ? 'add-folder' : 'install-device';
+    const requestedDriveMode = String(req.body?.driveMode || '').trim();
+    const pairingMode = requestedDriveMode === 'personal-drive'
+      ? 'personal-drive'
+      : (targetDevice ? 'add-folder' : 'install-device');
 
     // 생성 위치 권한 사전 검증
-    getValidatedPath(req.user, targetPath, req.headers['x-nas-password']);
+    getValidatedDeviceUserPath(req.user, targetPath);
 
     const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE).filter(p => {
       if (!p.expiresAt) return true;
@@ -1794,12 +2484,13 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
     });
 
     const pairing = {
-      token,
+      tokenHash: hashPairingToken(token),
+      tokenHint: token.slice(-8),
       ownerKey,
       targetPath,
       targetDeviceId: targetDevice?.deviceId || null,
       mode: pairingMode,
-      userSnapshot: req.user,
+      clientIntent: String(req.body?.clientIntent || '').trim(),
       status: 'pending',
       createdAt: now.toISOString(),
       expiresAt,
@@ -1809,7 +2500,11 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
     pairings.push(pairing);
     writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
 
-    const agentDownloadName = `NAS-Sync-Agent_${token.replace(/[^a-zA-Z0-9_-]/g, '')}.exe`;
+    const safePairingToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
+    const installerPath = path.join(__dirname, 'agents', 'dist', 'NAS-Drive-Setup.exe');
+    const agentDownloadName = fs.existsSync(installerPath)
+      ? `NAS-Drive-Setup_${safePairingToken}.exe`
+      : `NAS-Sync-Agent_${safePairingToken}.exe`;
 
     return res.json({
       success: true,
@@ -1818,7 +2513,9 @@ router.post('/devices/pair/start', verifyToken, (req, res) => {
       status: 'pending',
       agentDownloadUrl: `/api/devices/agent/windows?token=${encodeURIComponent(token)}`,
       agentDownloadName,
-      agentKind: fs.existsSync(path.join(__dirname, 'agents', 'dist', 'NAS-Sync-Agent.exe')) ? 'windows-exe' : 'windows-cmd',
+      agentKind: fs.existsSync(installerPath)
+        ? 'windows-setup'
+        : (fs.existsSync(path.join(__dirname, 'agents', 'dist', 'NAS-Sync-Agent.exe')) ? 'windows-exe' : 'windows-cmd'),
       mode: pairingMode
     });
   } catch (err) {
@@ -2428,8 +3125,23 @@ router.get('/devices/agent/windows', verifyToken, (req, res) => {
       return res.status(400).send('pairing token missing');
     }
 
+    const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE);
+    const pairingIndex = findPairingIndexByToken(pairings, token);
+    const pairing = pairingIndex >= 0 ? pairings[pairingIndex] : null;
+    if (!pairing || pairing.ownerKey !== getDeviceOwnerKey(req.user)) {
+      return res.status(404).send('pairing session not found');
+    }
+    if (pairing.consumedAt || pairing.status !== 'pending' || new Date(pairing.expiresAt).getTime() <= Date.now()) {
+      return res.status(410).send('pairing session expired or already used');
+    }
+
+    const installerPath = path.join(__dirname, 'agents', 'dist', 'NAS-Drive-Setup.exe');
     const exePath = path.join(__dirname, 'agents', 'dist', 'NAS-Sync-Agent.exe');
     const safeToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
+
+    if (fs.existsSync(installerPath)) {
+      return res.download(installerPath, `NAS-Drive-Setup_${safeToken}.exe`);
+    }
 
     if (fs.existsSync(exePath)) {
       const downloadName = `NAS-Sync-Agent_${safeToken}.exe`;
@@ -2456,14 +3168,15 @@ router.get('/devices/pair/status/:token', verifyToken, (req, res) => {
     const token = String(req.params.token || '');
     const ownerKey = getDeviceOwnerKey(req.user);
     const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE);
-    const pairing = pairings.find(p => p.token === token && p.ownerKey === ownerKey);
+    const pairingIndex = findPairingIndexByToken(pairings, token);
+    const pairing = pairingIndex >= 0 ? pairings[pairingIndex] : null;
 
-    if (!pairing) return res.status(404).json({ error: '연동 세션을 찾을 수 없습니다.' });
+    if (!pairing || pairing.ownerKey !== ownerKey) return res.status(404).json({ error: '연동 세션을 찾을 수 없습니다.' });
 
     return res.json({
       success: true,
       status: pairing.status,
-      device: pairing.device || null,
+      device: pairing.device ? sanitizeDeviceForResponse(pairing.device) : null,
       expiresAt: pairing.expiresAt
     });
   } catch (err) {
@@ -2494,7 +3207,7 @@ router.post('/devices/pair/mock-detect', verifyToken, (req, res) => {
     });
 
     pairings[idx].status = 'connected';
-    pairings[idx].device = device;
+    pairings[idx].device = sanitizeDeviceForResponse(device);
     pairings[idx].connectedAt = new Date().toISOString();
 
     writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
@@ -2503,7 +3216,7 @@ router.post('/devices/pair/mock-detect', verifyToken, (req, res) => {
       success: true,
       status: 'connected',
       message: '연동 감지!',
-      device
+      device: sanitizeDeviceForResponse(device)
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || '연동 감지 처리 실패' });
@@ -2520,9 +3233,13 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
     const token = String(req.body?.pairingToken || '');
     const clientDeviceKey = String(req.body?.clientDeviceKey || '').trim();
     const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE);
-    const pairing = pairings.find(p => p.token === token);
+    const pairingIndex = findPairingIndexByToken(pairings, token);
+    const pairing = pairingIndex >= 0 ? pairings[pairingIndex] : null;
 
     if (!pairing) return res.status(404).json({ error: '연동 세션을 찾을 수 없습니다.' });
+    if (pairing.consumedAt || pairing.status === 'connected') {
+      return res.status(409).json({ code: 'PAIRING_ALREADY_USED', error: '이미 사용된 연동 세션입니다.' });
+    }
     if (new Date(pairing.expiresAt).getTime() <= Date.now()) {
       return res.status(410).json({ error: '연동 세션이 만료되었습니다.' });
     }
@@ -2536,6 +3253,7 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
       d.clientDeviceKey === clientDeviceKey
     );
     const device = getActiveLinkedDevice(rawDevice);
+    const accountMember = findMemberByAnyId(pairing.ownerKey) || {};
     const canAddFolder = !!(
       device &&
       pairing.mode === 'add-folder' &&
@@ -2547,6 +3265,12 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
       success: true,
       exists: !!device && getLiveSyncRoots(device).length > 0,
       mode: pairing.mode || 'install-device',
+      account: {
+        ownerKey: pairing.ownerKey,
+        userUid: accountMember.userUid || '',
+        loginId: getUserLoginId(accountMember),
+        displayName: accountMember.displayName || getUserLoginId(accountMember)
+      },
       canAddFolder,
       device: device ? {
         deviceId: device.deviceId,
@@ -2556,6 +3280,7 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
         syncRoots: getLiveSyncRoots(device).map(root => ({
           syncRootId: root.syncRootId,
           name: root.name,
+          kind: root.kind || 'folder-sync',
           localPath: root.localPath || '',
           linkedNasPath: root.linkedNasPath || ''
         }))
@@ -2568,105 +3293,96 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
 
  
 
-// Agent standalone login + PC registration.
-// Used by the installed Windows app when launched directly without a browser pairing token.
-router.post('/devices/agent/login-register', express.json(), (req, res) => {
+// Installed Agent login. The password is checked once over HTTPS and is never
+// returned or persisted. A short-lived pairing token keeps device registration,
+// account-root selection and quota enforcement on the existing pairing path.
+router.post('/devices/agent/login-register', express.json({ limit: '16kb' }), (req, res) => {
   try {
     ensureDeviceDataFiles();
+    const loginId = String(req.body?.id || req.body?.loginId || '').trim();
+    const password = String(req.body?.password || '');
+    if (!loginId || loginId.length > 128 || !password || password.length > 1024) {
+      return res.status(400).json({ error: '아이디와 비밀번호를 확인해 주세요.' });
+    }
 
-    const user = findAgentLoginUser(req.body?.loginId || req.body?.id, req.body?.password);
-    if (!user) return res.status(401).json({ error: 'NAS account login failed.' });
+    const attemptKey = getAgentLoginAttemptKey(req, loginId);
+    const activeAttempt = getActiveAgentLoginAttempt(attemptKey);
+    if (activeAttempt?.count >= AGENT_LOGIN_MAX_FAILURES) {
+      return res.status(429).json({ error: '로그인 시도가 너무 많습니다. 15분 후 다시 시도해 주세요.' });
+    }
 
-    const clientDeviceKey = String(req.body?.clientDeviceKey || '').trim();
-    const syncRootPath = String(req.body?.syncRootPath || req.body?.desktopPath || '').trim();
-    const requestedDeviceName = String(req.body?.deviceName || '').trim();
-
-    if (!clientDeviceKey) return res.status(400).json({ error: 'PC device key is required.' });
-    if (!syncRootPath) return res.status(400).json({ error: 'Sync folder path is required.' });
+    const user = findMemberByAnyId(loginId);
+    if (!user || !verifyPassword(password, user.password)) {
+      recordAgentLoginFailure(attemptKey);
+      return res.status(401).json({ error: '아이디 또는 비밀번호가 올바르지 않습니다.' });
+    }
+    if (user.disabled) return res.status(403).json({ error: '비활성화된 계정입니다.' });
+    agentLoginAttempts.delete(attemptKey);
 
     const ownerKey = getDeviceOwnerKey(user);
-    const rawExistingDevice = readJsonArrayFile(LINKED_DEVICES_FILE).find(d =>
-      d.ownerKey === ownerKey &&
-      d.clientDeviceKey === clientDeviceKey
-    );
-    const existingDevice = getActiveLinkedDevice(rawExistingDevice);
-    const hasLiveSyncRoots = existingDevice && getLiveSyncRoots(existingDevice).length > 0;
-
-    if (existingDevice && hasLiveSyncRoots) {
-      return res.status(409).json({
-        code: 'DEVICE_ALREADY_REGISTERED',
-        error: 'This PC is already linked to this NAS account.',
-        device: {
-          deviceId: existingDevice.deviceId,
-          deviceName: existingDevice.deviceName || existingDevice.name || '',
-          linkedNasPath: existingDevice.linkedNasPath || '',
-          syncRoots: getLiveSyncRoots(existingDevice).map(root => ({
-            syncRootId: root.syncRootId,
-            name: root.name,
-            localPath: root.localPath || '',
-            linkedNasPath: root.linkedNasPath || ''
-          }))
-        }
-      });
-    }
-
-    let device = existingDevice || rawExistingDevice;
-    if (!device || !device.absolutePath || !fs.existsSync(device.absolutePath)) {
-      device = createLinkedDeviceFolder(user, '/', {
-        deviceId: createDeviceId(),
-        deviceName: requestedDeviceName || req.body?.hostName || 'Windows-PC',
-        osType: req.body?.osType || 'windows'
-      });
-    }
-
-    const agentToken = createAgentToken();
-    const now = new Date().toISOString();
-    const deviceName = device.deviceName || requestedDeviceName || req.body?.hostName || 'Windows-PC';
-
-    device = {
-      ...device,
-      deviceName,
-      name: device.name || deviceName,
-      originalDeviceName: device.originalDeviceName || requestedDeviceName || deviceName,
-      osType: req.body?.osType || device.osType || 'windows',
-      desktopPath: req.body?.desktopPath || device.desktopPath || '',
-      syncRootPath,
-      syncRootSizeBytes: Number(req.body?.syncRootSizeBytes || device.syncRootSizeBytes || 0),
-      syncRootFileCount: Number(req.body?.syncRootFileCount || device.syncRootFileCount || 0),
-      syncRootFolderCount: Number(req.body?.syncRootFolderCount || device.syncRootFolderCount || 0),
-      clientDeviceKey,
-      agentTokenHash: hashAgentToken(agentToken),
-      status: 'connected',
-      lastSeenAt: now
-    };
-
-    const rootResult = addSyncRootToDevice(device, user, syncRootPath, {
-      sizeBytes: Number(req.body?.syncRootSizeBytes || 0),
-      fileCount: Number(req.body?.syncRootFileCount || 0),
-      folderCount: Number(req.body?.syncRootFolderCount || 0)
+    const targetPath = '/';
+    getValidatedDeviceUserPath(user, targetPath);
+    const token = createPairingToken();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
+    const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE).filter(pairing => (
+      !pairing.expiresAt || new Date(pairing.expiresAt).getTime() > Date.now()
+    ));
+    pairings.push({
+      tokenHash: hashPairingToken(token),
+      tokenHint: token.slice(-8),
+      ownerKey,
+      targetPath,
+      targetDeviceId: null,
+      mode: 'personal-drive',
+      clientIntent: 'desktop-app-login',
+      status: 'pending',
+      createdAt: now.toISOString(),
+      expiresAt,
+      device: null
     });
-
-    device = {
-      ...rootResult.device,
-      agentTokenHash: device.agentTokenHash,
-      lastSeenAt: now,
-      status: 'connected'
-    };
-    const syncRoot = rootResult.syncRoot;
-
-    writeLinkedDeviceMeta(device);
-    updateLinkedDeviceRecord(device);
+    writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
 
     return res.json({
       success: true,
-      status: 'connected',
-      message: 'Agent login and registration completed.',
-      agentToken,
-      device,
-      syncRoot
+      pairingToken: token,
+      expiresAt,
+      account: {
+        ownerKey,
+        userUid: user.userUid || '',
+        loginId: getUserLoginId(user),
+        displayName: user.displayName || user.nickname || getUserLoginId(user)
+      }
     });
   } catch (err) {
-    return res.status(err.status || 500).json({ error: err.message || 'Agent login registration failed.' });
+    return res.status(err.status || 500).json({ error: err.message || 'NAS Drive 로그인 준비 실패' });
+  }
+});
+
+// Explicit desktop logout revokes the device token before local credentials
+// are removed. This prevents a copied stale token from remaining usable.
+router.post('/devices/agent/logout', express.json({ limit: '8kb' }), (req, res) => {
+  try {
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const agentToken = String(req.headers['x-agent-token'] || '').trim();
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+
+    const revokedAt = new Date().toISOString();
+    const revoked = {
+      ...device,
+      status: 'revoked',
+      revokedAt,
+      agentTokenHash: null,
+      syncState: 'signed-out',
+      lastError: ''
+    };
+    updateLinkedDeviceRecord(revoked);
+    try { writeLinkedDeviceMeta(revoked); } catch {}
+    emitDeviceStatus(req, revoked);
+    return res.json({ success: true, revokedAt });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'NAS Drive 로그아웃 실패' });
   }
 });
 
@@ -2677,20 +3393,21 @@ router.post('/devices/agent/register', (req, res) => {
 
     const token = String(req.body?.pairingToken || '');
     const pairings = readJsonArrayFile(DEVICE_PAIRINGS_FILE);
-    const idx = pairings.findIndex(p => p.token === token);
+    const idx = findPairingIndexByToken(pairings, token);
 
     if (idx === -1) return res.status(404).json({ error: '연동 세션을 찾을 수 없습니다.' });
+    if (pairings[idx].consumedAt || pairings[idx].status === 'connected') {
+      return res.status(409).json({ code: 'PAIRING_ALREADY_USED', error: '이미 사용된 연동 세션입니다.' });
+    }
     if (new Date(pairings[idx].expiresAt).getTime() <= Date.now()) {
       return res.status(410).json({ error: '연동 세션이 만료되었습니다.' });
     }
 
     const pairing = pairings[idx];
-    const userSnapshot = pairing.userSnapshot || {
-      id: pairing.ownerKey,
-      loginId: pairing.ownerKey,
-      userUid: pairing.ownerKey,
-      rootPath: path.join('users', pairing.ownerKey)
-    };
+    const userSnapshot = findMemberByAnyId(pairing.ownerKey);
+    if (!userSnapshot || userSnapshot.disabled) {
+      return res.status(403).json({ error: '연동을 승인한 계정이 없거나 비활성화되었습니다.' });
+    }
 
     const clientDeviceKey = String(req.body?.clientDeviceKey || '').trim();
     const syncRootPath = String(req.body?.syncRootPath || req.body?.desktopPath || '').trim();
@@ -2703,7 +3420,7 @@ router.post('/devices/agent/register', (req, res) => {
     const existingDevice = getActiveLinkedDevice(rawExistingDevice);
     const hasLiveSyncRoots = existingDevice && getLiveSyncRoots(existingDevice).length > 0;
 
-    if (existingDevice && hasLiveSyncRoots && pairing.mode !== 'add-folder') {
+    if (existingDevice && hasLiveSyncRoots && pairing.mode !== 'add-folder' && pairing.mode !== 'personal-drive') {
       return res.status(409).json({
         code: 'DEVICE_ALREADY_REGISTERED',
         error: 'This PC is already linked. Open the linked PC folder in NAS and use Add sync folder.',
@@ -2731,7 +3448,11 @@ router.post('/devices/agent/register', (req, res) => {
     let device = pairing.device || existingDevice || rawExistingDevice;
 
     if (!device || !device.absolutePath || !fs.existsSync(device.absolutePath)) {
-      device = createLinkedDeviceFolder(userSnapshot, '/', {
+      device = pairing.mode === 'personal-drive' ? createPersonalDriveDevice(userSnapshot, {
+        deviceId: createDeviceId(),
+        deviceName: req.body?.deviceName || 'Windows-PC',
+        osType: req.body?.osType || 'windows'
+      }) : createLinkedDeviceFolder(userSnapshot, '/', {
         deviceId: createDeviceId(),
         deviceName: req.body?.deviceName || '내-PC',
         osType: req.body?.osType || 'unknown'
@@ -2757,19 +3478,27 @@ router.post('/devices/agent/register', (req, res) => {
       clientDeviceKey: clientDeviceKey || device.clientDeviceKey || '',
       agentTokenHash: hashAgentToken(agentToken),
       status: 'connected',
+      revokedAt: null,
+      syncState: 'connecting',
+      lastError: '',
       lastSeenAt: now
     };
 
-    const rootResult = addSyncRootToDevice(device, userSnapshot, syncRootPath, {
+    const rootResult = pairing.mode === 'personal-drive'
+      ? ensurePersonalDriveRoot(device, userSnapshot, syncRootPath)
+      : addSyncRootToDevice(device, userSnapshot, syncRootPath, {
       sizeBytes: Number(req.body?.syncRootSizeBytes || 0),
       fileCount: Number(req.body?.syncRootFileCount || 0),
       folderCount: Number(req.body?.syncRootFolderCount || 0)
-    });
+      });
     device = {
       ...rootResult.device,
       agentTokenHash: device.agentTokenHash,
       lastSeenAt: now,
-      status: 'connected'
+      status: 'connected',
+      revokedAt: null,
+      syncState: 'connecting',
+      lastError: ''
     };
     const syncRoot = rootResult.syncRoot;
 
@@ -2779,7 +3508,9 @@ router.post('/devices/agent/register', (req, res) => {
     updateLinkedDeviceRecord(device);
 
     pairings[idx].status = 'connected';
-    pairings[idx].device = device;
+    pairings[idx].consumedAt = now;
+    delete pairings[idx].token;
+    pairings[idx].device = sanitizeDeviceForResponse(device);
     pairings[idx].connectedAt = now;
     writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
 
@@ -2788,8 +3519,17 @@ router.post('/devices/agent/register', (req, res) => {
       status: 'connected',
       message: '연동 감지!',
       agentToken,
-      device,
-      syncRoot
+      device: sanitizeDeviceForResponse(device),
+      syncRoot: {
+        ...syncRoot,
+        absolutePath: undefined
+      },
+      account: {
+        ownerKey: getDeviceOwnerKey(userSnapshot),
+        userUid: userSnapshot.userUid || '',
+        loginId: getUserLoginId(userSnapshot),
+        displayName: userSnapshot.displayName || getUserLoginId(userSnapshot)
+      }
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || 'Agent 등록 실패' });
@@ -2811,6 +3551,11 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdV
     throw err;
   }
 
+  const ownerUser = getCurrentDeviceOwner(device);
+  const ownerBasePath = getDeviceUserBasePath(ownerUser);
+  resolveInside(ownerBasePath, path.relative(ownerBasePath, device.absolutePath));
+  assertRealPathInside(ownerBasePath, device.absolutePath);
+
   const syncRoots = normalizeDeviceSyncRoots(device);
   const syncRootId = String(syncRootIdValue || '').trim();
   const syncRoot = syncRootId
@@ -2829,14 +3574,21 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdV
     throw err;
   }
 
-  if (!isSameOrChildPath(device.absolutePath, syncRoot.absolutePath)) {
+  if (syncRoot.kind !== 'personal-drive' && !isSameOrChildPath(device.absolutePath, syncRoot.absolutePath)) {
     const err = new Error('잘못된 연동 루트입니다.');
     err.status = 400;
     throw err;
   }
 
   const linkedRoot = path.resolve(syncRoot.absolutePath);
+  resolveInside(ownerBasePath, path.relative(ownerBasePath, linkedRoot));
+  assertRealPathInside(ownerBasePath, linkedRoot);
   const relPath = normalizeAgentRelPath(relPathValue);
+  if (SEARCH_SKIP_NAMES.has(relPath.split('/')[0])) {
+    const err = new Error('내부 복구 저장소는 동기화할 수 없습니다.');
+    err.status = 400;
+    throw err;
+  }
   const finalPath = path.resolve(linkedRoot, relPath);
 
   if (!fs.existsSync(linkedRoot) || !fs.statSync(linkedRoot).isDirectory()) {
@@ -2853,14 +3605,87 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdV
     throw err;
   }
 
+  assertRealPathInside(linkedRoot, finalPath);
+
   if (finalPath === linkedRoot) {
     const err = new Error('연동 루트 자체는 변경할 수 없습니다.');
     err.status = 400;
     throw err;
   }
 
-  return { device, linkedRoot, syncRoot, relPath, finalPath };
+  return { device, ownerUser, linkedRoot, syncRoot, relPath, finalPath };
 };
+
+// The native Windows Cloud Files provider is delivered only to an authenticated,
+// non-revoked linked device. The web pairing token alone cannot download it.
+router.get('/devices/agent/provider/windows', (req, res) => {
+  try {
+    const deviceId = String(req.query?.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    if (!getAgentDeviceByToken(deviceId, agentToken)) {
+      return res.status(403).json({ error: 'Agent 인증 실패' });
+    }
+    const providerPath = path.join(__dirname, 'agents', 'dist', 'NAS-Drive-Provider.exe');
+    if (!fs.existsSync(providerPath)) {
+      return res.status(503).json({ error: 'Windows NAS Drive 공급자가 준비되지 않았습니다.' });
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.download(providerPath, 'NAS-Drive-Provider.exe');
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Windows NAS Drive 공급자 다운로드 실패' });
+  }
+});
+
+// Authenticated, silent Agent updates. Metadata is cheap and the binary is
+// downloaded only when the installed semantic version differs.
+router.get('/devices/agent/update/windows', (req, res) => {
+  try {
+    const deviceId = String(req.query?.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    if (!getAgentDeviceByToken(deviceId, agentToken)) {
+      return res.status(403).json({ error: 'Agent 인증 실패' });
+    }
+    const build = getWindowsAgentBuild();
+    if (!build) return res.status(503).json({ error: 'Windows Agent 업데이트가 준비되지 않았습니다.' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (String(req.query?.download || '') === '1') {
+      res.setHeader('X-NAS-Agent-Version', build.version);
+      res.setHeader('X-NAS-Agent-SHA256', build.sha256);
+      return res.download(build.filePath, 'NAS-Sync-Agent.exe');
+    }
+    return res.json({
+      success: true,
+      version: build.version,
+      size: build.size,
+      sha256: build.sha256,
+      downloadUrl: `/api/devices/agent/update/windows?deviceId=${encodeURIComponent(deviceId)}&download=1`
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Windows Agent 업데이트 확인 실패' });
+  }
+});
+
+router.post('/devices/agent/heartbeat', express.json(), (req, res) => {
+  try {
+    const deviceId = String(req.body?.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    const requestedState = String(req.body?.syncState || 'idle');
+    const allowedState = ['idle', 'connecting', 'syncing', 'up-to-date', 'paused', 'offline', 'error'].includes(requestedState) ? requestedState : 'idle';
+    const updated = {
+      ...device,
+      lastSeenAt: new Date().toISOString(),
+      syncState: device.syncPaused ? 'paused' : allowedState,
+      lastError: String(req.body?.lastError || '').slice(0, 500)
+    };
+    updateLinkedDeviceRecord(updated);
+    emitDeviceStatus(req, updated);
+    return res.json({ success: true, commands: { paused: !!updated.syncPaused }, device: sanitizeDeviceForResponse(updated) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Agent 상태 갱신 실패' });
+  }
+});
 
 const touchLinkedDevice = (device, linkedRoot) => {
   const now = new Date().toISOString();
@@ -2908,6 +3733,23 @@ router.post('/devices/agent/sync-delete', express.json(), (req, res) => {
       return res.json({ success: true, relPath, missing: true });
     }
 
+    assertAgentMutationAllowed(device, 'delete');
+
+    const ownerUser = normalizeQuotaFields(findMemberByAnyId({
+      userUid: device.userUid,
+      loginId: device.loginId || device.ownerKey,
+      id: device.ownerKey
+    }) || {});
+    const ownerBasePath = getAccessBasePath(ownerUser);
+    const deletedVersion = fs.statSync(finalPath).isFile()
+      ? captureFileVersion(ownerBasePath, finalPath, {
+        source: 'windows-agent',
+        actor: device.ownerKey || device.loginId || device.userUid,
+        deviceId: device.deviceId,
+        reason: 'before-delete'
+      })
+      : null;
+
     const trashRoot = path.join(linkedRoot, '.agent_trash', new Date().toISOString().replace(/[:.]/g, '-'));
     const trashPath = path.resolve(trashRoot, relPath);
 
@@ -2919,11 +3761,287 @@ router.post('/devices/agent/sync-delete', express.json(), (req, res) => {
     fs.renameSync(finalPath, trashPath);
     invalidateUsageCache(finalPath);
     invalidateUsageCache(trashPath);
+    appendActivity(ownerBasePath, {
+      type: 'moved-to-agent-trash',
+      path: `/${path.relative(ownerBasePath, finalPath).replace(/\\/g, '/')}`,
+      versionId: deletedVersion?.versionId || undefined,
+      actor: device.ownerKey || device.loginId || device.userUid,
+      deviceId: device.deviceId,
+      source: 'windows-agent'
+    });
     touchLinkedDevice(device, linkedRoot);
 
     return res.json({ success: true, relPath, trashed: true });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || 'Agent 삭제 동기화 실패' });
+  }
+});
+
+const normalizeAgentUploadId = (value) => {
+  const uploadId = String(value || '').toLowerCase();
+  return /^[a-f0-9]{64}$/.test(uploadId) ? uploadId : '';
+};
+
+const getAgentChunkDir = (uploadId) => path.join(AGENT_CHUNK_ROOT, normalizeAgentUploadId(uploadId));
+const getAgentChunkMetaPath = (uploadId) => path.join(getAgentChunkDir(uploadId), 'meta.json');
+const getAgentChunkPartPath = (uploadId, index) => path.join(getAgentChunkDir(uploadId), `chunk_${index}.part`);
+
+const readAgentChunkMeta = (uploadId) => {
+  try {
+    return JSON.parse(fs.readFileSync(getAgentChunkMetaPath(uploadId), 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+const writeAgentChunkMeta = (uploadId, meta) => {
+  const dir = getAgentChunkDir(uploadId);
+  fs.mkdirSync(dir, { recursive: true });
+  const target = getAgentChunkMetaPath(uploadId);
+  const temp = `${target}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify({ ...meta, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+  fs.renameSync(temp, target);
+};
+
+const removeAgentChunkUpload = (uploadId) => {
+  const safeId = normalizeAgentUploadId(uploadId);
+  if (!safeId) return;
+  fs.rmSync(path.join(AGENT_CHUNK_ROOT, safeId), { recursive: true, force: true });
+};
+
+const listAgentReceivedChunks = (uploadId, meta) => {
+  const dir = getAgentChunkDir(uploadId);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .map(name => {
+      const match = name.match(/^chunk_(\d+)\.part$/);
+      return match ? Number(match[1]) : -1;
+    })
+    .filter(index => index >= 0 && index < Number(meta.totalChunks || 0))
+    .sort((a, b) => a - b);
+};
+
+const cleanupStaleAgentChunks = () => {
+  if (!fs.existsSync(AGENT_CHUNK_ROOT)) return;
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  for (const name of fs.readdirSync(AGENT_CHUNK_ROOT)) {
+    if (!/^[a-f0-9]{64}$/.test(name)) continue;
+    const dir = path.join(AGENT_CHUNK_ROOT, name);
+    try {
+      const meta = readAgentChunkMeta(name);
+      const updatedAt = Date.parse(meta?.updatedAt || 0) || fs.statSync(dir).mtimeMs;
+      if (updatedAt < cutoff) fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+};
+
+const getAuthorizedAgentChunk = (deviceId, agentToken, uploadId) => {
+  const safeId = normalizeAgentUploadId(uploadId);
+  const meta = safeId ? readAgentChunkMeta(safeId) : null;
+  if (!meta || meta.deviceId !== deviceId) {
+    const err = new Error('분할 업로드 세션을 찾을 수 없습니다.');
+    err.status = 404;
+    throw err;
+  }
+  const target = getValidatedAgentTarget(deviceId, agentToken, meta.relPath, meta.syncRootId);
+  return { uploadId: safeId, meta, ...target };
+};
+
+const commitAgentIncomingFile = async ({ incomingPath, uploadedSize, deviceId, agentToken, syncRootId, relPath, baseMtimeMs, clientMtimeMs, deviceName }) => {
+  const { device, linkedRoot, finalPath, relPath: safeRelPath } = getValidatedAgentTarget(deviceId, agentToken, relPath, syncRootId);
+  assertAgentMutationAllowed(device, 'write');
+  const ownerUser = normalizeQuotaFields(findMemberByAnyId({
+    userUid: device.userUid,
+    loginId: device.loginId || device.ownerKey,
+    id: device.ownerKey
+  }) || {});
+  const ownerBasePath = getAccessBasePath(ownerUser);
+  const currentStat = fs.existsSync(finalPath) && fs.statSync(finalPath).isFile() ? fs.statSync(finalPath) : null;
+  const concurrent = !!(currentStat && hasConcurrentFileChange(currentStat.mtimeMs, Number(baseMtimeMs || 0)));
+  let destinationPath = finalPath;
+  let conflictRelPath = '';
+  if (concurrent) {
+    const parsed = path.parse(finalPath);
+    let attempt = 0;
+    do {
+      destinationPath = path.join(parsed.dir, buildConflictFileName(parsed.base, deviceName || device.deviceName || device.name || '다른-PC', new Date(), attempt));
+      attempt += 1;
+    } while (fs.existsSync(destinationPath) && attempt < 100);
+    conflictRelPath = path.relative(linkedRoot, destinationPath).replace(/\\/g, '/');
+  }
+  await assertQuotaAvailable(ownerUser, Number(uploadedSize || 0), destinationPath);
+  const previousVersion = !concurrent && currentStat
+    ? captureFileVersion(ownerBasePath, finalPath, {
+      source: 'windows-agent',
+      actor: device.ownerKey || device.loginId || device.userUid,
+      deviceId: device.deviceId,
+      reason: 'overwrite'
+    })
+    : null;
+  fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+  fs.renameSync(incomingPath, destinationPath);
+  const safeClientMtime = Number(clientMtimeMs || 0);
+  if (Number.isFinite(safeClientMtime) && safeClientMtime > 0) {
+    try { fs.utimesSync(destinationPath, new Date(), new Date(safeClientMtime)); } catch {}
+  }
+  invalidateUsageCache(destinationPath);
+  appendActivity(ownerBasePath, {
+    type: concurrent ? 'conflict-copy-created' : (previousVersion ? 'file-updated' : 'file-created'),
+    path: `/${path.relative(linkedRoot, destinationPath).replace(/\\/g, '/')}`,
+    actor: device.ownerKey || device.loginId || device.userUid,
+    deviceId: device.deviceId,
+    source: 'windows-agent'
+  });
+  touchLinkedDevice(device, linkedRoot);
+  const finalStat = fs.statSync(destinationPath);
+  return {
+    success: true,
+    relPath: safeRelPath,
+    size: finalStat.size,
+    mtimeMs: Math.round(finalStat.mtimeMs),
+    conflict: concurrent,
+    conflictRelPath: conflictRelPath || undefined,
+    versionId: previousVersion?.versionId || undefined,
+    preservedServerMtimeMs: currentStat ? Math.round(currentStat.mtimeMs) : undefined
+  };
+};
+
+// 32MB 초과 Agent 파일은 재시작 후에도 이어갈 수 있는 고정 크기 조각으로 전송한다.
+router.post('/devices/agent/chunk/init', express.json(), async (req, res) => {
+  try {
+    cleanupStaleAgentChunks();
+    const deviceId = String(req.body?.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    const syncRootId = String(req.body?.syncRootId || '');
+    const fileSize = Number(req.body?.fileSize || 0);
+    const chunkSize = Number(req.body?.chunkSize || 0);
+    const clientMtimeMs = Number(req.body?.clientMtimeMs || 0);
+    if (!Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > AGENT_MAX_FILE_BYTES) {
+      return res.status(400).json({ error: 'Agent 파일 크기가 허용 범위를 벗어났습니다.' });
+    }
+    if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0 || chunkSize > AGENT_MAX_CHUNK_BYTES) {
+      return res.status(400).json({ error: 'Agent 조각 크기가 허용 범위를 벗어났습니다.' });
+    }
+    const target = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath, syncRootId);
+    const uploadId = crypto.createHash('sha256').update([
+      deviceId,
+      target.syncRoot.syncRootId,
+      target.relPath,
+      fileSize,
+      Math.round(clientMtimeMs)
+    ].join('\n')).digest('hex');
+    const totalChunks = Math.ceil(fileSize / chunkSize);
+    const existing = readAgentChunkMeta(uploadId);
+    const meta = existing && existing.deviceId === deviceId && existing.fileSize === fileSize && existing.chunkSize === chunkSize
+      ? existing
+      : {
+        deviceId,
+        syncRootId: target.syncRoot.syncRootId,
+        relPath: target.relPath,
+        fileSize,
+        chunkSize,
+        totalChunks,
+        baseMtimeMs: Number(req.body?.baseMtimeMs || 0),
+        clientMtimeMs: Math.round(clientMtimeMs),
+        deviceName: String(req.body?.deviceName || target.device.deviceName || 'Windows-PC').slice(0, 120),
+        createdAt: new Date().toISOString()
+      };
+    if (!existing || existing.fileSize !== fileSize || existing.chunkSize !== chunkSize) removeAgentChunkUpload(uploadId);
+    writeAgentChunkMeta(uploadId, meta);
+    const ownerUser = normalizeQuotaFields(findMemberByAnyId({
+      userUid: target.device.userUid,
+      loginId: target.device.loginId || target.device.ownerKey,
+      id: target.device.ownerKey
+    }) || {});
+    await assertQuotaAvailable(ownerUser, fileSize, target.finalPath);
+    return res.json({ success: true, uploadId, totalChunks, chunkSize, receivedChunks: listAgentReceivedChunks(uploadId, meta) });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Agent 분할 업로드 초기화 실패' });
+  }
+});
+
+router.post('/devices/agent/chunk', agentChunkUpload.single('chunk'), (req, res) => {
+  const incomingPath = req.file?.path;
+  try {
+    const deviceId = String(req.body?.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    const { uploadId, meta } = getAuthorizedAgentChunk(deviceId, agentToken, req.body?.uploadId);
+    const chunkIndex = Number(req.body?.chunkIndex);
+    if (!req.file || !Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= meta.totalChunks) {
+      const err = new Error('잘못된 Agent 파일 조각입니다.');
+      err.status = 400;
+      throw err;
+    }
+    const expectedSize = chunkIndex === meta.totalChunks - 1
+      ? meta.fileSize - (chunkIndex * meta.chunkSize)
+      : meta.chunkSize;
+    if (req.file.size !== expectedSize) {
+      const err = new Error('Agent 파일 조각 크기가 일치하지 않습니다.');
+      err.status = 400;
+      throw err;
+    }
+    const expectedHash = String(req.body?.chunkSha256 || '').toLowerCase();
+    const actualHash = crypto.createHash('sha256').update(fs.readFileSync(incomingPath)).digest('hex');
+    if (!/^[a-f0-9]{64}$/.test(expectedHash) || !secureHashEquals(expectedHash, actualHash)) {
+      const err = new Error('Agent 파일 조각 무결성 검증에 실패했습니다.');
+      err.status = 400;
+      throw err;
+    }
+    const destination = getAgentChunkPartPath(uploadId, chunkIndex);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.renameSync(incomingPath, destination);
+    writeAgentChunkMeta(uploadId, meta);
+    return res.json({ success: true, uploadId, chunkIndex });
+  } catch (err) {
+    if (incomingPath) safeRmSync(incomingPath);
+    return res.status(err.status || 500).json({ error: err.message || 'Agent 파일 조각 업로드 실패' });
+  }
+});
+
+router.post('/devices/agent/chunk/complete', express.json(), async (req, res) => {
+  let assembledPath = '';
+  try {
+    const deviceId = String(req.body?.deviceId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    const { uploadId, meta } = getAuthorizedAgentChunk(deviceId, agentToken, req.body?.uploadId);
+    const received = listAgentReceivedChunks(uploadId, meta);
+    if (received.length !== meta.totalChunks || received.some((value, index) => value !== index)) {
+      return res.status(409).json({ error: '아직 도착하지 않은 Agent 파일 조각이 있습니다.', receivedChunks: received });
+    }
+    assembledPath = path.join(AGENT_INCOMING_ROOT, `${uploadId}.assembling`);
+    const handle = await fsp.open(assembledPath, 'w');
+    try {
+      for (let index = 0; index < meta.totalChunks; index += 1) {
+        const part = getAgentChunkPartPath(uploadId, index);
+        const stat = fs.statSync(part);
+        const expectedSize = index === meta.totalChunks - 1 ? meta.fileSize - (index * meta.chunkSize) : meta.chunkSize;
+        if (stat.size !== expectedSize) throw Object.assign(new Error('Agent 파일 조각 크기가 변경되었습니다.'), { status: 409 });
+        const buffer = await fsp.readFile(part);
+        await handle.write(buffer, 0, buffer.length, index * meta.chunkSize);
+      }
+    } finally {
+      await handle.close();
+    }
+    if (fs.statSync(assembledPath).size !== meta.fileSize) {
+      throw Object.assign(new Error('조립된 Agent 파일 크기가 일치하지 않습니다.'), { status: 409 });
+    }
+    const result = await commitAgentIncomingFile({
+      incomingPath: assembledPath,
+      uploadedSize: meta.fileSize,
+      deviceId,
+      agentToken,
+      syncRootId: meta.syncRootId,
+      relPath: meta.relPath,
+      baseMtimeMs: meta.baseMtimeMs,
+      clientMtimeMs: meta.clientMtimeMs,
+      deviceName: meta.deviceName
+    });
+    assembledPath = '';
+    removeAgentChunkUpload(uploadId);
+    return res.json(result);
+  } catch (err) {
+    if (assembledPath) safeRmSync(assembledPath);
+    return res.status(err.status || 500).json({ error: err.message || 'Agent 분할 업로드 완료 실패' });
   }
 });
 
@@ -2939,26 +4057,18 @@ router.post('/devices/agent/sync-file', agentUpload.single('file'), async (req, 
       return res.status(400).json({ error: '업로드 파일이 없습니다.' });
     }
 
-    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.body?.relPath || req.file.originalname, req.body?.syncRootId);
-    const ownerUser = normalizeQuotaFields(findMemberByAnyId({
-      userUid: device.userUid,
-      loginId: device.loginId || device.ownerKey,
-      id: device.ownerKey
-    }) || {});
-    await assertQuotaAvailable(ownerUser, Number(req.file.size || 0), finalPath);
-
-    const parent = path.dirname(finalPath);
-    if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
-
-    fs.renameSync(incomingPath, finalPath);
-    invalidateUsageCache(finalPath);
-    touchLinkedDevice(device, linkedRoot);
-
-    return res.json({
-      success: true,
-      relPath,
-      size: req.file.size
+    const result = await commitAgentIncomingFile({
+      incomingPath,
+      uploadedSize: req.file.size,
+      deviceId,
+      agentToken,
+      syncRootId: req.body?.syncRootId,
+      relPath: req.body?.relPath || req.file.originalname,
+      baseMtimeMs: req.body?.baseMtimeMs,
+      clientMtimeMs: req.body?.clientMtimeMs,
+      deviceName: req.body?.deviceName
     });
+    return res.json(result);
   } catch (err) {
     if (incomingPath) safeRmSync(incomingPath);
     return res.status(err.status || 500).json({ error: err.message || 'Agent 파일 동기화 실패' });
@@ -2973,7 +4083,11 @@ const listAgentManifestEntries = (linkedRoot) => {
       const relPath = path.relative(linkedRoot, fullPath).replace(/\\/g, '/');
 
       if (!relPath || relPath === LINKED_DEVICE_META) continue;
-      if (relPath === '.agent_trash' || relPath.startsWith('.agent_trash/')) continue;
+      if (
+        relPath === '.agent_trash' || relPath.startsWith('.agent_trash/') ||
+        relPath === VERSION_ROOT_DIR || relPath.startsWith(VERSION_ROOT_DIR + '/') ||
+        relPath === USER_TRASH_DIR || relPath.startsWith(USER_TRASH_DIR + '/')
+      ) continue;
 
       const stat = fs.statSync(fullPath);
       if (entry.isDirectory()) {
@@ -3001,25 +4115,102 @@ const listAgentManifestEntries = (linkedRoot) => {
   });
 };
 
+const agentRootMonitors = new Map();
+let agentRootRevisionCounter = 0;
+
+const nextAgentRootRevision = () => `${process.pid}-${Date.now()}-${++agentRootRevisionCounter}`;
+
+const ensureAgentRootMonitor = (linkedRoot) => {
+  const root = path.resolve(linkedRoot);
+  let monitor = agentRootMonitors.get(root);
+  if (monitor) return monitor;
+  monitor = {
+    revision: nextAgentRootRevision(),
+    watchers: new Map(),
+    refreshTimer: null
+  };
+  const refresh = () => {
+    if (!fs.existsSync(root)) return;
+    const directories = new Set();
+    const walk = (dir) => {
+      directories.add(dir);
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === '.agent_trash' || entry.name === VERSION_ROOT_DIR || entry.name === USER_TRASH_DIR) continue;
+        walk(path.join(dir, entry.name));
+      }
+    };
+    try { walk(root); } catch {}
+    for (const [dir, watcher] of monitor.watchers.entries()) {
+      if (!directories.has(dir)) {
+        try { watcher.close(); } catch {}
+        monitor.watchers.delete(dir);
+      }
+    }
+    for (const dir of directories) {
+      if (monitor.watchers.has(dir)) continue;
+      try {
+        const watcher = fs.watch(dir, { persistent: false }, () => {
+          monitor.revision = nextAgentRootRevision();
+          clearTimeout(monitor.refreshTimer);
+          monitor.refreshTimer = setTimeout(refresh, 250);
+        });
+        watcher.on('error', () => {
+          try { watcher.close(); } catch {}
+          monitor.watchers.delete(dir);
+        });
+        monitor.watchers.set(dir, watcher);
+      } catch {}
+    }
+  };
+  monitor.refresh = refresh;
+  agentRootMonitors.set(root, monitor);
+  refresh();
+  return monitor;
+};
+
+const getValidatedAgentRoot = (deviceId, agentToken, syncRootId) => {
+  const device = getAgentDeviceByToken(deviceId, agentToken);
+  if (!device) throw Object.assign(new Error('Agent 인증 실패'), { status: 403 });
+  const syncRoot = normalizeDeviceSyncRoots(device).find(root => root.syncRootId === syncRootId) || normalizeDeviceSyncRoots(device)[0];
+  if (!syncRoot?.absolutePath || !fs.existsSync(syncRoot.absolutePath)) {
+    throw Object.assign(new Error('연동 루트를 찾을 수 없습니다.'), { status: 404 });
+  }
+  const linkedRoot = path.resolve(syncRoot.absolutePath);
+  const ownerUser = getCurrentDeviceOwner(device);
+  const ownerBasePath = getDeviceUserBasePath(ownerUser);
+  resolveInside(ownerBasePath, path.relative(ownerBasePath, linkedRoot));
+  assertRealPathInside(ownerBasePath, linkedRoot);
+  return { device, syncRoot, linkedRoot };
+};
+
+// Agent는 3초마다 전체 파일 목록을 다시 받지 않고, 가벼운 변경 revision만 확인한다.
+router.get('/devices/agent/changes', (req, res) => {
+  try {
+    const deviceId = String(req.query.deviceId || '');
+    const syncRootId = String(req.query.syncRootId || '');
+    const agentToken = String(req.headers['x-agent-token'] || '');
+    const { device, linkedRoot } = getValidatedAgentRoot(deviceId, agentToken, syncRootId);
+    const monitor = ensureAgentRootMonitor(linkedRoot);
+    touchLinkedDevice(device, linkedRoot);
+    return res.json({
+      success: true,
+      changed: String(req.query.revision || '') !== monitor.revision,
+      revision: monitor.revision
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Agent 변경 상태 조회 실패' });
+  }
+});
+
 // Agent가 NAS 폴더의 현재 상태를 가져와 PC에 없는/변경된 항목을 pull 한다.
 router.get('/devices/agent/manifest', (req, res) => {
   try {
     const deviceId = String(req.query.deviceId || '');
     const syncRootId = String(req.query.syncRootId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const device = getAgentDeviceByToken(deviceId, agentToken);
-
-    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
-    if (!device.absolutePath || !fs.existsSync(device.absolutePath)) {
-      return res.status(404).json({ error: '연동 폴더를 찾을 수 없습니다.' });
-    }
-
-    const syncRoot = normalizeDeviceSyncRoots(device).find(root => root.syncRootId === syncRootId) || normalizeDeviceSyncRoots(device)[0];
-    if (!syncRoot || !syncRoot.absolutePath || !fs.existsSync(syncRoot.absolutePath)) {
-      return res.status(404).json({ error: '연동 루트를 찾을 수 없습니다.' });
-    }
-
-    const linkedRoot = path.resolve(syncRoot.absolutePath);
+    const { device, syncRoot, linkedRoot } = getValidatedAgentRoot(deviceId, agentToken, syncRootId);
+    const monitor = ensureAgentRootMonitor(linkedRoot);
     touchLinkedDevice(device, linkedRoot);
 
     return res.json({
@@ -3027,6 +4218,7 @@ router.get('/devices/agent/manifest', (req, res) => {
       deviceId,
       syncRootId: syncRoot.syncRootId,
       generatedAt: new Date().toISOString(),
+      revision: monitor.revision,
       entries: listAgentManifestEntries(linkedRoot)
     });
   } catch (err) {
@@ -3054,6 +4246,14 @@ router.get('/devices/agent/file', (req, res) => {
   }
 });
 
-
+if (process.env.NODE_ENV === 'test') {
+  router.__testHooks = {
+    moveToUserTrash,
+    readUserTrashItem,
+    restoreUserTrashItem,
+    cleanupExpiredUserTrash,
+    getUserTrashRoot
+  };
+}
 
 module.exports = router;

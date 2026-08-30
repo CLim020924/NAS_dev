@@ -42,8 +42,11 @@ const Login = () => {
     localStorage.setItem('user', JSON.stringify(response.data.user));
     localStorage.removeItem('nas_session_left_at');
     window.dispatchEvent(new Event('nas:user-updated'));
-    const next = searchParams.get('next');
-    navigate(next || '/platform');
+    const requestedNext = searchParams.get('next');
+    const next = requestedNext?.startsWith('/') && !requestedNext.startsWith('//')
+      ? requestedNext
+      : '/platform';
+    navigate(next);
   };
 
   const submitLogin = (sessionConflictAction) => {

@@ -8,6 +8,11 @@ import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { ensureSlash } from '../components/NAS/nasUtils';
 import { transferUrl } from '../transferBaseUrl';
+import {
+  buildMultipartUploadHeaders,
+  isCanceledUploadError,
+  isTransientUploadError
+} from './uploadRequestPolicy';
 
 const TransferContext = createContext(null);
 
@@ -279,6 +284,7 @@ export const TransferProvider = ({ children }) => {
           resuming: false,
           sessionId: s.sessionId,
           controllers: new Set(),
+          reconnectTimer: null,
           uploadIds: new Set(Object.values(s.uploadIds || {})),
           uploadIdByKey: { ...(s.uploadIds || {}) },
           resumeMeta: s,
@@ -300,15 +306,13 @@ export const TransferProvider = ({ children }) => {
   const FILE_CHUNK_SIZE = 64 * 1024 * 1024;
   const FILE_CHUNK_CONCURRENCY = 3;
   const FILE_CHUNK_RETRY = 5;
+  const SMALL_UPLOAD_RETRY = 4;
+  const NETWORK_RECONNECT_DELAY = 15000;
 
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   const isCanceledError = (err) => {
-    return err?.code === 'ERR_CANCELED' ||
-      err?.name === 'CanceledError' ||
-      err?.response?.status === 409 ||
-      String(err?.message || '').toLowerCase().includes('canceled') ||
-      String(err?.response?.data?.error || '').includes('UPLOAD_CANCELED');
+    return isCanceledUploadError(err);
   };
 
   const normalizeUploadJoin = (base, rel) => {
@@ -338,6 +342,7 @@ export const TransferProvider = ({ children }) => {
       resuming: false,
       sessionId,
       controllers: new Set(),
+      reconnectTimer: null,
       uploadIds: new Set(Object.values(resumeMeta?.uploadIds || {})),
       uploadIdByKey: { ...(resumeMeta?.uploadIds || {}) },
       resumeMeta,
@@ -356,6 +361,10 @@ export const TransferProvider = ({ children }) => {
 
     state.canceled = true;
     state.paused = false;
+    if (state.reconnectTimer) {
+      clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = null;
+    }
 
     for (const ctrl of Array.from(state.controllers)) {
       try { ctrl.abort(); } catch (e) {}
@@ -399,6 +408,10 @@ export const TransferProvider = ({ children }) => {
 
     state.paused = true;
     state.canceled = false;
+    if (state.reconnectTimer) {
+      clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = null;
+    }
 
     for (const ctrl of Array.from(state.controllers)) {
       try { ctrl.abort(); } catch (e) {}
@@ -517,44 +530,58 @@ export const TransferProvider = ({ children }) => {
     throwIfTaskCanceled(taskId);
 
     const destDirPath = getUploadDestDir(targetPath, relPath);
-    const formData = new FormData();
-    formData.append('path', destDirPath);
-    formData.append('file', file);
+    for (let attempt = 0; attempt <= SMALL_UPLOAD_RETRY; attempt += 1) {
+      throwIfTaskCanceled(taskId);
 
-    const controller = createAbortControllerForTask(taskId);
+      const formData = new FormData();
+      formData.append('path', destDirPath);
+      formData.append('file', file);
+      const controller = createAbortControllerForTask(taskId);
 
-    try {
-      await axios.post(transferUrl('/api/file'), formData, {
-        withCredentials: true,
-        timeout: 0,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          'x-upload-session': sessionId
-        },
-        onUploadProgress: (evt) => {
-          const total = evt.total || file.size;
-          if (!total) return;
-          const percent = Math.max(0, Math.min(99, Math.round((evt.loaded * 100) / total)));
-          updateTaskProgress(taskId, {
-            currentLoaded: evt.loaded || 0,
-            currentTotal: total,
-            completedBytes,
-            totalBytes,
-            completedFiles,
-            totalFiles,
-            currentFileName: file.name
-          });
-          setTaskPatch(taskId, {
-            currentFileName: file.name,
-            label: `${percent}%`
-          });
-        }
-      });
-    } finally {
-      removeAbortControllerForTask(taskId, controller);
+      try {
+        await axios.post(transferUrl('/api/file'), formData, {
+          withCredentials: true,
+          timeout: 0,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          signal: controller.signal,
+          headers: buildMultipartUploadHeaders({
+            'x-upload-session': sessionId
+          }),
+          onUploadProgress: (evt) => {
+            const total = evt.total || file.size;
+            if (!total) return;
+            const percent = Math.max(0, Math.min(99, Math.round((evt.loaded * 100) / total)));
+            updateTaskProgress(taskId, {
+              currentLoaded: evt.loaded || 0,
+              currentTotal: total,
+              completedBytes,
+              totalBytes,
+              completedFiles,
+              totalFiles,
+              currentFileName: file.name
+            });
+            setTaskPatch(taskId, {
+              currentFileName: file.name,
+              label: `${percent}%`
+            });
+          }
+        });
+        return;
+      } catch (err) {
+        if (isCanceledError(err) || isPausedError(err) || getUploadTaskState(taskId)?.paused) throw err;
+        if (!isTransientUploadError(err) || attempt >= SMALL_UPLOAD_RETRY) throw err;
+
+        const retryDelay = Math.min(8000, 700 * (2 ** attempt));
+        setTaskPatch(taskId, {
+          status: 'reconnecting',
+          currentFileName: file.name,
+          label: `네트워크 재연결 중 · ${attempt + 1}/${SMALL_UPLOAD_RETRY}`
+        });
+        await sleep(retryDelay);
+      } finally {
+        removeAbortControllerForTask(taskId, controller);
+      }
     }
   };
 
@@ -729,12 +756,11 @@ export const TransferProvider = ({ children }) => {
             maxContentLength: Infinity,
             maxBodyLength: Infinity,
             signal: controller.signal,
-            headers: {
-              'Content-Type': 'multipart/form-data',
+            headers: buildMultipartUploadHeaders({
               'x-upload-id': uploadId,
               'x-chunk-index': String(chunkIndex),
               'x-start-byte': String(startByte)
-            },
+            }),
             onUploadProgress: (evt) => {
               const loaded = Math.min(evt.loaded || 0, chunkBytes);
               const prevLoaded = chunkProgress.get(chunkIndex) || 0;
@@ -1095,7 +1121,9 @@ export const TransferProvider = ({ children }) => {
 
         completedFiles += 1;
         baseResumeMeta.completedFiles = completedFiles;
-        baseResumeMeta.percent = 100;
+        baseResumeMeta.percent = totalBytes > 0
+          ? Math.round((completedBytesAt(completedFiles) * 100) / totalBytes)
+          : Math.round((completedFiles * 100) / files.length);
         saveResumableSession(baseResumeMeta);
 
         setTaskPatch(taskId, {
@@ -1173,6 +1201,40 @@ export const TransferProvider = ({ children }) => {
         delete uploadControllersRef.current[taskId];
         setTransferTasks(prev => prev.filter(t => t.id !== taskId));
         setSnackbar({ open: true, message: `'${displayName}' 업로드 취소`, severity: 'info' });
+        return;
+      }
+
+      if (isTransientUploadError(err)) {
+        console.warn('NAS 연결이 끊겨 업로드 자동 재연결을 대기합니다:', err?.message || err);
+        baseResumeMeta.status = 'waiting';
+        baseResumeMeta.currentFileIndex = completedFiles;
+        baseResumeMeta.completedFiles = completedFiles;
+        saveResumableSession(baseResumeMeta);
+
+        state.currentFileIndex = completedFiles;
+        state.resumeMeta = baseResumeMeta;
+        state.reconnectTimer = window.setTimeout(() => {
+          const latestState = getUploadTaskState(taskId);
+          if (!latestState || latestState.canceled || latestState.paused) return;
+          latestState.reconnectTimer = null;
+          uploadFilesSequentialWithChunks({
+            uploadItems: latestState.files || files,
+            targetPath: latestState.targetPath || safeTargetPath,
+            taskName: latestState.taskName || displayName,
+            existingTaskId: taskId,
+            existingSessionId: latestState.sessionId || sessionId,
+            startIndex: latestState.currentFileIndex || completedFiles,
+            resumeMeta: latestState.resumeMeta || baseResumeMeta,
+          });
+        }, NETWORK_RECONNECT_DELAY);
+
+        setTaskPatch(taskId, {
+          status: 'waiting',
+          completed: completedFiles,
+          label: 'NAS 연결 대기 · 15초 후 자동 재시도',
+          resumeMeta: baseResumeMeta,
+        });
+        setSnackbar({ open: true, message: 'NAS 연결이 끊겼습니다. 연결되면 자동으로 이어서 업로드합니다.', severity: 'warning' });
         return;
       }
 
@@ -1326,12 +1388,14 @@ export const TransferProvider = ({ children }) => {
               {transferTasks.map(task => {
                 const currentPercent = Math.max(0, Math.min(100, Number(task.currentFilePercent ?? task.percent ?? 0)));
                 const overallPercent = Math.max(0, Math.min(100, Number(task.overallPercent ?? task.percent ?? 0)));
-                const canPause = ['queued', 'scanning', 'uploading'].includes(task.status);
+                const canPause = ['queued', 'scanning', 'uploading', 'reconnecting', 'waiting'].includes(task.status);
                 const canResume = task.status === 'paused';
-                const canCancel = ['queued', 'scanning', 'uploading', 'paused', 'canceling'].includes(task.status);
+                const canCancel = ['queued', 'scanning', 'uploading', 'reconnecting', 'waiting', 'paused', 'canceling'].includes(task.status);
                 const isMulti = Number(task.total || 1) > 1;
                 const statusText =
                   task.status === 'canceling' ? '취소 중' :
+                  task.status === 'waiting' ? 'NAS 연결 대기' :
+                  task.status === 'reconnecting' ? '연결 복구 중' :
                   task.status === 'paused' ? '중단됨' :
                   task.status === 'queued' ? '대기 중' :
                   task.status === 'done' ? '완료' :

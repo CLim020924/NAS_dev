@@ -1,0 +1,11 @@
+CfRegisterSyncRoot
+CfUnregisterSyncRoot
+CfSetInSyncState
+CfSetPinState
+CfCreatePlaceholders
+CfConnectSyncRoot
+CfDisconnectSyncRoot
+CfExecute
+CfDehydratePlaceholder
+CfConvertToPlaceholder
+CreateFile

@@ -15,11 +15,17 @@ import NasItemPickerDialog from '../NasItemPickerDialog';
 
 let rhwpReadyPromise = null;
 
+const getGlobalObject = () => {
+  if (typeof window !== 'undefined') return window;
+  return {};
+};
+
 const ensureRhwpReady = () => {
   if (!rhwpReadyPromise) {
+    const globalObject = getGlobalObject();
     let canvasContext = null;
     let lastFont = '';
-    window.measureTextWidth = (font, text) => {
+    globalObject.measureTextWidth = (font, text) => {
       if (!canvasContext) canvasContext = document.createElement('canvas').getContext('2d');
       if (font !== lastFont) {
         canvasContext.font = font;
@@ -40,7 +46,16 @@ const normalizeNasPath = (path = '/') => {
   return withSlash.length > 1 && withSlash.endsWith('/') ? withSlash.slice(0, -1) : withSlash;
 };
 
-const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, onSave, onDirtyChange, initialFolderPath = '/' }) => {
+const getPreviewNasPath = (previewUrl) => {
+  try {
+    const url = new URL(previewUrl, window.location.origin);
+    return url.searchParams.get('path') || '';
+  } catch (err) {
+    return '';
+  }
+};
+
+const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNasPath = '', onSave, onDirtyChange, initialFolderPath = '/' }) => {
   const containerRef = useRef(null);
   const editorHostRef = useRef(null);
   const editorRef = useRef(null);
@@ -49,6 +64,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, onSave, onDirtyChan
   const [pages, setPages] = useState([]);
   const [zoom, setZoom] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState('');
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorReadyNonce, setEditorReadyNonce] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -106,41 +122,115 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, onSave, onDirtyChan
 
   useEffect(() => {
     let cancelled = false;
+    const abortController = new AbortController();
+    let currentStage = '한글 문서 요청 준비';
+    const timeout = window.setTimeout(() => {
+      if (cancelled) return;
+      abortController.abort();
+      setError(`한글 문서 로딩이 지연되고 있습니다. 멈춘 단계: ${currentStage}`);
+      setLoading(false);
+    }, 25000);
+    const setStage = (stage) => {
+      currentStage = stage;
+      if (!cancelled) setLoadingStage(stage);
+      console.info('[RHWP] load stage', { stage, name, previewUrl });
+    };
     setLoading(true);
+    setLoadingStage('한글 문서 요청 중');
     setError('');
     setPages([]);
     setBuffer(null);
-    markDirty(false);
+    dirtyRef.current = false;
+    setDirty(false);
 
-    fetch(previewUrl, { credentials: 'include' })
-      .then((res) => {
-        if (!res.ok) throw new Error('한글 문서를 불러오지 못했습니다.');
-        return res.arrayBuffer();
-      })
-      .then(async (arrayBuffer) => {
-        if (cancelled) return;
-        setBuffer(arrayBuffer);
-        await ensureRhwpReady();
-        if (cancelled) return;
-        const doc = new HwpDocument(new Uint8Array(arrayBuffer));
-        const count = Math.max(0, Number(doc.pageCount?.() || 0));
-        const renderedPages = [];
-        for (let index = 0; index < count; index += 1) {
-          renderedPages.push(doc.renderPageSvg(index));
+    const loadDocument = async () => {
+      const nasPath = explicitNasPath || getPreviewNasPath(previewUrl);
+      if (nasPath) {
+        console.info('[RHWP_SERVER] render request', { name, nasPath });
+        setStage('서버 RHWP 렌더링 요청 중');
+        const renderRes = await fetch(`/api/hwp/render?path=${encodeURIComponent(nasPath)}`, {
+          credentials: 'include',
+          signal: abortController.signal
+        });
+        console.info('[RHWP_SERVER] render response', { status: renderRes.status, name, nasPath });
+        setStage(`서버 RHWP 응답 수신: ${renderRes.status}`);
+        if (!renderRes.ok) {
+          const message = await renderRes.text().catch(() => '');
+          throw new Error(message || `서버에서 한글 문서를 렌더링하지 못했습니다. (${renderRes.status})`);
         }
-        if (!cancelled) setPages(renderedPages);
-      })
+        const payload = await renderRes.json();
+        if (cancelled) return;
+        setPages(Array.isArray(payload.pages) ? payload.pages : []);
+        setStage(`완료: ${Number(payload.pageCount || 0)}페이지`);
+
+        fetch(previewUrl, { credentials: 'include' })
+          .then((res) => (res.ok ? res.arrayBuffer() : null))
+          .then((arrayBuffer) => {
+            if (!cancelled && arrayBuffer) setBuffer(arrayBuffer);
+          })
+          .catch((err) => console.warn('[RHWP] background file buffer load failed', err));
+        return;
+      }
+
+      const res = await fetch(previewUrl, { credentials: 'include', signal: abortController.signal });
+      setStage(`응답 수신: ${res.status}`);
+      if (!res.ok) throw new Error(`한글 문서를 불러오지 못했습니다. (${res.status})`);
+
+      const arrayBuffer = await res.arrayBuffer();
+      if (cancelled) return;
+      setStage(`파일 수신 완료: ${arrayBuffer.byteLength.toLocaleString()} bytes`);
+      setBuffer(arrayBuffer);
+
+      const globalObject = getGlobalObject();
+      globalObject.measureTextWidth = globalObject.measureTextWidth || ((font, text) => {
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = font;
+        return ctx.measureText(text).width;
+      });
+
+      setStage('RHWP WASM 초기화 중');
+      await ensureRhwpReady();
+      if (cancelled) return;
+
+      setStage('HWP 문서 파싱 중');
+      const doc = new HwpDocument(new Uint8Array(arrayBuffer));
+      const count = Math.max(0, Number(doc.pageCount?.() || 0));
+      if (!count) {
+        setStage('표시할 페이지 없음');
+        setPages([]);
+        return;
+      }
+
+      const renderedPages = [];
+      for (let index = 0; index < count; index += 1) {
+        if (cancelled) return;
+        setStage(`페이지 렌더링 중: ${index + 1}/${count}`);
+        renderedPages.push(doc.renderPageSvg(index));
+      }
+      if (!cancelled) {
+        setPages(renderedPages);
+        setStage(`완료: ${count}페이지`);
+      }
+    };
+
+    loadDocument()
       .catch((err) => {
-        if (!cancelled) setError(err.message || '한글 문서를 열 수 없습니다.');
+        if (!cancelled && err.name !== 'AbortError') {
+          console.error('[RHWP] load failed', err);
+          setError(err.message || '한글 문서를 열 수 없습니다.');
+        }
       })
       .finally(() => {
+        window.clearTimeout(timeout);
         if (!cancelled) setLoading(false);
       });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeout);
+      abortController.abort();
     };
-  }, [previewUrl, markDirty]);
+  }, [previewUrl, explicitNasPath, name]);
 
   useEffect(() => () => {
     editorRef.current?.destroy?.();
@@ -425,7 +515,12 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, onSave, onDirtyChan
           }}
         >
           {loading ? (
-            <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>
+            <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', color: '#fff', textAlign: 'center', gap: 1 }}>
+              <Stack spacing={1} alignItems="center">
+                <CircularProgress />
+                <Typography variant="body2">{loadingStage || '한글 문서를 불러오는 중입니다...'}</Typography>
+              </Stack>
+            </Box>
           ) : pages.length ? (
             <Stack spacing={1.5} alignItems="center" sx={{ minWidth: pageWidth + 16, pb: 2 }}>
               {pages.map((svg, index) => (
