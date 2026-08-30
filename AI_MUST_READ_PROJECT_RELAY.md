@@ -425,3 +425,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 문서 갱신: `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md` 9절에 winget 설치 확인, Tailscale 공식 설치·로그인, NAS ping, OpenSSH/Git 설치, 장치별 ed25519 키, 안전한 SSH config 병합, host fingerprint, NAS 프로젝트/메모리/서비스 검증, 릴레이·Git 기록 순서를 포함한 복사용 프롬프트를 추가했다.
 - 사용자 개입 경계: Windows UAC, Tailscale 웹 로그인, 새 SSH 공개키 최초 등록, host fingerprint 승인은 보안상 사용자가 확인한다. 프롬프트는 이를 우회하거나 비밀값을 요구하지 않고 필요한 순간 한 번만 명확히 요청한 뒤 계속 진행한다.
 - 회귀 금지: Tailscale auth key나 SSH 개인키를 프롬프트·Git·릴레이에 넣어 무인 설치를 가장하지 않는다. 공개 사이트 200을 Tailscale/SSH 성공으로 간주하지 않고 각각 실제 명령으로 확인한다.
+
+## 2026-08-30 새 PC GPT의 Git 필독 문서 자동 인식 조건 확인
+
+- 사용자 질문: 새 PC의 GPT가 GitHub에 올라간 내용을 알아서 확인하고 작업하는 구조인지 확인했다.
+- 답변/조건: 시작 프롬프트를 새 GPT 대화에 붙여 넣고, 해당 GPT가 터미널·GitHub/SSH 접근 권한을 가진 Codex 작업 환경이면 저장소를 clone 또는 NAS SSH로 연 뒤 AGENTS.md의 필독 순서에 따라 릴레이·Tailscale handoff·Excel을 읽는다.
+- 한계: 일반 채팅만 가능한 GPT는 로컬 프로그램 설치, Git clone, SSH 실행을 직접 할 수 없다. 또한 private GitHub 저장소 인증과 Tailscale 로그인/UAC/SSH 공개키 최초 등록은 새 PC 또는 사용자의 승인이 필요하다.
+- 안전 원칙: Git 문서는 연결 정보를 설명하지만 Git 접근 권한·Tailnet 가입·SSH 권한을 자동 부여하지 않는다. 권한이 갖춰진 뒤에는 프롬프트가 설치·검증·메모리 확인 순서를 자동으로 이어가게 한다.
