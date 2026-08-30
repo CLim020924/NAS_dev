@@ -700,3 +700,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 구현 범위: 플랫폼 독립 창 `문서 스튜디오`에 `PDF로 변환`, `PDF 합치기`, `혼합 문서 합치기` 모드를 추가했다. NAS 선택기는 로그인 계정의 파일 목록을 사용하고, `이 기기에서 불러오기`는 기존 `TransferContext.startUpload`의 재개 가능한 업로드를 그대로 재사용해 두 출처를 하나의 순서 목록으로 합친다. 목록은 끌어놓기·위/아래 이동·순서 반전·제거를 지원한다.
 - 서버 처리: 인증된 사용자 저장소 내부의 일반 파일만 입력으로 허용하고 symlink·미지원 확장자·40개 초과·합계 4GB 초과를 거부한다. LibreOffice와 `pdfunite`는 `shell: false` 및 작업별 격리 profile/HOME에서 실행하며, 원본을 변경하지 않고 계정별 완료 폴더에 quota 확인 후 고유 이름으로 원자 이동한다.
 - 검증 상태: 로컬 정책·서비스 단위 테스트 5개가 통과했고 Linux 도구가 필요한 실변환 통합 테스트는 NAS에서 실행하도록 추가했다. 다음 단계는 기능 commit을 push하고 NAS에서 실제 LibreOffice 변환·PDF 결합, production build, 공개 화면 입력·결과 열기까지 검증하는 것이다.
+
+### `문서 스튜디오` GitHub·NAS 배포 및 실화면 검증
+
+- 기능 commit `dd4b58f`와 warning 정리 commit `74064a3`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 fast-forward로 받았다.
+- NAS에서 실제 ODT 두 개를 LibreOffice로 PDF 변환하고 `pdfunite`로 결합하는 Linux 통합 테스트를 통과했다. 전체 backend tests는 14/14, frontend 문서 선택 정책은 2/2를 통과했다. production build와 PDF.js 호환 gate는 `react-pdf 9.2.1 / PDF.js API+Worker 4.8.69` 일치를 확인했고 live/build index는 모두 `main.fc9c82b0.js`다.
+- 실제 로그인 Chrome의 공개 `ServicePlatform`에서 `문서 스튜디오` 아이콘과 독립 창, 세 가지 mode, `NAS에서 불러오기`, `이 기기에서 불러오기`, 순서 편집, 완료 경로 UI를 확인했다. NAS picker로 `제인 진 대화.docx`, `제인 진 코칭대화(영문).docx`를 선택해 혼합 결합을 실행했고 `/문서 스튜디오/완료 파일/문서 스튜디오 실화면 검증.pdf`가 생성됐다. 결과 열기에서 PDF canvas 20개와 본문 text layer가 정상 렌더됐다. 현재 기기 버튼은 Chrome native file chooser를 실제 호출하며 기존 `TransferContext.startUpload` 경로에 연결된다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 HTTP 200이다. 원본 DOCX와 Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+- workbook의 `Request_Archive`, `Patch_Log`, `Feature_Index`, `Relation_Map`, `Do_Not_Break`, `Code_Map`, `Office_Viewers`, `API_Routes`를 갱신했다. formula error 0, 관련 범위 렌더와 API route 열 구조를 확인했다. 1차 범위 밖인 PPTX 원본 합치기, 템플릿 일괄 만들기, Microsoft Office·한컴 네이티브 고정밀 변환은 후속 기능으로 명시했다.
