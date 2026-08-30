@@ -442,3 +442,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - NAS 실제 검증: `whoami=limchanyoung`, `hostname=chanyoung`, 브랜치 `cleanup/git-tracking-2026-06-08`, clean worktree를 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 enabled+active, `msp-backend`는 online, 내부 `127.0.0.1:3030`은 HTTP 200이었다.
 - 프로젝트 메모리: `AGENTS.md`, 이 릴레이, 다른 PC Tailscale handoff, 메모리 정책과 workbook의 `README`, `Memory_Process`, `Do_Not_Break`, `Feature_Index`, `Relation_Map`, `Network_Config`를 확인했다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
 - 최종 SSH 검증: 새 프로세스에서 `ssh -o BatchMode=yes nas`가 비밀번호 없이 성공했다. 해당 사용자에 대한 유효 정책은 `pubkeyauthentication yes`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `authenticationmethods publickey`다. 실제 코드 변경 요청은 NAS worktree 상태를 다시 확인한 뒤 진행한다.
+
+## 2026-08-30 프로젝트 전체 구성 파악 및 수정 요청 라우팅 준비
+
+- 사용자 요청: 이후 수정 요청의 요점을 즉시 파악할 수 있도록 현재 NAS 프로젝트의 전체 구성을 미리 이해하고 정리한다.
+- 확인 범위: 실제 PM2 실행 진입점과 패키지 manifest, backend API·Socket.IO·보안 모듈, React 진입점·Context·핵심 화면, Windows Agent·native installer/launcher·CFAPI Provider, 프로젝트 workbook의 `Feature_Index`, `Relation_Map`, `Code_Map`, `API_Routes`, `Socket_Events`, `Data_Files`, `Network_Config`, `Office_Viewers`를 교차 확인했다.
+- 현재 구조: `backend/index.js`가 Express/HTTP/Socket.IO와 서비스 라우터를 결합하고, `backend/nasRoutes.js`가 파일·검색·업로드·버전·휴지통·장치 동기화의 중심이다. frontend는 `App.js`와 Window/Transfer/Chat/Meeting Context를 중심으로 구성되며, Windows 측은 `windows-node/index.js` Agent, `windows-installer/Program.cs` installer/launcher, `windows-cfapi/Program.cs` placeholder·hydration Provider로 분리된다.
+- 배포·보안 경계: PM2 live cwd는 `/home/limchanyoung/my-service-platform/backend`다. frontend 변경은 build와 `/var/www/html` 배포 및 bundle hash 검증이 필요하다. 사용자 root 밖 접근과 `.nas_trash`, `.agent_versions`, `.agent_incoming` 노출을 금지하며, token·개인키·비밀번호는 기록하지 않는다.
+- 향후 라우팅: 웹 파일 기능은 `nasRoutes.js`와 NAS/FileViewer/Transfer Context부터, 로그인·권한은 `index.js`와 보안 모듈부터, 채팅·회의는 해당 router/Context부터, Windows 동기화는 Agent와 device API부터, Explorer 상태·온라인 전용은 CFAPI Provider부터, 설치·자동복구는 installer/launcher부터 추적한다. 관련 workbook 행과 회귀 규칙을 함께 확인한 뒤 최소 범위로 수정한다.
+- 미완료·주의 항목: Explorer 웹 바로가기의 사용자 클릭 의존, Authenticode/SmartScreen, 숨은 PowerShell tray helper의 완전 native 대체, 다중 PC 충돌, 대용량 전송 장애·재개, 규모 진단과 DR E2E는 아직 별도 검증·완료가 필요하다. 과거 patch/fix 스크립트는 현재 진입점으로 오인하지 않는다.
+- 로컬 작업 메모리: 새 PC의 Git 저장소 밖 `outputs/NAS_PROJECT_ARCHITECTURE_MEMORY.md`에 구성도, 요청 유형별 최초 확인 파일, 데이터 경계, 회귀 규칙과 기본 작업 절차를 정리했다. 이번 요청은 코드·설정·workbook을 변경하지 않은 구조 감사이므로 이 릴레이만 Git에 기록한다.
