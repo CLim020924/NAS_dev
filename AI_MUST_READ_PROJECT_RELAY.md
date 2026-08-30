@@ -560,3 +560,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: Agent source/package self-test와 Setup self-test, backend password/Office/quota/version/trash/desktop handoff 7개가 통과했다. `deviceSyncSecurity`는 Windows 비관리자 symlink 생성 EPERM에서만 중단돼 NAS Linux에서 재실행한다. frontend 개별 10 tests는 통과했지만 로컬 전체 App suite와 production build는 현재 설치된 pnpm 의존성의 `react-router/dom` 및 eslint `react-app` 해석 오류로 중단돼 NAS의 clean 의존성 환경에서 재검증한다. `git diff --check`는 통과했다.
 - 데이터 보존/미실행 경계: 활성 profile 실제 `로그아웃` 클릭은 서버 relation과 로컬 DPAPI credential 제거 후 재로그인 자격 증명이 필요하므로 실행하지 않았다. 대신 폐기 token 격리 주입으로 needs-relink 화면과 연결 해제 버튼 활성 상태를 실제 확인했다. 사용자 파일, active config/token, Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다. 이전 폐기 profile `chanchanchan`은 현재 config와 Explorer에 남아 있으나 사용자 확인 없이 삭제하지 않았다.
 - 기록: workbook `Request_Archive`, `Patch_Log`, `Feature_Index`, `Do_Not_Break`를 기존 형식으로 갱신하고 관련 범위를 렌더했으며 formula error 0을 확인했다. 다음 단계는 GitHub push, NAS fast-forward, Linux 전체 보안 테스트, PM2 restart/save, 필수 서비스와 내부·공개 HTTP, 배포 binary hash를 검증하는 것이다.
+
+### 1.10.17 GitHub·NAS 최종 배포 검증
+
+- 기능·binary·workbook·relay commit `b793a21`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS에서 Agent source self-test와 backend tests 8/8을 통과했다. Windows에서 symlink 권한 EPERM이었던 `deviceSyncSecurity` 경계도 Linux에서 정상 통과했다. frontend clean build는 기존 eslint warning만 남기고 성공했으며 `main.18c5b581.js`를 생성했다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
+- NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `7D6821CBBC376A448A43B1070F0865140EF1FD22759E77421521EF21AA2C1717`, Setup/launcher SHA-256은 `C0D2DBC9BA45706AE65016C924F5760E138243491C82863C75C3383E485740F2`다.
+- 최종 정상 상태: 현재 PC health는 `up-to-date`, 제어창은 닫혀 있고 background launcher·Agent·계정별 Provider가 실행 중이다. PM2 backend와 공개 사이트가 정상이다. 사용자 파일·활성 계정 credential은 보존됐다. 실제 활성 로그아웃과 폐기 legacy profile 삭제는 자격 증명/관계 제거 동작이므로 자동 실행하지 않았다.
