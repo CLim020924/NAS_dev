@@ -59,6 +59,7 @@ const {
   processDocumentStudioJob,
   sanitizeFileName: sanitizeDocumentStudioFileName
 } = require('./documentStudioService');
+const { createBlankOfficeDocument } = require('./blankDocumentService');
 
 const router = express.Router();
 
@@ -1716,6 +1717,67 @@ router.post('/file', verifyToken, upload.single('file'), (req, res) => {
     appendActivity(basePath, { type: 'folder-created', path: toNasRelativePath(basePath, targetPath), actor: getActivityActor(req.user), source: 'web' });
     res.json({ success: true });
   } catch (e) { res.status(403).json({ error: e.message }); }
+});
+
+const DOCUMENT_WORKSPACE_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'hwp', 'hwpx']);
+
+const getUniqueNewDocumentPath = (targetDir, requestedName, format) => {
+  const extension = `.${format}`;
+  const sanitized = sanitizeUploadFileName(requestedName || `새 문서${extension}`);
+  const withoutExtension = sanitized.toLowerCase().endsWith(extension)
+    ? sanitized.slice(0, -extension.length)
+    : sanitized.replace(/\.[^.]+$/, '');
+  const baseName = withoutExtension.trim() || '새 문서';
+  let candidate = path.join(targetDir, `${baseName}${extension}`);
+  let suffix = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(targetDir, `${baseName} (${suffix})${extension}`);
+    suffix += 1;
+  }
+  return candidate;
+};
+
+router.post('/document-workspace/documents', verifyToken, express.json(), async (req, res) => {
+  let temporaryPath = '';
+  try {
+    const format = String(req.body?.format || '').trim().toLowerCase();
+    if (!DOCUMENT_WORKSPACE_FORMATS.has(format)) {
+      return res.status(400).json({ error: '지원하지 않는 새 문서 형식입니다.' });
+    }
+
+    const { basePath, targetPath: targetDir } = getValidatedPath(req.user, req.body?.path || '/');
+    if (!fs.existsSync(targetDir) && String(req.body?.path || '') === '/문서 스튜디오') {
+      assertRealPathInside(basePath, basePath);
+      fs.mkdirSync(targetDir, { mode: 0o700 });
+    }
+    if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+      return res.status(404).json({ error: '새 문서를 저장할 NAS 폴더를 찾을 수 없습니다.' });
+    }
+    assertRealPathInside(basePath, targetDir);
+
+    let bytes;
+    if (format === 'hwp' || format === 'hwpx') {
+      const { HwpDocument } = await ensureServerRhwp();
+      const document = HwpDocument.createEmpty();
+      bytes = Buffer.from(format === 'hwpx' ? document.exportHwpx() : document.exportHwp());
+    } else {
+      bytes = await createBlankOfficeDocument(format);
+    }
+
+    const targetPath = getUniqueNewDocumentPath(targetDir, req.body?.fileName, format);
+    await assertQuotaAvailable(req.user, bytes.length, targetPath);
+    temporaryPath = path.join(targetDir, `.${path.basename(targetPath)}.${process.pid}.${crypto.randomBytes(5).toString('hex')}.tmp`);
+    fs.writeFileSync(temporaryPath, bytes, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporaryPath, targetPath);
+    temporaryPath = '';
+    invalidateUsageCache(targetPath);
+    const fullPath = toNasRelativePath(basePath, targetPath);
+    appendActivity(basePath, { type: 'file-created', path: fullPath, actor: getActivityActor(req.user), source: 'document-workspace' });
+    return res.status(201).json({ success: true, name: path.basename(targetPath), fullPath: fullPath.startsWith('/') ? fullPath : `/${fullPath}`, format, size: bytes.length });
+  } catch (error) {
+    safeRmSync(temporaryPath);
+    return res.status(error.status || 500).json({ error: error.message || '새 문서를 만들지 못했습니다.' });
+  }
 });
 
 const getUserTrashRoot = (basePath) => path.join(basePath, USER_TRASH_DIR);

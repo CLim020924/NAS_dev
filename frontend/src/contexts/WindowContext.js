@@ -255,7 +255,7 @@ export const WindowProvider = ({ children }) => {
     if (openWindows.find(w => w.id === fileId)) {
       setOpenWindows(prev => prev.map(w =>
         w.id === fileId
-          ? { ...w, isMinimized: false, zIndex: topZIndex + 1, mode: forceEditMode ? 'edit' : w.mode }
+          ? { ...w, isMinimized: false, zIndex: topZIndex + 1, mode: forceEditMode ? 'edit' : w.mode, preferEditMode: forceEditMode || w.preferEditMode }
           : w
       ));
       setTopZIndex(prev => prev + 1);
@@ -296,6 +296,7 @@ export const WindowProvider = ({ children }) => {
           content,
           originalContent: content,
           mode: forceEditMode && !isBinary ? 'edit' : 'view',
+          preferEditMode: forceEditMode,
           isBinary,
           url: safeApiUrl,
           ext,

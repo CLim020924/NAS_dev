@@ -351,7 +351,7 @@ const DocumentStudio = () => {
       <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: 'background.paper' }}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between">
           <Box>
-            <Typography variant="h6" sx={{ fontWeight: 950 }}>문서 스튜디오</Typography>
+            <Typography variant="h6" sx={{ fontWeight: 950 }}>문서 변환</Typography>
             <Typography variant="body2" color="text.secondary">NAS 파일과 이 기기 파일을 함께 변환하고 합칩니다.</Typography>
           </Box>
           <Stack direction="row" spacing={0.75}>

@@ -411,7 +411,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     if (isHwp) {
       const fullPath = String(win.fullPath || '');
       const currentFolderPath = fullPath.includes('/') ? (fullPath.substring(0, fullPath.lastIndexOf('/')) || '/') : '/';
-      return <RhwpDocumentViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} nasPath={fullPath} onSave={handleRhwpSave} onDirtyChange={handleRhwpDirtyChange} initialFolderPath={currentFolderPath} />;
+      return <RhwpDocumentViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} nasPath={fullPath} onSave={handleRhwpSave} onDirtyChange={handleRhwpDirtyChange} initialFolderPath={currentFolderPath} initialMode={win.preferEditMode ? 'editor' : 'viewer'} />;
     }
     if (isOffice && !officeConfig) {
       return <Box sx={{ p: 3 }}><Typography color={officeAccessError ? 'error' : 'text.secondary'}>{officeAccessError || '문서 접근 권한을 확인하는 중입니다...'}</Typography></Box>;

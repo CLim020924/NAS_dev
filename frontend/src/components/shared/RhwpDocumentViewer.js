@@ -55,11 +55,11 @@ const getPreviewNasPath = (previewUrl) => {
   }
 };
 
-const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNasPath = '', onSave, onDirtyChange, initialFolderPath = '/' }) => {
+const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNasPath = '', onSave, onDirtyChange, initialFolderPath = '/', initialMode = 'viewer' }) => {
   const containerRef = useRef(null);
   const editorHostRef = useRef(null);
   const editorRef = useRef(null);
-  const [mode, setMode] = useState('viewer');
+  const [mode, setMode] = useState(initialMode === 'editor' ? 'editor' : 'viewer');
   const [buffer, setBuffer] = useState(null);
   const [pages, setPages] = useState([]);
   const [zoom, setZoom] = useState(1);

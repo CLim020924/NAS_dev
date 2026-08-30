@@ -42,7 +42,8 @@ const NasItemPickerDialog = ({
   title = 'NAS 항목 선택',
   confirmLabel = '선택',
   folderOnly = false,
-  allowCurrentFolder = false
+  allowCurrentFolder = false,
+  itemFilter = null
 }) => {
   const [currentPath, setCurrentPath] = useState(ensureSlash(initialPath));
   const [items, setItems] = useState([]);
@@ -71,6 +72,7 @@ const NasItemPickerDialog = ({
   const visibleItems = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items
+      .filter((item) => !itemFilter || item.type === 'folder' || item.type === 'linked-device' || itemFilter(item))
       .filter((item) => !q || String(item.name || '').toLowerCase().includes(q))
       .sort((a, b) => {
         const af = a.type === 'folder' || a.type === 'linked-device';
@@ -78,7 +80,7 @@ const NasItemPickerDialog = ({
         if (af !== bf) return af ? -1 : 1;
         return String(a.name || '').localeCompare(String(b.name || ''));
       });
-  }, [items, search]);
+  }, [itemFilter, items, search]);
 
   const handleConfirm = () => {
     if (!selected) return;

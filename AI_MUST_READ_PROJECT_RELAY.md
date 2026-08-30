@@ -744,3 +744,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 공개 UI에서 PPTX 두 개를 병합해 `합친 프레젠테이션.pptx`를 생성했다. 결과 package에 slide XML 2개가 있으며 OnlyOffice가 실제로 열고 `Slide 1 of 2`를 표시했다.
 - 80행 템플릿 작업을 시작 즉시 취소해 진행 상태가 `cancelled`, 재시도 가능으로 바뀌고 `취소검증-*` 결과가 0건임을 확인했다. 새로고침 뒤 cancelled/retry가 복구됐고 재시도 후 다시 취소할 수 있었다. 이어 실행 중 PM2를 재시작해 `NAS 서비스가 다시 시작되어 작업이 중단됨`과 재시도 버튼이 복구되는 것을 실제 화면에서 확인했다.
 - 최종 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active, `msp-backend`는 online, 내부 `127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+## 2026-08-31 `문서 변환` 이름 분리·새 `문서 스튜디오` 개인 작업대 구현
+
+- 사용자 요청: 기존 플랫폼 앱 `문서 스튜디오`의 이름을 `문서 변환`으로 바꾸고, RHWP 한글 편집기와 OnlyOffice 편집기를 한곳에서 사용하는 폴라리스오피스형 개인 문서 작업대를 새 `문서 스튜디오` 앱으로 만든다.
+- 이름·호환성: 기존 변환 기능의 내부 `document-studio` ID, job localStorage key, `/api/document-studio`, `/문서 스튜디오/작업 파일·완료 파일`은 기존 작업 복구와 저장 경로 호환성을 위해 유지하고 화면 표시명과 제목만 `문서 변환`으로 바꿨다. 새 작업대는 별도 `document-workspace` ID와 `문서 스튜디오` 이름으로 플랫폼·전역 앱 창에 등록했다.
+- 작업대 1차 기능: DOCX/XLSX/PPTX/HWP/HWPX 새 문서 카드, 편집 가능한 NAS 문서 선택, 최근 수정 문서 12개, 최근 목록 새로고침, 기존 `문서 변환` 앱 바로가기를 제공한다. 새 파일과 선택 파일은 `WindowContext.openFileWindowByPath(..., true)`로 열어 OnlyOffice 또는 RHWP 편집기가 작업대보다 앞에 즉시 활성화된다. HWP/HWPX에는 `preferEditMode`를 전달해 뷰어가 아니라 편집 탭으로 진입한다.
+- 새 문서 API: `POST /api/document-workspace/documents`는 로그인 계정 root 안의 폴더만 사용하고 지원 형식 allowlist, 정리된 파일명, realpath, quota, 기존 이름 충돌 시 고유 이름, 권한 600 임시파일과 원자 rename을 적용한다. DOCX/XLSX/PPTX는 필수 OOXML package를 만들고 HWP/HWPX는 RHWP `HwpDocument.createEmpty()`의 실제 export를 사용한다. 기존 파일을 덮어쓰지 않는다.
+- 사전 검증: backend 문법 검사와 blank OOXML package 단위 테스트를 통과했다. RHWP WASM에서 빈 문서를 실제 생성해 HWP OLE signature와 HWPX ZIP signature를 확인했다. 로컬 frontend production build는 이번 변경과 무관한 기존 eslint warning만 남기고 성공했다. Windows 로컬 전체 Jest는 기존 `canvas.node` native binding 부재 때문에 시작 전 실패해 NAS Linux에서 다시 실행한다.
+- 다음 안전한 단계: 기능·워크북·릴레이를 활성 브랜치에 push하고 NAS에서 backend/frontend tests, 실제 DOCX/XLSX/PPTX/HWP/HWPX 생성·편집기 열기, 공개 플랫폼의 두 앱 이름과 최근 문서 화면을 확인한 뒤 최종 검증 내용을 같은 기록에 추가한다.
