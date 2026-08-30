@@ -482,3 +482,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 빌드·검증: Agent source self-test, 새 packaged Agent self-test, Setup self-test, Node syntax, C# compile, frontend production build를 통과했다. 로컬 backend 테스트는 desktop handoff 2개와 file trash/version, Office access, password, quota 테스트가 통과했다. `deviceSyncSecurity`의 symlink test는 Windows 개발자 권한 부재로 EPERM이어서 NAS에서 재검증한다. workbook의 `Request_Archive`, `Patch_Log`, `Do_Not_Break`, `Feature_Index`, `Relation_Map`, `Code_Map`을 기존 형식으로 갱신하고 수식 오류 0·관련 시트 렌더를 확인했다.
 - 배포 경계: 이 기록 시점에는 source와 Agent/Setup binary 빌드가 완료됐고 실제 NAS pull, backend restart, frontend `/var/www/html` 반영, 현재 Windows PC 보존 업데이트와 재부팅 없는 로그아웃·재연결 E2E가 남아 있다. 완료로 과장하지 않으며 다음 단계에서 NAS clean 확인 후 배포한다.
 - 회귀 금지: pairing session, PC heartbeat connection, file sync state를 다시 하나의 모호한 `연결 중`으로 합치지 않는다. 서버 응답 실패를 이유로 로컬 로그아웃을 막지 않으며, 로그아웃 과정에서 다른 계정·사용자 파일·다른 경로의 동명 프로세스를 삭제하거나 종료하지 않는다.
+
+## 2026-08-30 확인: 작업 화면의 대규모 줄 삭제 표시
+
+- 사용자 질문: 작업 화면에 약 20,000줄이 제거된 것처럼 보이는 이유와 프로젝트 손상 여부를 확인해 달라.
+- 확인 결과: 기능 커밋 `0d319dd`의 실제 text 변경은 91 insertions, 35 deletions이며 삭제된 프로젝트 파일은 없다. binary 2개와 workbook 1개는 교체된 산출물이라 Git numstat가 줄 수를 표시하지 않는다.
+- 표시 원인: 로컬 검증 중 pnpm이 새로 만든 미추적 `pnpm-lock.yaml`/workspace 보조 파일과 artifact-tool이 만든 약 2MB의 미추적 inspect 결과를 저장소에 남기지 않기 위해 제거했다. 기존 Git 추적 파일을 삭제한 것이 아니며 해당 임시 파일은 커밋·push되지 않았다.
+- 안전 경계: 사용자 우려를 확인하는 동안 현재 Windows PC의 1.10.13 보존 업데이트는 시작하지 않고 중단했다. NAS source/backend/frontend 배포와 HTTP 200 검증까지 완료된 상태이며, 로컬 PC 설치본 교체·로그아웃 E2E는 사용자 확인 후 이어간다.
