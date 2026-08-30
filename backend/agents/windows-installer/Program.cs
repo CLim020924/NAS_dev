@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.11.0")]
-[assembly: AssemblyFileVersion("1.10.11.0")]
+[assembly: AssemblyVersion("1.10.12.0")]
+[assembly: AssemblyFileVersion("1.10.12.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.11";
+        internal const string ProductVersion = "1.10.12";
 
         [STAThread]
         private static void Main(string[] args)
@@ -90,6 +90,16 @@ namespace NasDriveSetup
             if (string.IsNullOrWhiteSpace(processPath) || string.IsNullOrWhiteSpace(launcherPath)) return false;
             return string.Equals(processPath, launcherPath, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(processPath, launcherPath + ".previous", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool IsInstalledAgentProcessPath(string processPath, string agentPath)
+        {
+            if (string.IsNullOrWhiteSpace(processPath) || string.IsNullOrWhiteSpace(agentPath)) return false;
+            try
+            {
+                return string.Equals(Path.GetFullPath(processPath), Path.GetFullPath(agentPath), StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
         }
 
         private static bool RunInstalledAgentCommand(string[] args)
@@ -281,7 +291,9 @@ namespace NasDriveSetup
                     && !IsKnownInstallerFileName("my-important-file.exe")
                     && IsInstalledLauncherProcessPath(@"C:\Apps\NAS-Drive.exe", @"C:\Apps\NAS-Drive.exe")
                     && IsInstalledLauncherProcessPath(@"C:\Apps\NAS-Drive.exe.previous", @"C:\Apps\NAS-Drive.exe")
-                    && !IsInstalledLauncherProcessPath(@"C:\Other\NAS-Drive.exe", @"C:\Apps\NAS-Drive.exe");
+                    && !IsInstalledLauncherProcessPath(@"C:\Other\NAS-Drive.exe", @"C:\Apps\NAS-Drive.exe")
+                    && IsInstalledAgentProcessPath(@"C:\Apps\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe")
+                    && !IsInstalledAgentProcessPath(@"C:\Old\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe");
             }
             catch { return false; }
         }
@@ -869,7 +881,7 @@ namespace NasDriveSetup
             {
                 try
                 {
-                    if (!process.HasExited) return;
+                    if (!process.HasExited && Program.IsInstalledAgentProcessPath(process.MainModule.FileName, agentExe)) return;
                 }
                 catch { }
                 finally { process.Dispose(); }

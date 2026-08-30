@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.11';
+const AGENT_VERSION = '1.10.12';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;

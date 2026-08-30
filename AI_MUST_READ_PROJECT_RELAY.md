@@ -407,3 +407,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 보안 경계: 문서를 읽는 것만으로 새 PC가 접속 권한을 얻지는 않는다. 새 PC는 같은 Tailnet에 로그인하고 새 PC 전용 SSH 공개키를 NAS에 등록해야 한다. Tailscale auth key, SSH 개인키, 비밀번호, Agent token은 문서·Git·Excel에 기록하지 않는다.
 - 새 문서: `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md`에 초기 설정, ChatGPT/Codex 시작 프롬프트, 작업 순서, 금지사항, 상태 점검, 장애 분류를 기록했다. 사용자가 직접 받을 수 있도록 Windows 작업 폴더에도 같은 이름의 문서를 유지한다.
 - 다음 단계: 이 문서와 릴레이를 먼저 별도 Git 커밋으로 푸시한 뒤, NAS Drive 1.10.11 파일별 상태 표시 작업의 중단 지점을 다시 감사하고 남은 결함을 별도 커밋으로 처리한다.
+
+## 2026-08-30 완료: NAS Drive 1.10.12 오래된 다른 경로 Agent 오인 방지
+
+- 중단 작업 재감사에서 설치 버전 1.10.11, HKCU Run, health 파일은 정상처럼 보였지만 실제 프로세스는 native launcher 하나뿐이고 설치 Agent/Provider가 사라진 상태를 발견했다. 수동으로 정확한 설치 Agent를 시작하면 즉시 Agent/Provider와 동기화가 복구됐다.
+- native tray의 `EnsureAgentRunning`은 `Process.GetProcessesByName("NAS-Sync-Agent")` 결과 중 하나라도 살아 있으면 실행 경로를 확인하지 않고 정상으로 간주했다. 과거 다운로드·이전 설치 폴더에 같은 이름의 EXE가 남거나 실행 중이면 정식 `%LOCALAPPDATA%\Programs\NAS Drive\NAS-Sync-Agent.exe`가 없어도 복구를 생략할 수 있었다.
+- Setup/launcher/Agent 1.10.12는 Agent 프로세스의 `MainModule.FileName`을 정식 설치 경로와 full-path·대소문자 무시 비교한다. 이름만 같은 다른 경로 프로세스는 건드리거나 종료하지 않고 무시하며, 정식 설치 Agent를 별도로 시작한다. self-test에 동일 경로 허용·다른 경로 거부 회귀 검사를 추가했다.
+- 실제 PC 보존 업데이트에서 account config SHA-256을 유지한 채 Agent/launcher를 1.10.12로 교체했다. 다른 임시 폴더의 더미 `NAS-Sync-Agent.exe`를 실행하고 정식 Agent/Provider를 강제 종료한 뒤에도 14초 안에 정식 설치 Agent와 Provider가 자동 복구됐고 health가 `up-to-date`로 돌아왔다. 더미는 시험 후 종료했다.
+- 배포 hash: Agent `8FA9593B33A639BE63727CE9721C3E8E730682A60F952441299D4B99F2AB254A`, Setup/launcher `F08FE26B547C92CDE7197D0386F169DA8F82CC191026702E9DACD83168625F0C`, Provider 1.4.2 `417B13A3EDE23BD07CCF76BFA46A58E05A698198AB742442E45E917C966DEAC5`.
+- 검증: source/packaged Agent self-test, Setup self-test, backend tests 8/8, node/diff check 통과. NAS PM2 restart/save 후 online, 내부 3030·공개 HTTPS 200. 현재 PC launcher/Agent/Provider 3개, 시작 프로그램, 계정/동기화 루트 보존, health `up-to-date`를 확인했다.
+
+절대 회귀 규칙: Agent supervisor는 프로세스 이름만으로 정상 설치본을 판단하지 않는다. 정식 설치 경로의 실행 파일만 정상 Agent로 인정한다. 다른 경로의 동명 프로세스를 자동 종료하거나 사용자 파일로 오인하지 말고, 정식 Agent를 독립적으로 복구한다. health 파일이 `up-to-date`여도 updatedAt이 오래됐으면 실제 Agent/Provider 프로세스와 heartbeat를 함께 확인한다.
