@@ -725,3 +725,22 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 동일 형식 결과 두 개를 실제 저장했고 `원본 형식 유지 복사`로 표시됐다. 이어 DOCX→ODT를 공개 UI에서 실행해 `제인 진 대화.odt`를 만들고 결과 `열기`를 눌렀다. 새 ODT 파일 창이 문서 스튜디오보다 앞에 즉시 활성화됐고 OnlyOffice iframe에서 실제 본문이 렌더됐다.
 - 검증 중 ODT/ODS/ODP/RTF가 생성돼도 기존 WindowContext가 일부를 text로 오인할 수 있는 추가 회귀를 발견해 공통 `officeFormats` 정책으로 보강했다. 지원 결과는 모두 binary viewer 경로를 타며 ODT/RTF→word, ODS/CSV→cell, ODP→slide editor로 분기한다.
 - 현재 NAS에 서버 입력 filter가 없는 HWP/HWPX/CELL/NXL은 source 목록에 `변환 도구 준비 필요`로 비활성 표시한다. 겉보기 선택지만 만들고 실행 시 실패시키지 않는다. PPTX 원본 슬라이드 합치기와 템플릿 일괄 만들기는 이번 형식 변환·창 순서 요청과 직접 겹치지 않아 후속 독립 기능으로 남긴다.
+
+## 2026-08-31 문서 스튜디오 남은 기능 전체 구현
+
+- 사용자 요청: 직전 답변에서 미완료라고 밝힌 문서 스튜디오 기능을 전부 구현한다. 범위는 PPTX 슬라이드 합치기, PPTX 템플릿 일괄 생성, 진행률·취소·재시도, 오류·새로고침·서비스 재시작 복구, 원본/결과 미리보기, 글꼴 진단, HWP/HWPX/CELL/NXL의 안전한 실제 변환 엔진 연결이다.
+- 비동기 작업 수명: `POST /api/document-studio/jobs`로 작업을 시작하고 status/cancel/retry API로 제어한다. 작업은 로그인 계정 owner key로 격리되고 입력·출력은 계정 root realpath 안에서 다시 검증한다. 외부 프로세스에는 AbortSignal을 전달해 취소 시 종료하며, 전 결과가 격리 workspace에서 완성되고 quota를 통과한 뒤에만 완료 폴더로 원자 publish한다. 취소·실패 때 부분 결과는 남지 않는다.
+- 복구: job 상태는 비밀값 없이 NAS incoming 영역에 권한 600 JSON으로 저장한다. 브라우저는 active job ID를 localStorage에 기억해 새로고침 후 polling을 재연결한다. PM2 재시작으로 queued/running 작업이 끊기면 `failed`와 `canRetry=true`로 복구하며 같은 입력으로 재시도할 수 있다. 성공·실패·취소 기록은 6시간 뒤 정리한다.
+- PPTX 병합: `pptxPackageService`가 첫 deck을 기준으로 추가 slide와 연결된 media, chart, embedding, notes, layout, master, theme 관계를 재귀 복사·재명명하고 presentation relationship/id와 `[Content_Types].xml`을 함께 갱신한다. 단순 slide XML 연결로 디자인 관계가 깨지는 방식을 사용하지 않는다.
+- PPTX 템플릿: 첫 행 열 이름과 1~200개 데이터 행을 탭 또는 CSV로 입력하고 `{열 이름}` 기반 파일명과 본문을 바꿔 PPTX 또는 PDF를 만든다. PowerPoint가 placeholder를 여러 `<a:t>` style run으로 나눈 경우도 하나의 placeholder로 인식해 치환한다. 원본 package와 디자인 요소는 그대로 유지한다.
+- 미리보기·글꼴: 각 입력에 `원본 미리보기`, 각 결과에 기존 PDF/OnlyOffice `열기`를 제공한다. OOXML 내부 글꼴을 추출해 NAS fontconfig의 실제 family 일치 여부를 검사하고 누락 글꼴을 결과에 경고한다. 라이선스가 확인되지 않은 글꼴을 자동 다운로드하거나 조용히 다른 글꼴로 대체했다고 표시하지 않는다.
+- 한컴·한셀 경계: NAS LibreOffice에는 HWP/HWPX/CELL/NXL 입력 filter가 없다. `DOCUMENT_STUDIO_NATIVE_CONVERTER`가 신뢰된 절대경로 실행 가능 파일로 연결된 경우에만 HWP/HWPX→PDF/DOCX/ODT, CELL/NXL→PDF/XLSX/ODS 조합을 capabilities에 동적으로 노출한다. 실행은 `spawn(shell:false)`의 분리 인자 프로토콜을 사용하고 실행 파일 경로는 클라이언트에 노출하지 않는다. 현재 live NAS에는 해당 native engine이 설치되지 않아 이 네 형식은 계속 비활성 상태이며 가짜 성공을 만들지 않는다.
+
+### 최종 GitHub·NAS 배포 및 실제 화면 검증
+
+- 기능 commit `d35fa05`와 템플릿 결과 형식 유지 수정 commit `eae96ef`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 fast-forward로 받았다. backend `npm ci`, frontend `npm ci`, production build와 PDF.js API/Worker 4.8.69 gate가 통과했다. 최종 live bundle은 `main.5e18785b.js`다.
+- NAS 전체 backend tests 18/18과 frontend 관련 tests 6/6이 통과했다. backend에는 기존 Linux LibreOffice ODT→PDF/DOCX·PDF 결합 테스트와 새 PPTX package merge, 단일·run 교차 template 치환 테스트가 모두 포함된다.
+- 공개 로그인 Chrome에서 다섯 모드와 PPTX 템플릿 UI를 확인했다. 실제 PPTX template의 `{이름} {수료과정}`을 `홍길동 NAS 기초`로 바꿔 `/문서 스튜디오/완료 파일/홍길동.pptx`를 생성했고 archive 내부 문자열과 OnlyOffice 전면 창 열기를 확인했다.
+- 공개 UI에서 PPTX 두 개를 병합해 `합친 프레젠테이션.pptx`를 생성했다. 결과 package에 slide XML 2개가 있으며 OnlyOffice가 실제로 열고 `Slide 1 of 2`를 표시했다.
+- 80행 템플릿 작업을 시작 즉시 취소해 진행 상태가 `cancelled`, 재시도 가능으로 바뀌고 `취소검증-*` 결과가 0건임을 확인했다. 새로고침 뒤 cancelled/retry가 복구됐고 재시도 후 다시 취소할 수 있었다. 이어 실행 중 PM2를 재시작해 `NAS 서비스가 다시 시작되어 작업이 중단됨`과 재시도 버튼이 복구되는 것을 실제 화면에서 확인했다.
+- 최종 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active, `msp-backend`는 online, 내부 `127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
