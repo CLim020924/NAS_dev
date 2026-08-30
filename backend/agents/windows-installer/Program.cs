@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.18.0")]
-[assembly: AssemblyFileVersion("1.10.18.0")]
+[assembly: AssemblyVersion("1.10.19.0")]
+[assembly: AssemblyFileVersion("1.10.19.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.18";
+        internal const string ProductVersion = "1.10.19";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
@@ -546,6 +546,7 @@ namespace NasDriveSetup
         internal string DirectoryName = "";
         internal string Label = "";
         internal string Account = "";
+        internal string AvatarPath = "";
         internal bool IsLastUsed;
 
         public override string ToString()
@@ -561,15 +562,23 @@ namespace NasDriveSetup
     {
         internal string Id = "system";
         internal string Label = "Windows 기본 브라우저";
+        internal string ExecutablePath = "";
         internal readonly List<BrowserProfileChoice> Profiles = new List<BrowserProfileChoice>();
         public override string ToString() { return Label; }
     }
 
     internal sealed class WebBrowserPickerForm : Form
     {
-        private readonly ComboBox browsers = new ComboBox();
-        private readonly ListBox profiles = new ListBox();
-        private readonly Button openButton = new Button();
+        private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
+        private static readonly Color CardBorder = Color.FromArgb(222, 228, 238);
+        private static readonly Color CardHover = Color.FromArgb(242, 247, 255);
+        private readonly Label title = new Label();
+        private readonly Label subtitle = new Label();
+        private readonly FlowLayoutPanel cards = new FlowLayoutPanel();
+        private readonly Button backButton = new Button();
+        private readonly Label privacyHint = new Label();
+        private List<BrowserChoice> browserChoices = new List<BrowserChoice>();
+        private BrowserChoice selectedBrowser;
         internal BrowserSelection Selection { get; private set; }
 
         internal WebBrowserPickerForm()
@@ -582,7 +591,7 @@ namespace NasDriveSetup
         {
             AutoScaleMode = AutoScaleMode.None;
             Text = "NAS 웹에서 열기";
-            ClientSize = new Size(610, 430);
+            ClientSize = new Size(720, 570);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -590,89 +599,210 @@ namespace NasDriveSetup
             TopMost = true;
             BackColor = Color.White;
 
-            Controls.Add(new Label { Text = "웹 브라우저와 사용자를 선택하세요", Location = new Point(24, 22), Size = new Size(560, 34), Font = Program.UiFont("Segoe UI Semibold", 15f) });
-            Controls.Add(new Label { Text = "선택한 브라우저에서 현재 NAS Drive 계정으로 자동 로그인합니다.", Location = new Point(26, 62), Size = new Size(555, 24), Font = Program.UiFont("Segoe UI", 9.5f) });
-            Controls.Add(new Label { Text = "브라우저", Location = new Point(26, 102), Size = new Size(120, 22), Font = Program.UiFont("Segoe UI Semibold", 9.5f) });
+            title.Location = new Point(34, 25);
+            title.Size = new Size(650, 40);
+            title.Font = Program.UiFont("Segoe UI Semibold", 17f);
+            Controls.Add(title);
+            subtitle.Location = new Point(36, 70);
+            subtitle.Size = new Size(640, 50);
+            subtitle.ForeColor = Color.FromArgb(86, 93, 108);
+            subtitle.Font = Program.UiFont("Segoe UI", 10f);
+            Controls.Add(subtitle);
 
-            browsers.Location = new Point(26, 127);
-            browsers.Size = new Size(555, 30);
-            browsers.DropDownStyle = ComboBoxStyle.DropDownList;
-            browsers.Font = Program.UiFont("Segoe UI", 10f);
-            browsers.SelectedIndexChanged += (sender, args) => RefreshProfiles();
-            Controls.Add(browsers);
+            cards.Location = new Point(30, 130);
+            cards.Size = new Size(660, 340);
+            cards.AutoScroll = true;
+            cards.WrapContents = true;
+            cards.FlowDirection = FlowDirection.LeftToRight;
+            cards.Padding = new Padding(5);
+            cards.BackColor = Color.White;
+            Controls.Add(cards);
 
-            Controls.Add(new Label { Text = "Chrome / Edge 사용자 프로필", Location = new Point(26, 174), Size = new Size(300, 22), Font = Program.UiFont("Segoe UI Semibold", 9.5f) });
-            profiles.Location = new Point(26, 199);
-            profiles.Size = new Size(555, 132);
-            profiles.Font = Program.UiFont("Segoe UI", 10f);
-            profiles.DoubleClick += (sender, args) => CompleteSelection();
-            Controls.Add(profiles);
+            backButton.Text = "← 브라우저 다시 선택";
+            backButton.Location = new Point(34, 493);
+            backButton.Size = new Size(168, 38);
+            backButton.FlatStyle = FlatStyle.Flat;
+            backButton.FlatAppearance.BorderColor = CardBorder;
+            backButton.BackColor = Color.White;
+            backButton.Font = Program.UiFont("Segoe UI", 9.5f);
+            backButton.Click += (sender, args) => ShowBrowserPage();
+            Controls.Add(backButton);
 
-            Controls.Add(new Label
-            {
-                Text = "표시된 이메일은 프로필의 대표 계정입니다. NAS 비밀번호나 Chrome 쿠키는 읽지 않습니다.",
-                Location = new Point(27, 338),
-                Size = new Size(555, 38),
-                ForeColor = Color.DimGray,
-                Font = Program.UiFont("Segoe UI", 9f)
-            });
+            privacyHint.Location = new Point(218, 490);
+            privacyHint.Size = new Size(468, 50);
+            privacyHint.TextAlign = ContentAlignment.MiddleRight;
+            privacyHint.ForeColor = Color.DimGray;
+            privacyHint.Font = Program.UiFont("Segoe UI", 8.8f);
+            Controls.Add(privacyHint);
 
-            var cancel = new Button { Text = "취소", Location = new Point(272, 382), Size = new Size(96, 36), DialogResult = DialogResult.Cancel, Font = Program.UiFont("Segoe UI", 9.5f) };
+            var cancel = new Button { Text = "취소", Location = new Point(594, 535), Size = new Size(96, 30), DialogResult = DialogResult.Cancel, FlatStyle = FlatStyle.Flat, Font = Program.UiFont("Segoe UI", 9f) };
+            cancel.FlatAppearance.BorderColor = CardBorder;
             Controls.Add(cancel);
-            openButton.Text = "선택한 브라우저로 열기";
-            openButton.Location = new Point(378, 382);
-            openButton.Size = new Size(203, 36);
-            openButton.BackColor = Color.FromArgb(26, 86, 219);
-            openButton.ForeColor = Color.White;
-            openButton.FlatStyle = FlatStyle.Flat;
-            openButton.Font = Program.UiFont("Segoe UI Semibold", 9.5f);
-            openButton.Click += (sender, args) => CompleteSelection();
-            Controls.Add(openButton);
-            AcceptButton = openButton;
             CancelButton = cancel;
         }
 
         private void LoadChoices()
         {
-            List<BrowserChoice> choices = DiscoverBrowsers();
-            foreach (BrowserChoice choice in choices) browsers.Items.Add(choice);
-            int chromeIndex = choices.FindIndex(choice => choice.Id == "chrome");
-            browsers.SelectedIndex = chromeIndex >= 0 ? chromeIndex : 0;
+            browserChoices = DiscoverBrowsers();
+            ShowBrowserPage();
         }
 
-        private void RefreshProfiles()
+        private void ShowBrowserPage()
         {
-            profiles.Items.Clear();
-            BrowserChoice choice = browsers.SelectedItem as BrowserChoice;
-            if (choice == null) { openButton.Enabled = false; return; }
-            if (choice.Id == "system")
+            selectedBrowser = null;
+            title.Text = "어떤 브라우저로 열까요?";
+            subtitle.Text = "먼저 브라우저를 선택하세요. 다음 화면에서 해당 브라우저의 사용자를 고를 수 있습니다.";
+            backButton.Visible = false;
+            privacyHint.Text = "브라우저를 선택하기 전에는 로그인 주소를 만들지 않습니다.";
+            cards.SuspendLayout();
+            cards.Controls.Clear();
+            foreach (BrowserChoice choice in browserChoices)
             {
-                profiles.Items.Add(new BrowserProfileChoice { Label = "Windows에서 설정된 기본 브라우저" });
-                profiles.Enabled = false;
-                profiles.SelectedIndex = 0;
-                openButton.Enabled = true;
+                BrowserChoice captured = choice;
+                cards.Controls.Add(CreateBrowserCard(choice, (sender, args) => SelectBrowser(captured)));
+            }
+            cards.ResumeLayout();
+        }
+
+        private void SelectBrowser(BrowserChoice browser)
+        {
+            if (browser == null) return;
+            if (browser.Id == "system")
+            {
+                Selection = new BrowserSelection { BrowserId = "system", ProfileDirectory = "" };
+                DialogResult = DialogResult.OK;
+                Close();
                 return;
             }
-            profiles.Enabled = true;
-            if (choice.Profiles.Count == 0) choice.Profiles.Add(new BrowserProfileChoice { Label = "브라우저 기본 사용자" });
-            int recentIndex = 0;
-            for (int index = 0; index < choice.Profiles.Count; index++)
-            {
-                profiles.Items.Add(choice.Profiles[index]);
-                if (choice.Profiles[index].IsLastUsed) recentIndex = index;
-            }
-            profiles.SelectedIndex = recentIndex;
-            openButton.Enabled = true;
+            selectedBrowser = browser;
+            ShowProfilePage();
         }
 
-        private void CompleteSelection()
+        private void ShowProfilePage()
         {
-            BrowserChoice browser = browsers.SelectedItem as BrowserChoice;
-            BrowserProfileChoice profile = profiles.SelectedItem as BrowserProfileChoice;
-            if (browser == null) return;
-            Selection = new BrowserSelection { BrowserId = browser.Id, ProfileDirectory = browser.Id == "system" ? "" : (profile == null ? "" : profile.DirectoryName) };
+            if (selectedBrowser == null) { ShowBrowserPage(); return; }
+            title.Text = selectedBrowser.Label + " 사용자 선택";
+            subtitle.Text = "웹 NAS를 열 프로필을 선택하세요. 선택한 브라우저 창에서 현재 NAS Drive 계정으로 자동 로그인합니다.";
+            backButton.Visible = true;
+            privacyHint.Text = "표시 이름·대표 이메일·로컬 프로필 이미지만 사용하며 쿠키와 비밀번호는 읽지 않습니다.";
+            cards.SuspendLayout();
+            cards.Controls.Clear();
+            if (selectedBrowser.Profiles.Count == 0)
+            {
+                selectedBrowser.Profiles.Add(new BrowserProfileChoice { Label = "기본 사용자", DirectoryName = "" });
+            }
+            foreach (BrowserProfileChoice profile in selectedBrowser.Profiles)
+            {
+                BrowserProfileChoice captured = profile;
+                cards.Controls.Add(CreateProfileCard(profile, (sender, args) => CompleteSelection(captured)));
+            }
+            cards.ResumeLayout();
+        }
+
+        private void CompleteSelection(BrowserProfileChoice profile)
+        {
+            if (selectedBrowser == null || profile == null) return;
+            Selection = new BrowserSelection { BrowserId = selectedBrowser.Id, ProfileDirectory = profile.DirectoryName };
             DialogResult = DialogResult.OK;
             Close();
+        }
+
+        private Control CreateBrowserCard(BrowserChoice browser, EventHandler click)
+        {
+            var card = CreateCard(new Size(200, 185), click);
+            var logo = new PictureBox { Location = new Point(65, 24), Size = new Size(70, 70), SizeMode = PictureBoxSizeMode.Zoom, Image = LoadBrowserLogo(browser) };
+            var name = new Label { Text = browser.Label, Location = new Point(10, 108), Size = new Size(180, 30), TextAlign = ContentAlignment.MiddleCenter, Font = Program.UiFont("Segoe UI Semibold", 10.5f) };
+            var action = new Label { Text = browser.Id == "system" ? "바로 열기" : "사용자 선택", Location = new Point(10, 143), Size = new Size(180, 24), TextAlign = ContentAlignment.MiddleCenter, ForeColor = BrandBlue, Font = Program.UiFont("Segoe UI", 9f) };
+            card.Controls.AddRange(new Control[] { logo, name, action });
+            WireCardClick(card, click);
+            return card;
+        }
+
+        private Control CreateProfileCard(BrowserProfileChoice profile, EventHandler click)
+        {
+            var card = CreateCard(new Size(200, 215), click);
+            var avatar = new PictureBox { Location = new Point(64, 18), Size = new Size(72, 72), SizeMode = PictureBoxSizeMode.Zoom, Image = LoadProfileAvatar(profile) };
+            var name = new Label { Text = profile.Label, Location = new Point(10, 101), Size = new Size(180, 28), TextAlign = ContentAlignment.MiddleCenter, Font = Program.UiFont("Segoe UI Semibold", 10.5f), AutoEllipsis = true };
+            var account = new Label { Text = string.IsNullOrWhiteSpace(profile.Account) ? "브라우저 사용자" : profile.Account, Location = new Point(10, 132), Size = new Size(180, 42), TextAlign = ContentAlignment.TopCenter, ForeColor = Color.DimGray, Font = Program.UiFont("Segoe UI", 8.5f), AutoEllipsis = true };
+            var recent = new Label { Text = profile.IsLastUsed ? "최근 사용" : "선택", Location = new Point(58, 178), Size = new Size(84, 24), TextAlign = ContentAlignment.MiddleCenter, ForeColor = profile.IsLastUsed ? Color.White : BrandBlue, BackColor = profile.IsLastUsed ? BrandBlue : Color.White, Font = Program.UiFont("Segoe UI Semibold", 8.5f) };
+            card.Controls.AddRange(new Control[] { avatar, name, account, recent });
+            WireCardClick(card, click);
+            return card;
+        }
+
+        private Panel CreateCard(Size size, EventHandler click)
+        {
+            var card = new Panel { Size = size, Margin = new Padding(7), BackColor = Color.White, Cursor = Cursors.Hand };
+            card.Paint += (sender, args) => ControlPaint.DrawBorder(args.Graphics, card.ClientRectangle, CardBorder, ButtonBorderStyle.Solid);
+            card.MouseEnter += (sender, args) => card.BackColor = CardHover;
+            card.MouseLeave += (sender, args) => card.BackColor = Color.White;
+            return card;
+        }
+
+        private static void WireCardClick(Control control, EventHandler click)
+        {
+            control.Cursor = Cursors.Hand;
+            control.Click += click;
+            foreach (Control child in control.Controls) WireCardClick(child, click);
+        }
+
+        private static Image LoadBrowserLogo(BrowserChoice browser)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(browser.ExecutablePath))
+                {
+                    using (Icon icon = Icon.ExtractAssociatedIcon(browser.ExecutablePath))
+                    {
+                        if (icon != null) return icon.ToBitmap();
+                    }
+                }
+            }
+            catch { }
+            return CreateWindowsLogo();
+        }
+
+        private static Image LoadProfileAvatar(BrowserProfileChoice profile)
+        {
+            try
+            {
+                var info = new FileInfo(profile.AvatarPath ?? "");
+                if (info.Exists && info.Length > 0 && info.Length <= 4 * 1024 * 1024)
+                {
+                    using (var stream = new FileStream(info.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    using (var original = Image.FromStream(stream)) return new Bitmap(original);
+                }
+            }
+            catch { }
+            return CreateInitialAvatar(profile.Label);
+        }
+
+        private static Image CreateInitialAvatar(string label)
+        {
+            var bitmap = new Bitmap(96, 96);
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            using (Brush brush = new SolidBrush(BrandBlue))
+            {
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                graphics.FillEllipse(brush, 1, 1, 94, 94);
+                string initial = string.IsNullOrWhiteSpace(label) ? "?" : label.Trim().Substring(0, 1).ToUpperInvariant();
+                TextRenderer.DrawText(graphics, initial, Program.UiFont("Segoe UI Semibold", 27f), new Rectangle(0, 0, 96, 96), Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            }
+            return bitmap;
+        }
+
+        private static Image CreateWindowsLogo()
+        {
+            var bitmap = new Bitmap(96, 96);
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            using (Brush brush = new SolidBrush(BrandBlue))
+            {
+                graphics.FillRectangle(brush, 10, 11, 35, 35);
+                graphics.FillRectangle(brush, 51, 11, 35, 35);
+                graphics.FillRectangle(brush, 10, 52, 35, 35);
+                graphics.FillRectangle(brush, 51, 52, 35, 35);
+            }
+            return bitmap;
         }
 
         private static List<BrowserChoice> DiscoverBrowsers()
@@ -705,7 +835,9 @@ namespace NasDriveSetup
                 if (File.Exists(executable)) { installed = true; break; }
             }
             if (!installed) return;
-            var choice = new BrowserChoice { Id = id, Label = label };
+            string executablePath = "";
+            foreach (string executable in executables) if (File.Exists(executable)) { executablePath = executable; break; }
+            var choice = new BrowserChoice { Id = id, Label = label, ExecutablePath = executablePath };
             foreach (BrowserProfileChoice profile in ReadProfiles(userDataRoot)) choice.Profiles.Add(profile);
             choices.Add(choice);
         }
@@ -747,12 +879,27 @@ namespace NasDriveSetup
                         DirectoryName = directoryName,
                         Label = displayName,
                         Account = CleanPublicText(GetString(profileInfo, "user_name"), 320),
+                        AvatarPath = GetSafeAvatarPath(userDataRoot, directoryName),
                         IsLastUsed = string.Equals(directoryName, lastUsed, StringComparison.Ordinal)
                     });
                 }
             }
             catch { }
             return profiles;
+        }
+
+        private static string GetSafeAvatarPath(string userDataRoot, string directoryName)
+        {
+            try
+            {
+                string profileRoot = Path.GetFullPath(Path.Combine(userDataRoot, directoryName));
+                string expectedRoot = Path.GetFullPath(userDataRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (!profileRoot.StartsWith(expectedRoot, StringComparison.OrdinalIgnoreCase)) return "";
+                string avatar = Path.Combine(profileRoot, "Google Profile Picture.png");
+                var info = new FileInfo(avatar);
+                return info.Exists && info.Length > 0 && info.Length <= 4 * 1024 * 1024 ? info.FullName : "";
+            }
+            catch { return ""; }
         }
 
         private static string labelForProfile(string directoryName)

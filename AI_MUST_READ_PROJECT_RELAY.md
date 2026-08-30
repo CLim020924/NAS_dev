@@ -585,3 +585,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
 - NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `900209166764DCC4421525C391BB4F3CF6FD99FB54D62B87D564E9D69731A8EB`, Setup/launcher SHA-256은 `D586E4099A31593B5C16FCA36CC6A70E67809FF94EECE0AAA8886B710C419931`이다.
 - 최종 현재 PC 상태는 health `up-to-date`, `needsRelink=false`이고 설치 launcher·Agent·계정별 Provider가 실행 중이다. 웹 바로가기는 target `NAS-Drive.exe`, argument `--open-web`, `WindowStyle=1`이다. 사용자 파일·활성 계정 credential·Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+
+## 2026-08-30 NAS Drive 1.10.19 Chrome형 2단계 브라우저·사용자 카드 UI
+
+- 사용자 요청: 브라우저와 Chrome 계정을 한 화면의 콤보박스·긴 목록으로 보여 주지 않는다. 처음에는 브라우저 로고 버튼만 표시하고, 선택 뒤 해당 브라우저에 로그인된 사용자의 계정 이미지 아래 이름이 보이는 Chrome 사용자 선택기형 화면으로 바꾼다.
+- 구현: `NAS-Drive.exe` native picker를 두 페이지로 재구성했다. 첫 화면에는 설치된 Google Chrome·Microsoft Edge의 실제 exe icon과 Windows 기본 브라우저 로고 카드만 표시한다. Chrome/Edge를 선택하면 두 번째 화면에서 검증된 `Default`/`Profile N`별 `Google Profile Picture.png`, 표시 이름, 대표 이메일, 최근 사용 badge를 카드로 보여 준다. 이미지가 없으면 이름 첫 글자의 로컬 원형 avatar를 사용한다. `브라우저 다시 선택`과 취소를 제공하고 시스템 기본 브라우저는 첫 화면에서 바로 연다.
+- 보안 경계: 프로필 이미지는 표준 User Data 하위의 검증된 프로필 폴더에 있는 4MB 이하 고정 파일만 읽는다. `Local State`의 제한된 공개 표시 메타데이터 외 Chrome 쿠키·비밀번호·인증 token·임의 avatar URL은 읽지 않는다. 브라우저를 선택하기 전에는 handoff를 만들지 않고, 프로필 선택 뒤에도 Agent가 executable realpath와 profile directory를 다시 확인한 후 기존 45초·1회용 device-bound handoff를 사용한다.
+- 현재 PC 실화면 E2E: 실제 Explorer 웹 바로가기를 열어 첫 화면에 Chrome·Edge·Windows 기본 브라우저 로고 카드 3개만 표시되는 화면을 확인했다. Chrome 로고 클릭 뒤 6개 실제 프로필 이미지/이름/대표 이메일 카드와 최근 사용 표시를 확인했다. 최근 사용 프로필 선택 경로는 1.10.19 `open-web-last.json`에서 `state=opened`, `browser=chrome`이고 Agent health는 `up-to-date`, `needsRelink=false`다.
+- 검증: C# compile, source/packaged Agent self-test, Setup self-test, desktop handoff/browser tests 4/4, `git diff --check`를 통과했다. workbook은 기존 `WIN-WEB-BROWSER-PROFILE-HANDOFF`를 1.10.19로 갱신하고 Request/Patch/Do_Not_Break/Code_Map만 보수적으로 추가했으며 관련 범위 렌더와 formula error 0을 확인했다.
