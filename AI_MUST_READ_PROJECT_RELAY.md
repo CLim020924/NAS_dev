@@ -617,3 +617,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 모두 HTTP 200이다.
 - NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `DAA7266B90FDC59E304638C174C6230FC5B85C7A57977747D4F32F14F5615888`, Setup/launcher SHA-256은 `B65C7F6F2565A692CEEA3BA6C0872EBB07F26CB374AA62CE9C5BA03E1FF07915`다.
 - 최종 현재 PC 상태는 launcher 1.10.20, open-web 진단 `opened/chrome`, health `up-to-date`, `needsRelink=false`다. launcher·Agent·Provider가 정상 실행 중이고 사용자 파일·활성 credential은 보존됐다.
+
+## 2026-08-30 NAS Drive 1.10.21 picker 전체 버튼·뒤로가기 정돈
+
+- 사용자 요청: 프로필 카드뿐 아니라 picker의 다른 버튼도 같은 완성도로 점검하고, 특히 기존 `브라우저 다시 선택` 뒤로가기 버튼의 조악한 모양과 배치를 개선한다.
+- 구현: 브라우저·프로필 카드는 12px 둥근 외곽선, 부드러운 hover/pressed/focus 상태와 둥근 최근 사용 badge를 단일 double-buffered owner-draw 버튼에서 그린다. 취소와 뒤로가기는 공통 `WebPickerActionButton`으로 통일해 9px 둥근 외곽선, 키보드 focus cue와 일관된 hover/pressed 상태를 제공한다. 뒤로가기는 프로필 화면 좌측 상단의 `←  브라우저` 탐색 동작으로 바꾸고 평상시에는 경계선을 숨겨 시각적 위계를 낮췄다. 접근성 이름과 키보드 동작은 유지한다.
+- 추가 회귀 수정: 프로필 목록에서 세로 scrollbar가 생긴 뒤 첫 화면으로 돌아오면 남아 있던 layout 폭 때문에 기본 브라우저 카드가 다음 줄로 밀리는 문제를 실제 왕복 중 발견했다. 카드 폭·간격을 scrollbar가 있어도 3열이 유지되도록 조정하고 페이지 전환 시 scroll 위치 초기화와 즉시 layout을 수행한다.
+- 현재 PC 실화면 E2E: 실제 picker 첫 화면에서 Chrome·Edge·Windows 기본 브라우저 3개가 한 줄의 둥근 카드로 보이는 것을 확인했다. Chrome 프로필 화면에서 3열 카드, 좌측 상단 뒤로가기, 우측 하단 취소 버튼을 확인했고, 뒤로가기를 실제 클릭한 뒤 첫 화면도 다시 3열을 유지했다. 최근 Chrome 프로필 직접 열기는 1.10.21 진단에서 `opened/chrome`, health는 `up-to-date`, `needsRelink=false`다.
+- 기록: workbook의 `Request_Archive`, `Patch_Log`, `Feature_Index`, `Do_Not_Break`, `Code_Map`을 1.10.21 기준으로 갱신했고 formula error 0과 관련 범위 렌더를 확인했다. 사용자 파일·활성 credential·브라우저 인증 자료는 변경하지 않았다. 다음 단계는 최종 자동 테스트, GitHub push, NAS Linux 전체 테스트와 live 배포 검증이다.

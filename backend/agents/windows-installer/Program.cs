@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.20.0")]
-[assembly: AssemblyFileVersion("1.10.20.0")]
+[assembly: AssemblyVersion("1.10.21.0")]
+[assembly: AssemblyFileVersion("1.10.21.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.20";
+        internal const string ProductVersion = "1.10.21";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
@@ -567,6 +567,21 @@ namespace NasDriveSetup
         public override string ToString() { return Label; }
     }
 
+    internal static class WebPickerDrawing
+    {
+        internal static System.Drawing.Drawing2D.GraphicsPath RoundedRectangle(Rectangle bounds, int radius)
+        {
+            int diameter = Math.Max(2, radius * 2);
+            var path = new System.Drawing.Drawing2D.GraphicsPath();
+            path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
     internal sealed class WebPickerCardButton : Button
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
@@ -624,12 +639,16 @@ namespace NasDriveSetup
         {
             bool pressed = Capture && MouseButtons == MouseButtons.Left;
             Color background = pressed ? PressedColor : (hovered ? HoverColor : Color.White);
-            eventArgs.Graphics.Clear(background);
+            eventArgs.Graphics.Clear(Color.White);
             eventArgs.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             eventArgs.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            Rectangle cardBounds = new Rectangle(2, 2, Width - 5, Height - 5);
+            using (var cardPath = WebPickerDrawing.RoundedRectangle(cardBounds, 12))
+            using (var fill = new SolidBrush(background))
             using (var border = new Pen(hovered || Focused ? BrandBlue : BorderColor, hovered || Focused ? 2f : 1f))
             {
-                eventArgs.Graphics.DrawRectangle(border, 1, 1, Width - 3, Height - 3);
+                eventArgs.Graphics.FillPath(fill, cardPath);
+                eventArgs.Graphics.DrawPath(border, cardPath);
             }
 
             int imageSize = ProfileLayout ? 72 : 70;
@@ -664,7 +683,8 @@ namespace NasDriveSetup
                 var badgeRect = new Rectangle((Width - 84) / 2, 178, 84, 24);
                 if (BadgeFilled)
                 {
-                    using (var brush = new SolidBrush(BrandBlue)) eventArgs.Graphics.FillRectangle(brush, badgeRect);
+                    using (var badgePath = WebPickerDrawing.RoundedRectangle(badgeRect, 10))
+                    using (var brush = new SolidBrush(BrandBlue)) eventArgs.Graphics.FillPath(brush, badgePath);
                 }
                 using (Font badgeFont = Program.UiFont("Segoe UI Semibold", 8.5f))
                 {
@@ -676,9 +696,10 @@ namespace NasDriveSetup
 
             if (Focused && ShowFocusCues)
             {
-                Rectangle focus = ClientRectangle;
-                focus.Inflate(-5, -5);
-                ControlPaint.DrawFocusRectangle(eventArgs.Graphics, focus, ForeColor, background);
+                Rectangle focusBounds = new Rectangle(7, 7, Width - 15, Height - 15);
+                using (var focusPath = WebPickerDrawing.RoundedRectangle(focusBounds, 9))
+                using (var focusPen = new Pen(BrandBlue) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot })
+                    eventArgs.Graphics.DrawPath(focusPen, focusPath);
             }
         }
 
@@ -693,15 +714,70 @@ namespace NasDriveSetup
         }
     }
 
+    internal sealed class WebPickerActionButton : Button
+    {
+        private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
+        private static readonly Color BorderColor = Color.FromArgb(210, 218, 230);
+        private static readonly Color HoverColor = Color.FromArgb(242, 247, 255);
+        private static readonly Color PressedColor = Color.FromArgb(230, 239, 255);
+        private bool hovered;
+        internal bool Bordered = true;
+
+        internal WebPickerActionButton()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            DoubleBuffered = true;
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            UseVisualStyleBackColor = false;
+            BackColor = Color.White;
+            ForeColor = Color.FromArgb(45, 52, 64);
+            Cursor = Cursors.Hand;
+            TabStop = true;
+        }
+
+        protected override void OnMouseEnter(EventArgs eventArgs) { hovered = true; Invalidate(); base.OnMouseEnter(eventArgs); }
+        protected override void OnMouseLeave(EventArgs eventArgs) { hovered = false; Invalidate(); base.OnMouseLeave(eventArgs); }
+        protected override void OnMouseDown(MouseEventArgs eventArgs) { Invalidate(); base.OnMouseDown(eventArgs); }
+        protected override void OnMouseUp(MouseEventArgs eventArgs) { Invalidate(); base.OnMouseUp(eventArgs); }
+
+        protected override void OnPaint(PaintEventArgs eventArgs)
+        {
+            bool pressed = Capture && MouseButtons == MouseButtons.Left;
+            Color background = pressed ? PressedColor : (hovered ? HoverColor : Color.White);
+            eventArgs.Graphics.Clear(Color.White);
+            eventArgs.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            Rectangle bounds = new Rectangle(2, 2, Width - 5, Height - 5);
+            using (var path = WebPickerDrawing.RoundedRectangle(bounds, 9))
+            using (var fill = new SolidBrush(background))
+            using (var border = new Pen(Focused ? BrandBlue : BorderColor, Focused ? 2f : 1f))
+            {
+                eventArgs.Graphics.FillPath(fill, path);
+                if (Bordered || hovered || Focused) eventArgs.Graphics.DrawPath(border, path);
+            }
+            using (Font font = Program.UiFont("Segoe UI Semibold", 9.3f))
+            {
+                TextRenderer.DrawText(eventArgs.Graphics, Text, font, ClientRectangle, ForeColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+            }
+            if (Focused && ShowFocusCues)
+            {
+                Rectangle focus = new Rectangle(7, 7, Width - 15, Height - 15);
+                using (var path = WebPickerDrawing.RoundedRectangle(focus, 6))
+                using (var pen = new Pen(BrandBlue) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot })
+                    eventArgs.Graphics.DrawPath(pen, path);
+            }
+        }
+    }
+
     internal sealed class WebBrowserPickerForm : Form
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
-        private static readonly Color CardBorder = Color.FromArgb(222, 228, 238);
-        private static readonly Color CardHover = Color.FromArgb(242, 247, 255);
         private readonly Label title = new Label();
         private readonly Label subtitle = new Label();
         private readonly FlowLayoutPanel cards = new FlowLayoutPanel();
-        private readonly Button backButton = new Button();
+        private readonly WebPickerActionButton backButton = new WebPickerActionButton { Bordered = false };
+        private readonly WebPickerActionButton cancelButton = new WebPickerActionButton();
         private readonly Label privacyHint = new Label();
         private List<BrowserChoice> browserChoices = new List<BrowserChoice>();
         private BrowserChoice selectedBrowser;
@@ -744,27 +820,27 @@ namespace NasDriveSetup
             cards.BackColor = Color.White;
             Controls.Add(cards);
 
-            backButton.Text = "← 브라우저 다시 선택";
-            backButton.Location = new Point(34, 493);
-            backButton.Size = new Size(168, 38);
-            backButton.FlatStyle = FlatStyle.Flat;
-            backButton.FlatAppearance.BorderColor = CardBorder;
-            backButton.BackColor = Color.White;
-            backButton.Font = Program.UiFont("Segoe UI", 9.5f);
+            backButton.Text = "←  브라우저";
+            backButton.AccessibleName = "브라우저 선택으로 돌아가기";
+            backButton.Location = new Point(30, 25);
+            backButton.Size = new Size(126, 36);
             backButton.Click += (sender, args) => ShowBrowserPage();
             Controls.Add(backButton);
 
-            privacyHint.Location = new Point(218, 490);
-            privacyHint.Size = new Size(468, 50);
-            privacyHint.TextAlign = ContentAlignment.MiddleRight;
+            privacyHint.Location = new Point(34, 487);
+            privacyHint.Size = new Size(530, 54);
+            privacyHint.TextAlign = ContentAlignment.MiddleLeft;
             privacyHint.ForeColor = Color.DimGray;
             privacyHint.Font = Program.UiFont("Segoe UI", 8.8f);
             Controls.Add(privacyHint);
 
-            var cancel = new Button { Text = "취소", Location = new Point(594, 535), Size = new Size(96, 30), DialogResult = DialogResult.Cancel, FlatStyle = FlatStyle.Flat, Font = Program.UiFont("Segoe UI", 9f) };
-            cancel.FlatAppearance.BorderColor = CardBorder;
-            Controls.Add(cancel);
-            CancelButton = cancel;
+            cancelButton.Text = "취소";
+            cancelButton.AccessibleName = "브라우저 선택 취소";
+            cancelButton.Location = new Point(584, 498);
+            cancelButton.Size = new Size(106, 40);
+            cancelButton.DialogResult = DialogResult.Cancel;
+            Controls.Add(cancelButton);
+            CancelButton = cancelButton;
         }
 
         private void LoadChoices()
@@ -777,17 +853,21 @@ namespace NasDriveSetup
         {
             selectedBrowser = null;
             title.Text = "어떤 브라우저로 열까요?";
+            title.Location = new Point(34, 25);
+            title.Size = new Size(650, 40);
             subtitle.Text = "먼저 브라우저를 선택하세요. 다음 화면에서 해당 브라우저의 사용자를 고를 수 있습니다.";
             backButton.Visible = false;
             privacyHint.Text = "브라우저를 선택하기 전에는 로그인 주소를 만들지 않습니다.";
             cards.SuspendLayout();
             cards.Controls.Clear();
+            cards.AutoScrollPosition = Point.Empty;
             foreach (BrowserChoice choice in browserChoices)
             {
                 BrowserChoice captured = choice;
                 cards.Controls.Add(CreateBrowserCard(choice, (sender, args) => SelectBrowser(captured)));
             }
             cards.ResumeLayout();
+            cards.PerformLayout();
         }
 
         private void SelectBrowser(BrowserChoice browser)
@@ -808,11 +888,14 @@ namespace NasDriveSetup
         {
             if (selectedBrowser == null) { ShowBrowserPage(); return; }
             title.Text = selectedBrowser.Label + " 사용자 선택";
+            title.Location = new Point(174, 25);
+            title.Size = new Size(510, 40);
             subtitle.Text = "웹 NAS를 열 프로필을 선택하세요. 선택한 브라우저 창에서 현재 NAS Drive 계정으로 자동 로그인합니다.";
             backButton.Visible = true;
             privacyHint.Text = "표시 이름·대표 이메일·로컬 프로필 이미지만 사용하며 쿠키와 비밀번호는 읽지 않습니다.";
             cards.SuspendLayout();
             cards.Controls.Clear();
+            cards.AutoScrollPosition = Point.Empty;
             if (selectedBrowser.Profiles.Count == 0)
             {
                 selectedBrowser.Profiles.Add(new BrowserProfileChoice { Label = "기본 사용자", DirectoryName = "" });
@@ -823,6 +906,7 @@ namespace NasDriveSetup
                 cards.Controls.Add(CreateProfileCard(profile, (sender, args) => CompleteSelection(captured)));
             }
             cards.ResumeLayout();
+            cards.PerformLayout();
         }
 
         private void CompleteSelection(BrowserProfileChoice profile)
@@ -837,8 +921,8 @@ namespace NasDriveSetup
         {
             var card = new WebPickerCardButton
             {
-                Size = new Size(200, 185),
-                Margin = new Padding(7),
+                Size = new Size(194, 185),
+                Margin = new Padding(6),
                 CardImage = LoadBrowserLogo(browser),
                 CardTitle = browser.Label,
                 CardSubtitle = browser.Id == "system" ? "바로 열기" : "사용자 선택",
@@ -854,8 +938,8 @@ namespace NasDriveSetup
             string account = string.IsNullOrWhiteSpace(profile.Account) ? "브라우저 사용자" : profile.Account;
             var card = new WebPickerCardButton
             {
-                Size = new Size(200, 215),
-                Margin = new Padding(7),
+                Size = new Size(194, 215),
+                Margin = new Padding(6),
                 ProfileLayout = true,
                 CardImage = LoadProfileAvatar(profile),
                 CardTitle = profile.Label,
