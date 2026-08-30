@@ -399,3 +399,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 확인 결과: NAS 작업 트리는 변경·미추적 파일이 없는 clean 상태이며 현재 HEAD와 GitHub 원격 `cleanup/git-tracking-2026-06-08`가 `db3c165f39fa292d279057f59b7b597830a6596c`로 일치했다.
 - 전체 작업 커밋 `8eb6534`에는 당시 작업 트리의 수정·신규 파일 49개, 10,039 insertions, 727 deletions가 포함됐다. 후속 기록 의무화는 `db3c165`에 포함됐다.
 - 남은 항목: 로컬 PC의 빌드용 임시 폴더·렌더 이미지·도구 캐시는 NAS 서비스 저장소 바깥의 작업 산출물이므로 Git 커밋 대상이 아니다. 실제 프로젝트 코드, 배포 바이너리, 테스트, 문서, 릴레이, 프로젝트 Excel은 커밋됐다.
+
+## 2026-08-30 다른 PC ChatGPT/Codex용 Tailscale 인수인계
+
+- 사용자 요청: 다른 컴퓨터의 ChatGPT 앱이 현재 노트북과 NAS의 Tailscale 연결 구조를 즉시 이해하고 프로젝트를 이어갈 수 있도록 릴레이와 별도 문서를 만들고 Git에 올린다.
+- 확인된 구조: 현재 Windows 노트북 `limchanyoung`은 Tailscale `100.72.86.10`, Debian NAS `chanyoung`은 `100.80.39.112`다. NAS SSH 사용자는 `limchanyoung`, alias는 `nas`, live 경로는 `/home/limchanyoung/my-service-platform`이다.
+- 보안 경계: 문서를 읽는 것만으로 새 PC가 접속 권한을 얻지는 않는다. 새 PC는 같은 Tailnet에 로그인하고 새 PC 전용 SSH 공개키를 NAS에 등록해야 한다. Tailscale auth key, SSH 개인키, 비밀번호, Agent token은 문서·Git·Excel에 기록하지 않는다.
+- 새 문서: `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md`에 초기 설정, ChatGPT/Codex 시작 프롬프트, 작업 순서, 금지사항, 상태 점검, 장애 분류를 기록했다. 사용자가 직접 받을 수 있도록 Windows 작업 폴더에도 같은 이름의 문서를 유지한다.
+- 다음 단계: 이 문서와 릴레이를 먼저 별도 Git 커밋으로 푸시한 뒤, NAS Drive 1.10.11 파일별 상태 표시 작업의 중단 지점을 다시 감사하고 남은 결함을 별도 커밋으로 처리한다.

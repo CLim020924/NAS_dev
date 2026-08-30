@@ -23,8 +23,9 @@ project documents, say:
 Then actually check these files:
 
 1. `AI_MUST_READ_PROJECT_RELAY.md`
-2. `docs/NAS_PROJECT_MEMORY_POLICY.md`
-3. `docs/NAS_PROJECT_LOG.xlsx`
+2. `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md`
+3. `docs/NAS_PROJECT_MEMORY_POLICY.md`
+4. `docs/NAS_PROJECT_LOG.xlsx`
 
 `AI_MUST_READ_PROJECT_RELAY.md` is the human-readable continuity document for
 new conversations. Keep it synchronized whenever authentication, storage
