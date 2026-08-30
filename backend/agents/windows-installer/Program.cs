@@ -18,14 +18,24 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.16.0")]
-[assembly: AssemblyFileVersion("1.10.16.0")]
+[assembly: AssemblyVersion("1.10.17.0")]
+[assembly: AssemblyFileVersion("1.10.17.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.16";
+        internal const string ProductVersion = "1.10.17";
+        private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int command);
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        internal static Font UiFont(string family, float pointSize)
+        {
+            return new Font(family, pointSize * 96f / 72f, FontStyle.Regular, GraphicsUnit.Pixel);
+        }
 
         [STAThread]
         private static void Main(string[] args)
@@ -46,7 +56,7 @@ namespace NasDriveSetup
             {
                 if (!created)
                 {
-                    MessageBox.Show("NAS Drive 설치 창이 이미 열려 있습니다.", "NAS Drive 설치", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    FocusExistingLauncherWindow("NAS Drive 설치");
                     return;
                 }
                 Application.EnableVisualStyles();
@@ -136,6 +146,8 @@ namespace NasDriveSetup
                 return true;
             }
 
+            if (!shutdownBackground) WaitForBackgroundShutdown();
+
             if (shutdownBackground)
             {
                 StopInstalledBackgroundProcesses(installedExe);
@@ -155,7 +167,7 @@ namespace NasDriveSetup
                 {
                     if (!created)
                     {
-                        MessageBox.Show("NAS Drive 창이 이미 열려 있습니다.", "NAS Drive", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        FocusExistingLauncherWindow("NAS Drive");
                         return true;
                     }
                     Application.EnableVisualStyles();
@@ -193,9 +205,49 @@ namespace NasDriveSetup
             return true;
         }
 
+        private static bool FocusExistingLauncherWindow(string expectedTitle)
+        {
+            string launcherPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "NAS Drive", "NAS-Drive.exe");
+            foreach (Process process in Process.GetProcessesByName("NAS-Drive"))
+            {
+                try
+                {
+                    if (process.Id == Process.GetCurrentProcess().Id || process.HasExited || process.MainWindowHandle == IntPtr.Zero) continue;
+                    if (!IsInstalledLauncherProcessPath(process.MainModule.FileName, launcherPath)) continue;
+                    if (!string.Equals(process.MainWindowTitle, expectedTitle, StringComparison.OrdinalIgnoreCase)) continue;
+                    ShowWindow(process.MainWindowHandle, 9);
+                    SetForegroundWindow(process.MainWindowHandle);
+                    return true;
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
+            return false;
+        }
+
         internal static void StopInstalledBackgroundProcesses(string installedAgentExe)
         {
+            bool created;
+            using (var shutdownMutex = new Mutex(true, ShutdownMutexName, out created))
+            {
+                if (!created)
+                {
+                    try { shutdownMutex.WaitOne(15000); shutdownMutex.ReleaseMutex(); } catch (AbandonedMutexException) { }
+                    return;
+                }
+                try { StopInstalledBackgroundProcessesCore(installedAgentExe); }
+                finally { try { shutdownMutex.ReleaseMutex(); } catch { } }
+            }
+        }
+
+        private static void StopInstalledBackgroundProcessesCore(string installedAgentExe)
+        {
             string stateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent");
+            string providerExe = Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive-Provider.exe");
+            string launcherExe = Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive.exe");
+            List<int> agentPids = CaptureExactProcessIds("NAS-Sync-Agent", installedAgentExe);
+            List<int> providerPids = CaptureExactProcessIds("NAS-Drive-Provider", providerExe);
+            List<int> launcherPids = CaptureExactProcessIds("NAS-Drive", launcherExe);
             try { Directory.CreateDirectory(stateDir); File.WriteAllText(Path.Combine(stateDir, "agent.exit"), DateTime.UtcNow.Ticks.ToString()); } catch { }
 
             DateTime deadline = DateTime.UtcNow.AddSeconds(5);
@@ -215,11 +267,36 @@ namespace NasDriveSetup
                 Thread.Sleep(250);
             }
 
-            StopExactProcesses("NAS-Sync-Agent", installedAgentExe);
-            StopExactProcesses("NAS-Drive-Provider", Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive-Provider.exe"));
-            StopExactProcesses("NAS-Drive", Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive.exe"));
+            StopCapturedProcesses(agentPids, installedAgentExe);
+            StopCapturedProcesses(providerPids, providerExe);
+            StopCapturedProcesses(launcherPids, launcherExe);
             try { File.Delete(Path.Combine(stateDir, "agent.pid")); } catch { }
             try { File.Delete(Path.Combine(stateDir, "agent.exit")); } catch { }
+        }
+
+        private static void WaitForBackgroundShutdown()
+        {
+            string exitMarker = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "agent.exit");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    using (Mutex mutex = Mutex.OpenExisting(ShutdownMutexName))
+                    {
+                        int remaining = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
+                        try
+                        {
+                            if (!mutex.WaitOne(remaining)) return;
+                        }
+                        catch (AbandonedMutexException) { }
+                        try { mutex.ReleaseMutex(); } catch { }
+                    }
+                }
+                catch (WaitHandleCannotBeOpenedException) { }
+                if (!File.Exists(exitMarker)) return;
+                Thread.Sleep(100);
+            }
         }
 
         private static void StopExactProcesses(string processName, string expectedPath)
@@ -237,6 +314,40 @@ namespace NasDriveSetup
                 }
                 catch { }
                 finally { process.Dispose(); }
+            }
+        }
+
+        private static List<int> CaptureExactProcessIds(string processName, string expectedPath)
+        {
+            var result = new List<int>();
+            int currentProcessId;
+            using (Process current = Process.GetCurrentProcess()) currentProcessId = current.Id;
+            foreach (Process process in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    if (process.Id != currentProcessId && !process.HasExited && IsInstalledAgentProcessPath(process.MainModule.FileName, expectedPath)) result.Add(process.Id);
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
+            return result;
+        }
+
+        private static void StopCapturedProcesses(IEnumerable<int> processIds, string expectedPath)
+        {
+            foreach (int processId in processIds)
+            {
+                try
+                {
+                    using (Process process = Process.GetProcessById(processId))
+                    {
+                        if (process.HasExited || !IsInstalledAgentProcessPath(process.MainModule.FileName, expectedPath)) continue;
+                        process.Kill();
+                        process.WaitForExit(3000);
+                    }
+                }
+                catch { }
             }
         }
 
@@ -302,7 +413,29 @@ namespace NasDriveSetup
 
         internal static string QuoteArgument(string value)
         {
-            return "\"" + (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+            var result = new StringBuilder("\"");
+            int backslashes = 0;
+            foreach (char ch in value ?? "")
+            {
+                if (ch == '\\')
+                {
+                    backslashes++;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    result.Append('\\', backslashes * 2 + 1);
+                    result.Append('"');
+                    backslashes = 0;
+                    continue;
+                }
+                if (backslashes > 0) result.Append('\\', backslashes);
+                backslashes = 0;
+                result.Append(ch);
+            }
+            if (backslashes > 0) result.Append('\\', backslashes * 2);
+            result.Append('"');
+            return result.ToString();
         }
 
         internal static string JsonEscape(string value)
@@ -348,7 +481,13 @@ namespace NasDriveSetup
                     && IsInstalledLauncherProcessPath(@"C:\Apps\NAS-Drive.exe.previous", @"C:\Apps\NAS-Drive.exe")
                     && !IsInstalledLauncherProcessPath(@"C:\Other\NAS-Drive.exe", @"C:\Apps\NAS-Drive.exe")
                     && IsInstalledAgentProcessPath(@"C:\Apps\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe")
-                    && !IsInstalledAgentProcessPath(@"C:\Old\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe");
+                    && !IsInstalledAgentProcessPath(@"C:\Old\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe")
+                    && QuoteArgument(@"C:\Users\Me\NAS Drive") == "\"C:\\Users\\Me\\NAS Drive\""
+                    && QuoteArgument("C:\\Path\\") == "\"C:\\Path\\\\\""
+                    && NativeControlCenter.ShouldTreatHealthAsOffline("up-to-date", 13, true)
+                    && !NativeControlCenter.ShouldTreatHealthAsOffline("needs-relink", 300, true)
+                    && !NativeControlCenter.ShouldTreatHealthAsOffline("error", 300, true)
+                    && !NativeControlCenter.ShouldTreatHealthAsOffline("paused", 300, true);
             }
             catch { return false; }
         }
@@ -390,6 +529,7 @@ namespace NasDriveSetup
 
         private void BuildUi()
         {
+            AutoScaleMode = AutoScaleMode.None;
             Text = "NAS Drive 로그인";
             ClientSize = new Size(470, 650);
             StartPosition = FormStartPosition.CenterScreen;
@@ -399,30 +539,30 @@ namespace NasDriveSetup
             BackColor = Color.White;
 
             var header = new Panel { Location = new Point(0, 0), Size = new Size(470, 128), BackColor = BrandBlue };
-            header.Controls.Add(new Label { Text = "NAS DRIVE", Location = new Point(34, 24), Size = new Size(390, 24), ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 11f) });
-            header.Controls.Add(new Label { Text = "내 파일을 Windows와 연결", Location = new Point(32, 58), Size = new Size(400, 43), ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 19f) });
+            header.Controls.Add(new Label { Text = "NAS DRIVE", Location = new Point(34, 24), Size = new Size(390, 24), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 11f) });
+            header.Controls.Add(new Label { Text = "내 파일을 Windows와 연결", Location = new Point(32, 58), Size = new Size(400, 43), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 19f) });
 
             Controls.Add(header);
-            Controls.Add(new Label { Text = "NAS 계정으로 로그인", Location = new Point(36, 158), Size = new Size(395, 35), Font = new Font("Segoe UI Semibold", 17f) });
-            Controls.Add(new Label { Text = "로그인하면 파일 탐색기에 계정 전용 NAS Drive가 연결됩니다.", Location = new Point(38, 201), Size = new Size(395, 42), ForeColor = Color.FromArgb(75, 82, 96), Font = new Font("Segoe UI", 9.5f) });
-            Controls.Add(new Label { Text = "아이디", Location = new Point(38, 252), Size = new Size(390, 24), Font = new Font("Segoe UI Semibold", 9.5f) });
+            Controls.Add(new Label { Text = "NAS 계정으로 로그인", Location = new Point(36, 158), Size = new Size(395, 35), Font = Program.UiFont("Segoe UI Semibold", 17f) });
+            Controls.Add(new Label { Text = "로그인하면 파일 탐색기에 계정 전용 NAS Drive가 연결됩니다.", Location = new Point(38, 201), Size = new Size(395, 42), ForeColor = Color.FromArgb(75, 82, 96), Font = Program.UiFont("Segoe UI", 9.5f) });
+            Controls.Add(new Label { Text = "아이디", Location = new Point(38, 252), Size = new Size(390, 24), Font = Program.UiFont("Segoe UI Semibold", 9.5f) });
             loginId.Location = new Point(38, 279);
             loginId.Size = new Size(394, 30);
-            loginId.Font = new Font("Segoe UI", 11f);
+            loginId.Font = Program.UiFont("Segoe UI", 11f);
             Controls.Add(loginId);
 
-            Controls.Add(new Label { Text = "비밀번호", Location = new Point(38, 326), Size = new Size(390, 24), Font = new Font("Segoe UI Semibold", 9.5f) });
+            Controls.Add(new Label { Text = "비밀번호", Location = new Point(38, 326), Size = new Size(390, 24), Font = Program.UiFont("Segoe UI Semibold", 9.5f) });
             password.Location = new Point(38, 353);
             password.Size = new Size(394, 30);
-            password.Font = new Font("Segoe UI", 11f);
+            password.Font = Program.UiFont("Segoe UI", 11f);
             password.UseSystemPasswordChar = true;
             password.KeyDown += async (sender, args) => { if (args.KeyCode == Keys.Enter) await LoginAsync(); };
             Controls.Add(password);
 
-            Controls.Add(new Label { Text = "NAS Drive 위치", Location = new Point(38, 398), Size = new Size(390, 24), Font = new Font("Segoe UI Semibold", 9.5f) });
+            Controls.Add(new Label { Text = "NAS Drive 위치", Location = new Point(38, 398), Size = new Size(390, 24), Font = Program.UiFont("Segoe UI Semibold", 9.5f) });
             drivePath.Location = new Point(38, 425);
             drivePath.Size = new Size(294, 30);
-            drivePath.Font = new Font("Segoe UI", 9.5f);
+            drivePath.Font = Program.UiFont("Segoe UI", 9.5f);
             drivePath.ReadOnly = true;
             drivePath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "NAS Drive - 계정명");
             Controls.Add(drivePath);
@@ -452,7 +592,7 @@ namespace NasDriveSetup
             status.Location = new Point(38, 505);
             status.Size = new Size(394, 42);
             status.ForeColor = BrandBlue;
-            status.Font = new Font("Segoe UI Semibold", 9f);
+            status.Font = Program.UiFont("Segoe UI Semibold", 9f);
             Controls.Add(status);
 
             signupButton.Text = "회원가입";
@@ -467,7 +607,7 @@ namespace NasDriveSetup
             loginButton.BackColor = BrandBlue;
             loginButton.ForeColor = Color.White;
             loginButton.FlatStyle = FlatStyle.Flat;
-            loginButton.Font = new Font("Segoe UI Semibold", 10f);
+            loginButton.Font = Program.UiFont("Segoe UI Semibold", 10f);
             loginButton.Click += async (sender, args) => await LoginAsync();
             Controls.Add(loginButton);
 
@@ -698,13 +838,22 @@ namespace NasDriveSetup
             string state = ReadJsonValue(HealthFile, "state");
             string updatedAt = ReadJsonValue(HealthFile, "updatedAt");
             DateTime parsed;
-            if (HasConfiguredProfile()
-                && DateTime.TryParse(updatedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out parsed)
-                && (DateTime.UtcNow - parsed.ToUniversalTime()).TotalSeconds > 12)
+            double ageSeconds = DateTime.TryParse(updatedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out parsed)
+                ? (DateTime.UtcNow - parsed.ToUniversalTime()).TotalSeconds
+                : 0;
+            if (ShouldTreatHealthAsOffline(state, ageSeconds, HasConfiguredProfile()))
             {
                 return "offline";
             }
             return state;
+        }
+
+        internal static bool ShouldTreatHealthAsOffline(string state, double ageSeconds, bool hasConfiguredProfile)
+        {
+            if (!hasConfiguredProfile || ageSeconds <= 12) return false;
+            return !string.Equals(state, "needs-relink", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(state, "error", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(state, "paused", StringComparison.OrdinalIgnoreCase);
         }
 
         internal static string HealthMessage()
@@ -714,6 +863,7 @@ namespace NasDriveSetup
 
         private void BuildUi()
         {
+            AutoScaleMode = AutoScaleMode.None;
             Text = "NAS Drive";
             ClientSize = new Size(620, 620);
             StartPosition = FormStartPosition.CenterScreen;
@@ -722,50 +872,51 @@ namespace NasDriveSetup
             BackColor = Color.White;
 
             var header = new Panel { Location = new Point(0, 0), Size = new Size(620, 110), BackColor = BrandBlue };
-            header.Controls.Add(new Label { Text = "NAS DRIVE", Location = new Point(32, 19), Size = new Size(540, 24), ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 11f) });
-            header.Controls.Add(new Label { Text = "내 NAS Drive", Location = new Point(30, 50), Size = new Size(540, 40), ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 20f) });
+            header.Controls.Add(new Label { Text = "NAS DRIVE", Location = new Point(32, 19), Size = new Size(540, 24), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 11f) });
+            header.Controls.Add(new Label { Text = "내 NAS Drive", Location = new Point(30, 50), Size = new Size(540, 40), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 20f) });
             Controls.Add(header);
 
             accountLabel.Location = new Point(34, 135);
             accountLabel.Size = new Size(550, 58);
-            accountLabel.Font = new Font("Segoe UI Semibold", 13f);
+            accountLabel.Font = Program.UiFont("Segoe UI Semibold", 13f);
             Controls.Add(accountLabel);
 
             statusLabel.Location = new Point(34, 208);
             statusLabel.Size = new Size(550, 58);
-            statusLabel.Font = new Font("Segoe UI Semibold", 11f);
+            statusLabel.Font = Program.UiFont("Segoe UI Semibold", 11f);
             statusLabel.ForeColor = BrandBlue;
             Controls.Add(statusLabel);
 
             driveLabel.Location = new Point(34, 278);
             driveLabel.Size = new Size(550, 75);
-            driveLabel.Font = new Font("Segoe UI", 9.5f);
+            driveLabel.Font = Program.UiFont("Segoe UI", 9.5f);
             driveLabel.ForeColor = Color.FromArgb(75, 82, 96);
             Controls.Add(driveLabel);
 
             var stateGuide = new Panel { Location = new Point(34, 350), Size = new Size(550, 118), BackColor = Color.FromArgb(242, 247, 255) };
-            stateGuide.Controls.Add(new Label { Text = "파일별 저장 상태", Location = new Point(16, 12), Size = new Size(500, 24), Font = new Font("Segoe UI Semibold", 10f), ForeColor = Color.FromArgb(32, 71, 126) });
-            stateGuide.Controls.Add(new Label { Text = "☁  온라인 전용  ·  NAS에 저장되어 있으며 열 때 다운로드", Location = new Point(16, 39), Size = new Size(510, 22), Font = new Font("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
-            stateGuide.Controls.Add(new Label { Text = "✓  이 PC에서 사용 가능  ·  이미 다운로드되어 오프라인 사용 가능", Location = new Point(16, 64), Size = new Size(510, 22), Font = new Font("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
-            stateGuide.Controls.Add(new Label { Text = "●  항상 유지  ·  우클릭으로 고정, 공간 확보로 온라인 전용 전환", Location = new Point(16, 89), Size = new Size(510, 22), Font = new Font("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
+            stateGuide.Controls.Add(new Label { Text = "파일별 저장 상태", Location = new Point(16, 12), Size = new Size(500, 24), Font = Program.UiFont("Segoe UI Semibold", 10f), ForeColor = Color.FromArgb(32, 71, 126) });
+            stateGuide.Controls.Add(new Label { Text = "☁  온라인 전용  ·  NAS에 저장되어 있으며 열 때 다운로드", Location = new Point(16, 39), Size = new Size(510, 22), Font = Program.UiFont("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
+            stateGuide.Controls.Add(new Label { Text = "✓  이 PC에서 사용 가능  ·  이미 다운로드되어 오프라인 사용 가능", Location = new Point(16, 64), Size = new Size(510, 22), Font = Program.UiFont("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
+            stateGuide.Controls.Add(new Label { Text = "●  항상 유지  ·  우클릭으로 고정, 공간 확보로 온라인 전용 전환", Location = new Point(16, 89), Size = new Size(510, 22), Font = Program.UiFont("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
             Controls.Add(stateGuide);
 
-            var openDrive = new Button { Text = "NAS Drive 열기", Location = new Point(34, 492), Size = new Size(170, 44), BackColor = BrandBlue, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI Semibold", 9.5f) };
+            var openDrive = new Button { Text = "NAS Drive 열기", Location = new Point(34, 492), Size = new Size(170, 44), BackColor = BrandBlue, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
             openDrive.Click += (sender, args) => OpenDrive();
             Controls.Add(openDrive);
 
-            var openWeb = new Button { Text = "웹에서 관리", Location = new Point(218, 492), Size = new Size(150, 44) };
+            var openWeb = new Button { Text = "웹에서 관리", Location = new Point(218, 492), Size = new Size(150, 44), Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
             openWeb.Click += (sender, args) => Program.StartInstalledAgent(agentExe, "--open-web --hidden-bootstrap");
             Controls.Add(openWeb);
 
             logoutButton.Text = "로그아웃";
             logoutButton.Location = new Point(382, 492);
             logoutButton.Size = new Size(202, 44);
+            logoutButton.Font = Program.UiFont("Segoe UI Semibold", 9.5f);
             logoutButton.Click += async (sender, args) => await LogoutAsync();
             Controls.Add(logoutButton);
 
-            Controls.Add(new Label { Text = "이 창을 닫아도 NAS Drive는 작업표시줄 알림 영역에서 계속 실행됩니다.", Location = new Point(34, 562), Size = new Size(410, 28), ForeColor = Color.DimGray, Font = new Font("Segoe UI", 9f) });
-            var close = new Button { Text = "창 닫기", Location = new Point(464, 558), Size = new Size(120, 36) };
+            Controls.Add(new Label { Text = "이 창을 닫아도 NAS Drive는 작업표시줄 알림 영역에서 계속 실행됩니다.", Location = new Point(34, 562), Size = new Size(410, 28), ForeColor = Color.DimGray, Font = Program.UiFont("Segoe UI", 9f) });
+            var close = new Button { Text = "창 닫기", Location = new Point(464, 558), Size = new Size(120, 36), Font = Program.UiFont("Segoe UI Semibold", 9f) };
             close.Click += (sender, args) => Close();
             Controls.Add(close);
         }
@@ -881,7 +1032,7 @@ namespace NasDriveSetup
             StopLegacyTray();
 
             accountItem.Enabled = false;
-            accountItem.Font = new Font("Segoe UI Semibold", 9f);
+            accountItem.Font = Program.UiFont("Segoe UI Semibold", 9f);
             statusItem.Enabled = false;
             openDriveItem.Click += (sender, args) => OpenDrive();
             accountActionItem.Click += (sender, args) => OpenControlCenter();
@@ -1053,6 +1204,7 @@ namespace NasDriveSetup
 
         private void BuildUi()
         {
+            AutoScaleMode = AutoScaleMode.None;
             Text = "NAS Drive 설치";
             ClientSize = new Size(660, 470);
             StartPosition = FormStartPosition.CenterScreen;
@@ -1062,28 +1214,28 @@ namespace NasDriveSetup
             BackColor = Color.White;
 
             var header = new Panel { Location = new Point(0, 0), Size = new Size(660, 112), BackColor = BrandBlue };
-            var brand = new Label { Text = "NAS DRIVE", Location = new Point(30, 20), Size = new Size(580, 25), ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 11f) };
-            var headerTitle = new Label { Text = "Windows용 NAS Drive", Location = new Point(28, 50), Size = new Size(590, 40), ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 20f) };
+            var brand = new Label { Text = "NAS DRIVE", Location = new Point(30, 20), Size = new Size(580, 25), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 11f) };
+            var headerTitle = new Label { Text = "Windows용 NAS Drive", Location = new Point(28, 50), Size = new Size(590, 40), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 20f) };
             header.Controls.Add(brand);
             header.Controls.Add(headerTitle);
 
             title.Location = new Point(34, 142);
             title.Size = new Size(590, 38);
-            title.Font = new Font("Segoe UI Semibold", 18f);
+            title.Font = Program.UiFont("Segoe UI Semibold", 18f);
 
             description.Location = new Point(36, 190);
             description.Size = new Size(585, 58);
-            description.Font = new Font("Segoe UI", 10f);
+            description.Font = Program.UiFont("Segoe UI", 10f);
             description.ForeColor = Color.FromArgb(65, 72, 85);
 
             versionText.Location = new Point(36, 258);
             versionText.Size = new Size(585, 28);
-            versionText.Font = new Font("Segoe UI", 9.5f);
+            versionText.Font = Program.UiFont("Segoe UI", 9.5f);
             versionText.ForeColor = Color.DimGray;
 
             statusText.Location = new Point(36, 302);
             statusText.Size = new Size(585, 28);
-            statusText.Font = new Font("Segoe UI Semibold", 9.5f);
+            statusText.Font = Program.UiFont("Segoe UI Semibold", 9.5f);
             statusText.ForeColor = BrandBlue;
 
             progress.Location = new Point(36, 337);
@@ -1102,7 +1254,7 @@ namespace NasDriveSetup
             primary.BackColor = BrandBlue;
             primary.ForeColor = Color.White;
             primary.FlatStyle = FlatStyle.Flat;
-            primary.Font = new Font("Segoe UI Semibold", 10f);
+            primary.Font = Program.UiFont("Segoe UI Semibold", 10f);
             primary.Click += async (sender, args) => await PrimaryClicked();
 
             cancel.Text = "취소";

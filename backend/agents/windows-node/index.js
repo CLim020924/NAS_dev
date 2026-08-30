@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.16';
+const AGENT_VERSION = '1.10.17';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -435,21 +435,16 @@ function explorerStatusLabel(state) {
 }
 
 function setPersonalDriveFolderIcon(rootPath, enabled, state = 'up-to-date', message = '') {
-  if (!rootPath) return;
+  if (!rootPath) return false;
   const desktopIni = personalDriveDesktopIniPath(rootPath);
   try {
     if (enabled) {
-      if (!fs.existsSync(INSTALLED_ICON)) return;
+      if (!fs.existsSync(INSTALLED_ICON)) return false;
       const statusIcon = path.join(path.dirname(INSTALLED_ICON), `nas-drive-status-${state}.ico`);
       const iconPath = fs.existsSync(statusIcon) ? statusIcon : INSTALLED_ICON;
       const statusText = explorerStatusLabel(state);
       const detail = String(message || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 180);
       const infoTip = detail && !statusText.includes(detail) ? `${statusText} · ${detail}` : statusText;
-      if (fs.existsSync(desktopIni)) {
-        const existing = fs.readFileSync(desktopIni, 'utf16le').replace(/^\uFEFF/, '');
-        if (!existing.includes(PERSONAL_DRIVE_DESKTOP_INI_MARKER)) return;
-        spawnSync('attrib.exe', ['-h', '-s', desktopIni], { windowsHide: true, stdio: 'ignore' });
-      }
       const content = [
         PERSONAL_DRIVE_DESKTOP_INI_MARKER,
         '[.ShellClassInfo]',
@@ -463,20 +458,73 @@ function setPersonalDriveFolderIcon(rootPath, enabled, state = 'up-to-date', mes
         'FolderType=StorageProviderGeneric',
         ''
       ].join('\r\n');
+      if (fs.existsSync(desktopIni)) {
+        const existing = fs.readFileSync(desktopIni, 'utf16le').replace(/^\uFEFF/, '');
+        if (!existing.includes(PERSONAL_DRIVE_DESKTOP_INI_MARKER)) return false;
+        if (existing === content) return false;
+        spawnSync('attrib.exe', ['-h', '-s', desktopIni], { windowsHide: true, stdio: 'ignore' });
+      }
       fs.writeFileSync(desktopIni, Buffer.from(`\uFEFF${content}`, 'utf16le'));
       spawnSync('attrib.exe', ['+h', '+s', desktopIni], { windowsHide: true, stdio: 'ignore' });
       spawnSync('attrib.exe', ['+r', rootPath], { windowsHide: true, stdio: 'ignore' });
-      return;
+      return true;
     }
-    if (!fs.existsSync(desktopIni)) return;
+    if (!fs.existsSync(desktopIni)) return false;
     const content = fs.readFileSync(desktopIni, 'utf16le').replace(/^\uFEFF/, '');
-    if (!content.includes(PERSONAL_DRIVE_DESKTOP_INI_MARKER)) return;
+    if (!content.includes(PERSONAL_DRIVE_DESKTOP_INI_MARKER)) return false;
     spawnSync('attrib.exe', ['-h', '-s', desktopIni], { windowsHide: true, stdio: 'ignore' });
     fs.unlinkSync(desktopIni);
     spawnSync('attrib.exe', ['-r', rootPath], { windowsHide: true, stdio: 'ignore' });
+    return true;
   } catch (err) {
     log('[personal drive icon failed]', err.message);
+    return false;
   }
+}
+
+function refreshPersonalDriveShell(rootPath) {
+  if (process.platform !== 'win32' || !rootPath) return;
+  const script = `
+$root = [Environment]::GetEnvironmentVariable('NAS_DRIVE_REFRESH_ROOT')
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NasDriveShellRefresh {
+  [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
+  public static extern void SHChangeNotify(uint eventId, uint flags, string item1, string item2);
+}
+'@
+[NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, $root, $null)
+[NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, (Join-Path $root 'desktop.ini'), $null)
+[NasDriveShellRefresh]::SHChangeNotify(0x08000000, 0x0000, $null, $null)
+$iconRefresh = Join-Path $env:WINDIR 'System32\\ie4uinit.exe'
+if (Test-Path -LiteralPath $iconRefresh) {
+  Start-Process -FilePath $iconRefresh -ArgumentList '-show' -WindowStyle Hidden -Wait
+}
+# Explorer updates its namespace-icon cache asynchronously. Refreshing the
+# open window immediately can therefore display the previous state for one
+# whole transition. Give the cache a short settling period, then notify again.
+Start-Sleep -Milliseconds 1400
+[NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, $root, $null)
+[NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, (Join-Path $root 'desktop.ini'), $null)
+[NasDriveShellRefresh]::SHChangeNotify(0x08000000, 0x0000, $null, $null)
+$shell = New-Object -ComObject Shell.Application
+foreach ($window in @($shell.Windows())) {
+  try {
+    if ([IO.Path]::GetFullPath($window.Document.Folder.Self.Path) -eq [IO.Path]::GetFullPath($root)) {
+      $window.Refresh()
+    }
+  } catch {}
+}
+`;
+  const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-NonInteractive', '-Command', script], {
+    windowsHide: true,
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, NAS_DRIVE_REFRESH_ROOT: rootPath }
+  });
+  child.on('error', err => log('[personal drive shell refresh failed]', err.message));
+  child.unref();
 }
 
 function setPersonalDriveWebShortcut(rootPath, profile, enabled) {
@@ -574,13 +622,53 @@ function stopPersonalDriveProvider(profile, root) {
   try { fs.unlinkSync(pidFile); } catch {}
 }
 
+function isPersonalDriveProviderAlive(profile, root) {
+  const pidFile = providerPidFile(profile, root);
+  const pid = Number(fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8') : 0);
+  return isExpectedProcessAlive(pid, INSTALLED_PROVIDER_EXE);
+}
+
+function discoverPersonalDriveProviderPid(root) {
+  if (process.platform !== 'win32' || !root?.syncRootId) return 0;
+  const script = [
+    "$expected = [IO.Path]::GetFullPath($env:NAS_DRIVE_PROVIDER_PATH)",
+    "$rootId = $env:NAS_DRIVE_SYNC_ROOT_ID",
+    "$match = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'NAS-Drive-Provider.exe' -and $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -ieq $expected -and $_.CommandLine -and $_.CommandLine.Contains($rootId) } | Select-Object -First 1 -ExpandProperty ProcessId",
+    "if ($match) { [Console]::Write($match) }"
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    windowsHide: true,
+    encoding: 'utf8',
+    env: { ...process.env, NAS_DRIVE_PROVIDER_PATH: INSTALLED_PROVIDER_EXE, NAS_DRIVE_SYNC_ROOT_ID: String(root.syncRootId) }
+  });
+  const pid = Number(String(result.stdout || '').trim());
+  return isExpectedProcessAlive(pid, INSTALLED_PROVIDER_EXE) ? pid : 0;
+}
+
 async function ensurePersonalDriveProvider(profile, root) {
   const provider = await ensureProviderInstalled(profile);
   if (!provider || !root?.localPath) return false;
   const pidFile = providerPidFile(profile, root);
   const existingPid = Number(fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8') : 0);
   if (isExpectedProcessAlive(existingPid, provider)) return true;
+  const discoveredPid = discoverPersonalDriveProviderPid(root);
+  if (discoveredPid) {
+    fs.writeFileSync(pidFile, String(discoveredPid), 'utf8');
+    return true;
+  }
   try { fs.unlinkSync(pidFile); } catch {}
+  const displayName = String(profile.displayName || profile.loginId || '개인').startsWith('NAS Drive')
+    ? String(profile.displayName || profile.loginId || '개인')
+    : `NAS Drive - ${profile.displayName || profile.loginId || '개인'}`;
+  const registration = spawnSync(provider, [
+    'register',
+    '--root', root.localPath,
+    '--account', profile.accountKey,
+    '--display-name', displayName
+  ], { encoding: 'utf8', windowsHide: true });
+  if (registration.status !== 0 && !/0x8007018B/i.test(String(registration.stderr || registration.stdout || ''))) {
+    throw new Error(`NAS Drive 파일 탐색기 연결 등록을 복구하지 못했습니다: ${String(registration.stderr || registration.stdout || registration.status).trim()}`);
+  }
   const child = spawn(provider, [
     'serve',
     '--root', root.localPath,
@@ -591,6 +679,11 @@ async function ensurePersonalDriveProvider(profile, root) {
   ], { windowsHide: true, detached: true, stdio: 'ignore' });
   child.unref();
   fs.writeFileSync(pidFile, String(child.pid), 'utf8');
+  await new Promise(resolve => setTimeout(resolve, 650));
+  if (child.exitCode !== null || child.killed) {
+    try { fs.unlinkSync(pidFile); } catch {}
+    throw new Error('NAS Drive 파일 탐색기 연결 프로세스를 시작하지 못했습니다. 자동으로 다시 시도합니다.');
+  }
   return true;
 }
 
@@ -936,6 +1029,10 @@ function setExplorerStatus(profile, state, message = '') {
     const now = Date.now();
     const shouldRefreshView = now - Number(explorerViewRefreshAt.get(cacheKey) || 0) >= 15_000;
     const stateChanged = explorerStatusCache.get(cacheKey) !== state;
+    // Write desktop.ini before the provider emits the Shell refresh. Otherwise
+    // an already-open Explorer window can refresh the registry icon first and
+    // keep the previous folder icon cached until the window is reopened.
+    const iconChanged = setPersonalDriveFolderIcon(root.localPath, true, state, message);
     if (stateChanged) {
       const result = spawnSync(INSTALLED_PROVIDER_EXE, [
         'set-status',
@@ -948,7 +1045,7 @@ function setExplorerStatus(profile, state, message = '') {
       if (result.status === 0) explorerStatusCache.set(cacheKey, state);
       else log('[explorer status failed]', state, result.stderr || result.stdout || result.status);
     }
-    setPersonalDriveFolderIcon(root.localPath, true, state, message);
+    if (stateChanged || iconChanged) refreshPersonalDriveShell(root.localPath);
     if (shouldRefreshView) {
       explorerViewRefreshAt.set(cacheKey, now);
       ensurePersonalDriveProvider(profile, root)
@@ -3289,6 +3386,12 @@ async function runBackground() {
           process.exit(0);
         }
         job.profile._paused = !!heartbeat.commands?.paused;
+        for (const root of job.roots.filter(item => item.kind === 'personal-drive')) {
+          if (!isPersonalDriveProviderAlive(job.profile, root)) {
+            setProfileHealth(job.profile, 'connecting', '파일 탐색기 연결을 복구하는 중입니다.');
+            await ensurePersonalDriveProvider(job.profile, root);
+          }
+        }
         if (!job.watchersStarted) {
           for (const root of job.roots) {
             if (root.kind === 'personal-drive') await registerPersonalDrive(job.profile);
