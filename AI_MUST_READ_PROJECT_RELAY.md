@@ -601,3 +601,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save했다. 재시작 직후 0초 probe는 기동 전이라 한 번 HTTP 000이었지만 4초 뒤 PM2 online, 내부 3030·공개 HTTPS 모두 200으로 수렴했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다.
 - NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `20A11BF86EA9AAD3A615E81530207FD160166B186A82C3C20CF1F083B711DDB7`, Setup/launcher SHA-256은 `8508181B5C2245B46AC69BA381F9FCA750C2702460B905B94AAB660FE3DFBAA1`이다.
 - 최종 현재 PC 상태는 1.10.19 open-web 진단 `opened/chrome`, health `up-to-date`, `needsRelink=false`이고 launcher·Agent·Provider가 실행 중이다. 사용자 파일·활성 DPAPI credential과 이번 UI 외 Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+
+## 2026-08-30 NAS Drive 1.10.20 브라우저 picker 카드 hover 깜빡임 제거
+
+- 사용자 요청: 브라우저·프로필 선택 기능은 정상이나 카드 위에서 마우스를 움직일 때 선택 블록이 깜빡이므로 버튼을 더 세심하게 다듬는다.
+- 원인: 1.10.19 카드는 `Panel` 안에 `PictureBox`와 여러 `Label`을 중첩하고 각 자식에 click을 전달했다. 커서가 부모 카드와 이미지·텍스트 경계를 오갈 때 부모 `MouseLeave/MouseEnter`가 반복되어 배경색과 border가 짧게 원복·재적용됐다.
+- 구현: 카드 전체를 자식 컨트롤이 없는 단일 `WebPickerCardButton` owner-draw Button으로 교체했다. `OptimizedDoubleBuffer`, `AllPaintingInWmPaint`, `UserPaint`를 사용해 배경·hover/pressed/focus border·이미지·이름·이메일·badge를 한 프레임에 그린다. hover 상태는 버튼 자체 진입/이탈에서만 바뀌며 키보드 Enter/Space, focus cue, `AccessibleName`을 제공한다. paint Font는 즉시 dispose하고 카드 소유 Image는 Button dispose에서 해제한다.
+- 현재 PC 실화면 E2E: 실제 Explorer 웹 바로가기로 첫 화면과 Chrome 프로필 화면을 열었다. Windows 접근성 tree에서 브라우저 3개와 Chrome 프로필 6개가 각각 일반 창/자식 Label이 아닌 단일 `Button`으로 노출되고 이미지·이름·대표 이메일 화면도 유지됨을 확인했다. 1.10.20 open-web 진단은 `opened/chrome`, health는 `up-to-date`, `needsRelink=false`다.
+- 검증: C# compile, source/packaged Agent self-test, Setup self-test, desktop handoff/browser tests 4/4와 `git diff --check`를 통과했다. workbook은 기존 feature를 1.10.20으로 갱신하고 Request/Patch/Do_Not_Break/Code_Map을 보수적으로 추가했으며 관련 범위 렌더와 formula error 0을 확인했다. 인증·프로필 탐지·avatar·handoff 로직과 사용자 파일은 변경하지 않았다.

@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.19.0")]
-[assembly: AssemblyFileVersion("1.10.19.0")]
+[assembly: AssemblyVersion("1.10.20.0")]
+[assembly: AssemblyFileVersion("1.10.20.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.19";
+        internal const string ProductVersion = "1.10.20";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
@@ -567,6 +567,132 @@ namespace NasDriveSetup
         public override string ToString() { return Label; }
     }
 
+    internal sealed class WebPickerCardButton : Button
+    {
+        private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
+        private static readonly Color BorderColor = Color.FromArgb(222, 228, 238);
+        private static readonly Color HoverColor = Color.FromArgb(242, 247, 255);
+        private static readonly Color PressedColor = Color.FromArgb(230, 239, 255);
+        private bool hovered;
+        internal Image CardImage;
+        internal string CardTitle = "";
+        internal string CardSubtitle = "";
+        internal string CardBadge = "";
+        internal bool BadgeFilled;
+        internal bool ProfileLayout;
+
+        internal WebPickerCardButton()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
+            DoubleBuffered = true;
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            UseVisualStyleBackColor = false;
+            BackColor = Color.White;
+            ForeColor = Color.FromArgb(25, 28, 34);
+            Cursor = Cursors.Hand;
+            TabStop = true;
+        }
+
+        protected override void OnMouseEnter(EventArgs eventArgs)
+        {
+            hovered = true;
+            Invalidate();
+            base.OnMouseEnter(eventArgs);
+        }
+
+        protected override void OnMouseLeave(EventArgs eventArgs)
+        {
+            hovered = false;
+            Invalidate();
+            base.OnMouseLeave(eventArgs);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs eventArgs)
+        {
+            Invalidate();
+            base.OnMouseDown(eventArgs);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs eventArgs)
+        {
+            Invalidate();
+            base.OnMouseUp(eventArgs);
+        }
+
+        protected override void OnPaint(PaintEventArgs eventArgs)
+        {
+            bool pressed = Capture && MouseButtons == MouseButtons.Left;
+            Color background = pressed ? PressedColor : (hovered ? HoverColor : Color.White);
+            eventArgs.Graphics.Clear(background);
+            eventArgs.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            eventArgs.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            using (var border = new Pen(hovered || Focused ? BrandBlue : BorderColor, hovered || Focused ? 2f : 1f))
+            {
+                eventArgs.Graphics.DrawRectangle(border, 1, 1, Width - 3, Height - 3);
+            }
+
+            int imageSize = ProfileLayout ? 72 : 70;
+            int imageY = ProfileLayout ? 18 : 24;
+            if (CardImage != null)
+            {
+                int imageX = (Width - imageSize) / 2;
+                eventArgs.Graphics.DrawImage(CardImage, new Rectangle(imageX, imageY, imageSize, imageSize));
+            }
+
+            Rectangle titleRect = ProfileLayout
+                ? new Rectangle(10, 101, Width - 20, 28)
+                : new Rectangle(10, 108, Width - 20, 30);
+            using (Font titleFont = Program.UiFont("Segoe UI Semibold", 10.5f))
+            {
+                TextRenderer.DrawText(eventArgs.Graphics, CardTitle, titleFont, titleRect, ForeColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            }
+
+            Rectangle subtitleRect = ProfileLayout
+                ? new Rectangle(10, 132, Width - 20, 40)
+                : new Rectangle(10, 143, Width - 20, 24);
+            using (Font subtitleFont = Program.UiFont("Segoe UI", ProfileLayout ? 8.5f : 9f))
+            {
+                TextRenderer.DrawText(eventArgs.Graphics, CardSubtitle, subtitleFont, subtitleRect,
+                    ProfileLayout ? Color.DimGray : BrandBlue,
+                    TextFormatFlags.HorizontalCenter | (ProfileLayout ? TextFormatFlags.Top : TextFormatFlags.VerticalCenter) | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak);
+            }
+
+            if (ProfileLayout && !string.IsNullOrWhiteSpace(CardBadge))
+            {
+                var badgeRect = new Rectangle((Width - 84) / 2, 178, 84, 24);
+                if (BadgeFilled)
+                {
+                    using (var brush = new SolidBrush(BrandBlue)) eventArgs.Graphics.FillRectangle(brush, badgeRect);
+                }
+                using (Font badgeFont = Program.UiFont("Segoe UI Semibold", 8.5f))
+                {
+                    TextRenderer.DrawText(eventArgs.Graphics, CardBadge, badgeFont, badgeRect,
+                        BadgeFilled ? Color.White : BrandBlue,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                }
+            }
+
+            if (Focused && ShowFocusCues)
+            {
+                Rectangle focus = ClientRectangle;
+                focus.Inflate(-5, -5);
+                ControlPaint.DrawFocusRectangle(eventArgs.Graphics, focus, ForeColor, background);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && CardImage != null)
+            {
+                CardImage.Dispose();
+                CardImage = null;
+            }
+            base.Dispose(disposing);
+        }
+    }
+
     internal sealed class WebBrowserPickerForm : Form
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
@@ -709,41 +835,38 @@ namespace NasDriveSetup
 
         private Control CreateBrowserCard(BrowserChoice browser, EventHandler click)
         {
-            var card = CreateCard(new Size(200, 185), click);
-            var logo = new PictureBox { Location = new Point(65, 24), Size = new Size(70, 70), SizeMode = PictureBoxSizeMode.Zoom, Image = LoadBrowserLogo(browser) };
-            var name = new Label { Text = browser.Label, Location = new Point(10, 108), Size = new Size(180, 30), TextAlign = ContentAlignment.MiddleCenter, Font = Program.UiFont("Segoe UI Semibold", 10.5f) };
-            var action = new Label { Text = browser.Id == "system" ? "바로 열기" : "사용자 선택", Location = new Point(10, 143), Size = new Size(180, 24), TextAlign = ContentAlignment.MiddleCenter, ForeColor = BrandBlue, Font = Program.UiFont("Segoe UI", 9f) };
-            card.Controls.AddRange(new Control[] { logo, name, action });
-            WireCardClick(card, click);
+            var card = new WebPickerCardButton
+            {
+                Size = new Size(200, 185),
+                Margin = new Padding(7),
+                CardImage = LoadBrowserLogo(browser),
+                CardTitle = browser.Label,
+                CardSubtitle = browser.Id == "system" ? "바로 열기" : "사용자 선택",
+                Text = browser.Label,
+                AccessibleName = browser.Label + " " + (browser.Id == "system" ? "바로 열기" : "사용자 선택")
+            };
+            card.Click += click;
             return card;
         }
 
         private Control CreateProfileCard(BrowserProfileChoice profile, EventHandler click)
         {
-            var card = CreateCard(new Size(200, 215), click);
-            var avatar = new PictureBox { Location = new Point(64, 18), Size = new Size(72, 72), SizeMode = PictureBoxSizeMode.Zoom, Image = LoadProfileAvatar(profile) };
-            var name = new Label { Text = profile.Label, Location = new Point(10, 101), Size = new Size(180, 28), TextAlign = ContentAlignment.MiddleCenter, Font = Program.UiFont("Segoe UI Semibold", 10.5f), AutoEllipsis = true };
-            var account = new Label { Text = string.IsNullOrWhiteSpace(profile.Account) ? "브라우저 사용자" : profile.Account, Location = new Point(10, 132), Size = new Size(180, 42), TextAlign = ContentAlignment.TopCenter, ForeColor = Color.DimGray, Font = Program.UiFont("Segoe UI", 8.5f), AutoEllipsis = true };
-            var recent = new Label { Text = profile.IsLastUsed ? "최근 사용" : "선택", Location = new Point(58, 178), Size = new Size(84, 24), TextAlign = ContentAlignment.MiddleCenter, ForeColor = profile.IsLastUsed ? Color.White : BrandBlue, BackColor = profile.IsLastUsed ? BrandBlue : Color.White, Font = Program.UiFont("Segoe UI Semibold", 8.5f) };
-            card.Controls.AddRange(new Control[] { avatar, name, account, recent });
-            WireCardClick(card, click);
+            string account = string.IsNullOrWhiteSpace(profile.Account) ? "브라우저 사용자" : profile.Account;
+            var card = new WebPickerCardButton
+            {
+                Size = new Size(200, 215),
+                Margin = new Padding(7),
+                ProfileLayout = true,
+                CardImage = LoadProfileAvatar(profile),
+                CardTitle = profile.Label,
+                CardSubtitle = account,
+                CardBadge = profile.IsLastUsed ? "최근 사용" : "선택",
+                BadgeFilled = profile.IsLastUsed,
+                Text = profile.Label,
+                AccessibleName = profile.Label + " " + account + (profile.IsLastUsed ? " 최근 사용" : "")
+            };
+            card.Click += click;
             return card;
-        }
-
-        private Panel CreateCard(Size size, EventHandler click)
-        {
-            var card = new Panel { Size = size, Margin = new Padding(7), BackColor = Color.White, Cursor = Cursors.Hand };
-            card.Paint += (sender, args) => ControlPaint.DrawBorder(args.Graphics, card.ClientRectangle, CardBorder, ButtonBorderStyle.Solid);
-            card.MouseEnter += (sender, args) => card.BackColor = CardHover;
-            card.MouseLeave += (sender, args) => card.BackColor = Color.White;
-            return card;
-        }
-
-        private static void WireCardClick(Control control, EventHandler click)
-        {
-            control.Cursor = Cursors.Hand;
-            control.Click += click;
-            foreach (Control child in control.Controls) WireCardClick(child, click);
         }
 
         private static Image LoadBrowserLogo(BrowserChoice browser)
