@@ -515,3 +515,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 네트워크 경계: NAS/네트워크가 끊긴 상태에서 사용자가 로컬 관계를 해제하면 서버는 그 사건을 즉시 받을 수 없다. 따라서 물리적으로 항상 동시 갱신은 불가능하지만, 웹이 오래된 상태를 `연결됨`으로 단정하지 않고 마지막 확인 시각·오프라인·로컬 해제 미반영을 명확히 구분하고 재연결 시 수렴시켜야 한다.
 - 상태 축: 계정 관계(`linked/revoked/needs-relink`), PC 접속(`online/offline`), 파일 동기화(`connecting/syncing/up-to-date/error/paused`), 신규 pairing(`pending/agent-detected/connected/expired`)은 서로 다른 축이다. 양쪽에서 같은 축의 의미는 일치해야 하지만 이 네 축을 한 문구로 합치면 안 된다.
 - 미완료: 서버 권위의 관계 상태와 로컬 상태를 공통 revision/event로 조정하고, 웹의 polling 지연과 오프라인 로컬 로그아웃 pending reconciliation을 표시·수렴시키는 E2E는 아직 구현되지 않았다. 이 보강 전에는 “양쪽 상태가 항상 같다”고 완료 보고하지 않는다.
+
+## 2026-08-30 검토: Explorer 왼쪽 NAS Drive 온라인·오프라인 표시
+
+- 사용자 질문: Windows 파일 탐색기 왼쪽 탐색창의 NAS 저장소 항목에서도 현재 사용 가능한 온라인 상태인지, NAS/연결 경로 오프라인이나 계정 연결 불일치인지 아이콘과 마우스 hover 이유로 표현할 수 있는지 물었다. 이번 요청은 가능성 검토이며 코드는 변경하지 않는다.
+- 확인 결과: Cloud Files sync root 등록은 Explorer 탐색창에 custom name/icon을 제공하고 현재 Provider도 `StorageProviderSyncRootInfo.IconResource`, root `desktop.ini` icon/InfoTip, `SHChangeNotify`를 사용한다. 따라서 온라인·연결 중·오프라인·인증 필요에 따라 별도 branded icon/badge를 선택하고 shell refresh를 요청하는 방식은 구현 가능하다.
+- 정식 상세 UI: 최신 Windows 11의 `StorageProviderStatusUI`/`IStorageProviderStatusUISource`는 `InSync`, `Offline`, `Error`, `Warning`, `Syncing`, `Paused` 상태와 ProviderStateIcon/Label, MoreInfo UI·복구 command를 Explorer command bar/flyout에 제공한다. 상세 이유와 로그인/재시도 동작은 이 표면이 탐색창 hover보다 안정적이다. 현재 unpackaged Provider 구조에서 COM/manifest/MSIX 요구와 실제 Windows build 동작은 별도 prototype E2E가 필요하다.
+- 한계: 탐색창 항목의 동적 hover 문구는 Microsoft가 보장하는 전용 provider status surface가 아니고 Explorer icon/InfoTip cache로 갱신이 늦거나 표시되지 않을 수 있다. 따라서 hover만 유일한 안내로 사용하지 않고 상태별 아이콘, 선택 시 공식 status flyout, tray/control center를 함께 제공해야 한다.
+- 원인 정확도: HTTP timeout/530/1033만으로 NAS 전원 꺼짐과 Cloudflare tunnel/인터넷 장애를 항상 구별할 수 없다. 확정 가능한 `계정 인증 만료/연결 해제`, `동기화 일시 중지`는 구체적으로 표시하고, 구분 불가능한 경우는 `NAS 또는 연결 경로 오프라인`처럼 과장 없는 범주와 마지막 정상 확인 시각을 표시한다.
+- 권장 상태: 파란/초록 정상, 노랑 연결 중·재시도, 회색 NAS 또는 연결 경로 오프라인, 빨강 계정 다시 연결 필요를 사용하고 색만 의존하지 않도록 작은 badge 형태·텍스트 상태도 병행한다. 앞선 공통 state revision 작업과 같은 원천을 사용해야 PC 앱·웹·Explorer가 서로 모순되지 않는다.
