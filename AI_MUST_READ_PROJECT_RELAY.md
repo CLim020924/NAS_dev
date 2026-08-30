@@ -609,3 +609,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 구현: 카드 전체를 자식 컨트롤이 없는 단일 `WebPickerCardButton` owner-draw Button으로 교체했다. `OptimizedDoubleBuffer`, `AllPaintingInWmPaint`, `UserPaint`를 사용해 배경·hover/pressed/focus border·이미지·이름·이메일·badge를 한 프레임에 그린다. hover 상태는 버튼 자체 진입/이탈에서만 바뀌며 키보드 Enter/Space, focus cue, `AccessibleName`을 제공한다. paint Font는 즉시 dispose하고 카드 소유 Image는 Button dispose에서 해제한다.
 - 현재 PC 실화면 E2E: 실제 Explorer 웹 바로가기로 첫 화면과 Chrome 프로필 화면을 열었다. Windows 접근성 tree에서 브라우저 3개와 Chrome 프로필 6개가 각각 일반 창/자식 Label이 아닌 단일 `Button`으로 노출되고 이미지·이름·대표 이메일 화면도 유지됨을 확인했다. 1.10.20 open-web 진단은 `opened/chrome`, health는 `up-to-date`, `needsRelink=false`다.
 - 검증: C# compile, source/packaged Agent self-test, Setup self-test, desktop handoff/browser tests 4/4와 `git diff --check`를 통과했다. workbook은 기존 feature를 1.10.20으로 갱신하고 Request/Patch/Do_Not_Break/Code_Map을 보수적으로 추가했으며 관련 범위 렌더와 formula error 0을 확인했다. 인증·프로필 탐지·avatar·handoff 로직과 사용자 파일은 변경하지 않았다.
+
+### 1.10.20 GitHub·NAS 최종 배포 검증
+
+- 기능·binary·workbook·relay commit `91c9bac`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS에서 Agent source self-test와 backend tests 10/10을 통과했다. Windows 비관리자 환경에서 symlink 생성 EPERM이었던 `deviceSyncSecurity`도 Linux에서 정상 통과했다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 모두 HTTP 200이다.
+- NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `DAA7266B90FDC59E304638C174C6230FC5B85C7A57977747D4F32F14F5615888`, Setup/launcher SHA-256은 `B65C7F6F2565A692CEEA3BA6C0872EBB07F26CB374AA62CE9C5BA03E1FF07915`다.
+- 최종 현재 PC 상태는 launcher 1.10.20, open-web 진단 `opened/chrome`, health `up-to-date`, `needsRelink=false`다. launcher·Agent·Provider가 정상 실행 중이고 사용자 파일·활성 credential은 보존됐다.
