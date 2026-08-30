@@ -671,3 +671,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 원인: `FileViewer`의 PDF 렌더러에는 창 인스턴스별 배율 상태와 확대 UI가 없었고, 브라우저 기본 `Ctrl+휠`·`Ctrl++/-` 동작을 취소하는 경계도 없었다. 따라서 입력이 PDF canvas가 아니라 최상위 웹페이지 확대에 전달됐다.
 - 구현: 각 PDF `FileViewer` 인스턴스에 독립적인 50~300% 배율 상태를 추가했다. PDF 창에 포커스가 있을 때 `Ctrl/Cmd++`, `Ctrl/Cmd+-`, `Ctrl/Cmd+0`을 가로채고, PDF scroll container의 `Ctrl/Cmd+휠`은 non-passive listener에서 기본 페이지 확대와 상위 전파를 막은 뒤 해당 PDF만 15% 단위로 조절한다. 상단에는 축소, 현재 백분율, 확대, 원래 크기 버튼을 제공한다. 100% 초과 canvas는 컨테이너를 넓혀 창 내부 스크롤로 탐색하고, 파일이나 창이 바뀌면 100%로 초기화한다.
 - 회귀 경계: 일반 휠 스크롤, PDF 이외 파일의 기존 저장 단축키, 공유 링크 미리보기, 브라우저 전역 배율은 변경하지 않는다. 배율 계산·키 식별·상하한 단위 테스트 2/2를 통과했고 workbook의 Request/Patch/Feature/Office_Viewers/Do_Not_Break/Code_Map을 갱신해 formula error 0과 관련 범위 렌더를 확인했다. 다음 단계는 GitHub push, NAS production build·정적 배포, 실제 Chrome에서 버튼·키보드·Ctrl+휠과 페이지 배율 불변을 검증하는 것이다.
+
+### PDF 창 확대 GitHub·NAS 배포 및 실화면 검증
+
+- 기능·테스트·workbook·relay commit `e4830ed`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다. NAS production build는 기존 unrelated eslint warning만 남기고 성공했으며 PDF.js 호환성 gate도 `react-pdf 9.2.1 / PDF.js API+Worker 4.8.69` 일치를 재확인했다.
+- hashed asset을 먼저 복사하고 index를 마지막에 원자 교체했다. live와 build index는 모두 `main.d79b1b60.js`를 가리킨다. backend 변경은 없어 `msp-backend`를 불필요하게 재시작하지 않았다.
+- 로그인된 실제 Chrome에서 `합친 PDF.pdf` 11개 canvas를 다시 열어 검증했다. 상단 확대 버튼은 100→115%, `Ctrl++`는 115→130%, PDF canvas 위 실제 `Ctrl+휠`은 100→115%로 해당 PDF만 변경했다. 기준 canvas 폭 755.80px은 각 880.99px·995.99px으로 커졌지만 브라우저 `devicePixelRatio=0.9`, `visualViewport.scale=1`, 문서 clientWidth=2133px은 모든 입력 전후 동일했다. 즉 웹페이지 전체 확대는 발생하지 않았다.
+- NAS backend tests 10/10을 통과했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, `msp-backend`는 online, 내부 3030·공개 HTTPS는 HTTP 200이다. PDF 원본과 사용자 파일, Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
