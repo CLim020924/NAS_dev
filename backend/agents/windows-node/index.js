@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.15';
+const AGENT_VERSION = '1.10.16';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -256,14 +256,17 @@ function createStatusIconBuffer(rgb) {
       const cloud = ((x - 12) ** 2 + (y - 15) ** 2 <= 75)
         || ((x - 20) ** 2 + (y - 13) ** 2 <= 48)
         || (x >= 6 && x <= 25 && y >= 14 && y <= 24);
-      if (cloud) setPixel(x, y, 42, 99, 184, 255);
+      if (cloud) setPixel(x, y, rgb[0], rgb[1], rgb[2], 255);
     }
   }
-  for (let y = 19; y <= 31; y += 1) {
-    for (let x = 19; x <= 31; x += 1) {
-      const distance = (x - 25) ** 2 + (y - 25) ** 2;
-      if (distance <= 46) setPixel(x, y, 255, 255, 255, 255);
-      if (distance <= 34) setPixel(x, y, rgb[0], rgb[1], rgb[2], 255);
+  // Explorer renders navigation icons at roughly 16px. A small status dot was
+  // technically present but nearly invisible, so use a large high-contrast
+  // lower badge while tinting the cloud with the same canonical state color.
+  for (let y = 17; y <= 31; y += 1) {
+    for (let x = 17; x <= 31; x += 1) {
+      const distance = (x - 24) ** 2 + (y - 24) ** 2;
+      if (distance <= 58) setPixel(x, y, 255, 255, 255, 255);
+      if (distance <= 42) setPixel(x, y, rgb[0], rgb[1], rgb[2], 255);
     }
   }
   const header = Buffer.alloc(40);
@@ -679,7 +682,7 @@ async function syncPersonalDrivePlaceholders(root, profile, manifest, previous) 
     if (!remotePaths.has(rel)) {
       const target = path.join(root.localPath, rel.split('/').join(path.sep));
       suppressRemotePath(target);
-      moveToTrash(root, target);
+      moveToTrash(root, target, { allowOnlineOnlyPlaceholderDelete: true });
     }
   }
 }
@@ -952,6 +955,12 @@ function setProfileHealth(profile, state, message = '') {
     setAgentHealth(state, friendlyMessage, { accountKey: profile?.accountKey || '' });
   }
   setExplorerStatus(profile, state, friendlyMessage);
+}
+
+function agentStageError(error, stage) {
+  const value = error instanceof Error ? error : new Error(String(error || 'unknown error'));
+  if (!value.agentStage) value.agentStage = stage;
+  return value;
 }
 
 function showMessage(title, message) {
@@ -2869,12 +2878,37 @@ async function syncFile(root, file, config) {
 
 function scanLocalEntries(root) {
   const entries = {};
+  const unreadablePrefixes = new Set();
   const walk = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    let directoryEntries;
+    try {
+      directoryEntries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      const prefix = relPath(root.localPath, dir);
+      unreadablePrefixes.add(prefix);
+      log('[local scan deferred]', prefix || '.', err.code || err.message);
+      return;
+    }
+    for (const entry of directoryEntries) {
       const full = path.join(dir, entry.name);
       const relativePath = relPath(root.localPath, full);
       if (!relativePath || relativePath.endsWith('.nasdownload') || isPersonalDriveShellMetadata(root, full)) continue;
-      const stat = fs.statSync(full);
+      let stat;
+      try {
+        // lstat reads placeholder metadata without requesting an online-only
+        // file body from CFAPI. A transient unreadable placeholder must never
+        // abort the Agent or be interpreted as a remote deletion.
+        stat = fs.lstatSync(full);
+      } catch (err) {
+        unreadablePrefixes.add(relativePath);
+        entries[relativePath] = {
+          type: entry.isDirectory() ? 'folder' : 'file',
+          unreadable: true,
+          fullPath: full
+        };
+        log('[local entry scan deferred]', relativePath, err.code || err.message);
+        continue;
+      }
       entries[relativePath] = {
         type: entry.isDirectory() ? 'folder' : 'file',
         size: entry.isFile() ? stat.size : undefined,
@@ -2885,7 +2919,7 @@ function scanLocalEntries(root) {
     }
   };
   walk(root.localPath);
-  return entries;
+  return { entries, unreadablePrefixes };
 }
 
 function entriesMatch(a, b) {
@@ -2894,9 +2928,15 @@ function entriesMatch(a, b) {
   return Number(a.size) === Number(b.size) && Math.abs(Number(a.mtimeMs) - Number(b.mtimeMs)) <= 2000;
 }
 
-function localEntryNeedsUpload(local, previousRemote, currentRemote) {
+function localEntryNeedsUpload(local, previousRemote, currentRemote, wasPreviouslyRemote = false) {
   if (!local) return false;
   if (previousRemote) return !entriesMatch(local, previousRemote);
+  // State files written by older Agents only contain remotePaths. If such a
+  // path disappeared from the current NAS manifest, the remaining CFAPI
+  // placeholder is a pending remote deletion, not a brand-new local file.
+  // Trying to upload it hydrates a source that no longer exists and loops on a
+  // Windows read error before the normal pull/trash path can preserve it.
+  if (wasPreviouslyRemote && !currentRemote) return false;
   return !currentRemote || !entriesMatch(local, currentRemote);
 }
 
@@ -2913,23 +2953,30 @@ function enqueueRootSync(root, task) {
 async function reconcileOfflineLocalChanges(root, config) {
   const previous = readJson(stateFile(root), { remoteEntries: {} });
   const previousEntries = previous.remoteEntries || {};
+  const previousRemotePaths = new Set(previous.remotePaths || Object.keys(previousEntries));
   const currentManifest = await request('GET', `/api/devices/agent/manifest?deviceId=${encodeURIComponent(config.deviceId)}&syncRootId=${encodeURIComponent(root.syncRootId)}`, {
     headers: { 'x-agent-token': config.agentToken }
-  });
+  }).catch(error => { throw agentStageError(error, 'local-audit-manifest'); });
   const currentRemote = Object.fromEntries((currentManifest.entries || []).map(entry => [entry.relPath, entry]));
-  const localEntries = scanLocalEntries(root);
+  const localScan = scanLocalEntries(root);
+  const localEntries = localScan.entries;
 
   for (const [relativePath, local] of Object.entries(localEntries)) {
     const before = previousEntries[relativePath];
     const remote = currentRemote[relativePath];
-    if (localEntryNeedsUpload(local, before, remote)) {
-      if (local.type === 'folder') await syncFolder(root, local.fullPath, config);
-      else await syncFile(root, local.fullPath, config);
+    if (!local.unreadable && localEntryNeedsUpload(local, before, remote, previousRemotePaths.has(relativePath))) {
+      if (local.type === 'folder') await syncFolder(root, local.fullPath, config).catch(error => { throw agentStageError(error, 'local-folder-upload'); });
+      else await syncFile(root, local.fullPath, config).catch(error => {
+        const staged = agentStageError(error, 'local-file-upload');
+        staged.agentRelPath = relativePath;
+        throw staged;
+      });
     }
   }
 
+  const isUnreadable = relativePath => Array.from(localScan.unreadablePrefixes).some(prefix => !prefix || relativePath === prefix || relativePath.startsWith(prefix + '/'));
   const missing = Object.keys(previousEntries)
-    .filter(relativePath => !localEntries[relativePath] && currentRemote[relativePath] && entriesMatch(currentRemote[relativePath], previousEntries[relativePath]))
+    .filter(relativePath => !localEntries[relativePath] && !isUnreadable(relativePath) && currentRemote[relativePath] && entriesMatch(currentRemote[relativePath], previousEntries[relativePath]))
     .sort((a, b) => a.split('/').length - b.split('/').length);
   const topLevelMissing = [];
   for (const relativePath of missing) {
@@ -2941,7 +2988,7 @@ async function reconcileOfflineLocalChanges(root, config) {
       deviceId: config.deviceId,
       syncRootId: root.syncRootId,
       relPath: relativePath
-    }, config.agentToken);
+    }, config.agentToken).catch(error => { throw agentStageError(error, 'local-delete-upload'); });
   }
 }
 
@@ -2974,13 +3021,26 @@ function getKnownRemoteEntry(root, relativePath) {
   return state.remoteEntries?.[relativePath] || null;
 }
 
-function moveToTrash(root, target) {
+function moveToTrash(root, target, { allowOnlineOnlyPlaceholderDelete = false } = {}) {
   if (!fs.existsSync(target)) return;
   const rel = relPath(root.localPath, target);
   if (!rel) return;
   const trash = path.join(STATE_DIR, 'trash', String(root.syncRootId), new Date().toISOString().replace(/[:.]/g, '-'), rel);
   fs.mkdirSync(path.dirname(trash), { recursive: true });
-  fs.renameSync(target, trash);
+  try {
+    fs.renameSync(target, trash);
+  } catch (error) {
+    const isUnreadablePlaceholder = allowOnlineOnlyPlaceholderDelete
+      && fs.lstatSync(target).isFile()
+      && /UNKNOWN|read/i.test(`${error?.code || ''} ${error?.message || ''}`);
+    if (!isUnreadablePlaceholder) throw error;
+    // The NAS manifest authoritatively removed this path and Windows confirms
+    // that the remaining online-only placeholder cannot be read/moved. It has
+    // no hydrated local body to preserve, so remove only that placeholder and
+    // let a future manifest recreate it if the server path returns.
+    fs.unlinkSync(target);
+    log('[stale online-only placeholder removed]', rel);
+  }
 }
 
 async function pullNasChanges(root, config, onDetectedChange = null) {
@@ -2988,12 +3048,12 @@ async function pullNasChanges(root, config, onDetectedChange = null) {
   if (previous.remoteRevision) {
     const change = await request('GET', `/api/devices/agent/changes?deviceId=${encodeURIComponent(config.deviceId)}&syncRootId=${encodeURIComponent(root.syncRootId)}&revision=${encodeURIComponent(previous.remoteRevision)}`, {
       headers: { 'x-agent-token': config.agentToken }
-    });
+    }).catch(error => { throw agentStageError(error, 'remote-change-check'); });
     if (!change.changed) return false;
   }
   const manifest = await request('GET', `/api/devices/agent/manifest?deviceId=${encodeURIComponent(config.deviceId)}&syncRootId=${encodeURIComponent(root.syncRootId)}`, {
     headers: { 'x-agent-token': config.agentToken }
-  });
+  }).catch(error => { throw agentStageError(error, 'remote-manifest'); });
   const remotePaths = new Map();
   for (const entry of manifest.entries || []) {
     if (isPersonalDriveShellMetadataRelPath(root, entry.relPath)) continue;
@@ -3006,7 +3066,8 @@ async function pullNasChanges(root, config, onDetectedChange = null) {
   applyingRemoteChange = true;
   try {
     if (root.kind === 'personal-drive') {
-      await syncPersonalDrivePlaceholders(root, config, manifest, previous);
+      await syncPersonalDrivePlaceholders(root, config, manifest, previous)
+        .catch(error => { throw agentStageError(error, 'provider-manifest-apply'); });
       writeJson(stateFile(root), { remotePaths: Array.from(remotePaths.keys()), remoteEntries, remoteRevision: manifest.revision || '', savedAt: new Date().toISOString(), filesOnDemand: true });
       return remoteChanged;
     }
@@ -3120,6 +3181,23 @@ async function runBackground() {
     return;
   }
 
+  let startupHeartbeatBusy = false;
+  const startupHeartbeatTimer = setInterval(async () => {
+    if (startupHeartbeatBusy) return;
+    startupHeartbeatBusy = true;
+    try {
+      await Promise.all(profiles.map(async profile => {
+        try {
+          const state = profile._runtimeState || 'connecting';
+          await sendHeartbeat(profile, state);
+          setProfileHealth(profile, state);
+        } catch {}
+      }));
+    } finally {
+      startupHeartbeatBusy = false;
+    }
+  }, 3000);
+
   const profileJobs = [];
   for (const profile of profiles) {
     const roots = getRoots(profile).filter(root => root.localPath && fs.existsSync(root.localPath));
@@ -3139,26 +3217,30 @@ async function runBackground() {
       setProfileHealth(profile, state, state === 'offline' ? 'NAS 서버가 꺼져 있거나 인터넷에 연결할 수 없습니다.' : err.message);
     }
     profile._paused = !!heartbeat.commands?.paused;
+    let watchersStarted = authenticated;
     if (authenticated) {
       for (const root of roots) {
-        if (root.kind === 'personal-drive') await registerPersonalDrive(profile);
-        if (!profile._paused) await enqueueRootSync(root, async () => {
-          await reconcileOfflineLocalChanges(root, profile);
-          await pullNasChanges(root, profile, async () => {
-            setProfileHealth(profile, 'syncing', 'NAS의 변경 사항을 반영하는 중입니다.');
-            await sendHeartbeat(profile, 'syncing').catch(() => {});
+        try {
+          if (root.kind === 'personal-drive') await registerPersonalDrive(profile);
+          if (!profile._paused) await enqueueRootSync(root, async () => {
+            await reconcileOfflineLocalChanges(root, profile);
+            await pullNasChanges(root, profile, async () => {
+              setProfileHealth(profile, 'syncing', 'NAS의 변경 사항을 반영하는 중입니다.');
+              await sendHeartbeat(profile, 'syncing').catch(() => {});
+            });
+            rootLocalAuditAt.set(String(root.syncRootId), Date.now());
           });
-          rootLocalAuditAt.set(String(root.syncRootId), Date.now());
-        }).catch(err => {
-          log('[initial reconcile failed]', profile.accountKey, root.syncRootId, err.message);
+          watchRoot(root, profile);
+        } catch (err) {
+          watchersStarted = false;
+          log('[initial root setup failed]', profile.accountKey, root.syncRootId, err.agentStage || 'unknown-stage', err.agentRelPath || '', err.code || '', err.message);
           const state = classifyAgentError(err);
           setProfileHealth(profile, state, state === 'offline' ? 'NAS 서버가 꺼져 있거나 인터넷에 연결할 수 없습니다.' : err.message);
-        });
-        watchRoot(root, profile);
+        }
       }
       if (profile._paused) {
         setProfileHealth(profile, 'paused');
-      } else {
+      } else if (watchersStarted) {
         await sendHeartbeat(profile, 'up-to-date').catch(() => {});
         setProfileHealth(profile, 'up-to-date');
       }
@@ -3167,10 +3249,11 @@ async function runBackground() {
       profile,
       roots,
       authenticated,
-      watchersStarted: authenticated,
+      watchersStarted,
       nextAuthRetryAt: authenticated ? 0 : Date.now() + 5 * 60 * 1000
     });
   }
+  clearInterval(startupHeartbeatTimer);
   let backgroundTickRunning = false;
   setInterval(async () => {
     if (backgroundTickRunning) return;
@@ -3218,7 +3301,7 @@ async function runBackground() {
         await sendHeartbeat(job.profile, 'up-to-date');
         setProfileHealth(job.profile, 'up-to-date');
       } catch (err) {
-        log('[pull failed]', job.profile.accountKey, err.message);
+        log('[pull failed]', job.profile.accountKey, err.agentStage || 'unknown-stage', err.agentRelPath || '', err.code || '', err.message);
         if (isAgentAuthError(err)) {
           job.authenticated = false;
           job.nextAuthRetryAt = Date.now() + 5 * 60 * 1000;
@@ -3267,6 +3350,9 @@ function runSelfTest() {
   if (isLogoutAlreadyRevokedError(new Error('HTTP 503: tunnel unavailable'))) throw new Error('Offline logout preservation test failed.');
   if (!isNewerVersion('1.9.0', '1.8.4') || isNewerVersion('1.7.0', '1.8.4') || isNewerVersion('1.8.4', '1.8.4')) {
     throw new Error('Agent semantic update ordering test failed.');
+  }
+  if (localEntryNeedsUpload({ type: 'file', size: 10, mtimeMs: 1000 }, null, null, true)) {
+    throw new Error('Legacy remote placeholder migration test failed.');
   }
   const profileMergeTest = buildRegisteredProfile(
     { profiles: [{ accountKey: 'owner_test', syncRoots: [{ syncRootId: 'old', localPath: 'C:\\old' }] }] },

@@ -112,7 +112,7 @@ const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.10.15';
+const WINDOWS_AGENT_VERSION = '1.10.16';
 const DEVICE_OFFLINE_AFTER_MS = 9 * 1000;
 let windowsAgentBuildCache = null;
 const agentMutationWindows = new Map();
@@ -3209,10 +3209,18 @@ router.get('/devices/pair/status/:token', verifyToken, (req, res) => {
 
     const expired = pairing.status !== 'connected' && new Date(pairing.expiresAt).getTime() <= Date.now();
 
+    const registeredDeviceId = pairing.device?.deviceId || '';
+    const liveDevice = registeredDeviceId
+      ? readJsonArrayFile(LINKED_DEVICES_FILE).find(device => device.deviceId === registeredDeviceId && device.ownerKey === ownerKey)
+      : null;
+
     return res.json({
       success: true,
       status: expired ? 'expired' : pairing.status,
-      device: pairing.device ? sanitizeDeviceForResponse(pairing.device) : null,
+      // Pairing completion means the relationship and token were created. The
+      // current linked-device record is the source of truth for whether the
+      // background Agent has actually confirmed the connection afterwards.
+      device: liveDevice ? sanitizeDeviceForResponse(liveDevice) : (pairing.device ? sanitizeDeviceForResponse(pairing.device) : null),
       expiresAt: pairing.expiresAt
     });
   } catch (err) {
@@ -3525,7 +3533,9 @@ router.post('/devices/agent/register', (req, res) => {
       revokedAt: null,
       syncState: 'connecting',
       lastError: '',
-      lastSeenAt: now
+      // Registration is not a heartbeat. Keep the connection unconfirmed until
+      // the newly issued Agent token is used by /agent/heartbeat.
+      lastSeenAt: null
     };
 
     const rootResult = pairing.mode === 'personal-drive'
@@ -3537,7 +3547,7 @@ router.post('/devices/agent/register', (req, res) => {
       });
     device = advanceDeviceState(rootResult.device, {
       agentTokenHash: device.agentTokenHash,
-      lastSeenAt: now,
+      lastSeenAt: null,
       status: 'connected',
       revokedAt: null,
       syncState: 'connecting',

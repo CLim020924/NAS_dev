@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.15.0")]
-[assembly: AssemblyFileVersion("1.10.15.0")]
+[assembly: AssemblyVersion("1.10.16.0")]
+[assembly: AssemblyFileVersion("1.10.16.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.15";
+        internal const string ProductVersion = "1.10.16";
 
         [STAThread]
         private static void Main(string[] args)
@@ -695,7 +695,16 @@ namespace NasDriveSetup
 
         internal static string HealthState()
         {
-            return ReadJsonValue(HealthFile, "state");
+            string state = ReadJsonValue(HealthFile, "state");
+            string updatedAt = ReadJsonValue(HealthFile, "updatedAt");
+            DateTime parsed;
+            if (HasConfiguredProfile()
+                && DateTime.TryParse(updatedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out parsed)
+                && (DateTime.UtcNow - parsed.ToUniversalTime()).TotalSeconds > 12)
+            {
+                return "offline";
+            }
+            return state;
         }
 
         internal static string HealthMessage()

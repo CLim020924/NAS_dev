@@ -90,6 +90,7 @@ function ServicePlatform() {
   const [showDeviceManager, setShowDeviceManager] = useState(false);
   const pcSyncPollRef = useRef(null);
   const pcPairingTokenRef = useRef('');
+  const pcPairingStartingRef = useRef(false);
   const pcAutoConnectStartedRef = useRef(false);
   const pcDevicesRef = useRef([]);
   const {
@@ -194,6 +195,11 @@ function ServicePlatform() {
   }, [pcSyncDownload]);
 
   const startPcSyncFlow = useCallback(async () => {
+    if (pcPairingStartingRef.current || pcPairingTokenRef.current) {
+      setPcSyncOpen(true);
+      return;
+    }
+    pcPairingStartingRef.current = true;
     stopPcSyncPoll();
     setPcSyncOpen(true);
     setPcSyncState('preparing');
@@ -210,6 +216,7 @@ function ServicePlatform() {
       if (!pairingToken) throw new Error('PC 연결 토큰을 발급받지 못했습니다.');
 
       pcPairingTokenRef.current = pairingToken;
+      pcPairingStartingRef.current = false;
       setPcSyncDownload({ url: agentDownloadUrl, name: agentDownloadName });
       setPcSyncState('needs-install');
       setPcSyncMessage('처음 설치하거나 업데이트하려면 설치 프로그램을 받으세요. 이미 최신 NAS Drive가 설치되어 있다면 아래의 계정 연결을 선택할 수 있습니다.');
@@ -221,7 +228,6 @@ function ServicePlatform() {
           const statusResponse = await axios.get(`/api/devices/pair/status/${encodeURIComponent(pairingToken)}`, { withCredentials: true });
           const status = statusResponse.data || {};
           if (status.status === 'connected' && status.device?.deviceId) {
-            stopPcSyncPoll();
             const root = (status.device.syncRoots || []).find((item) => item.kind === 'personal-drive') || status.device.syncRoots?.[0] || null;
             localStorage.setItem(localLinkKey, JSON.stringify({
               deviceId: status.device.deviceId,
@@ -229,9 +235,18 @@ function ServicePlatform() {
               linkedAt: new Date().toISOString()
             }));
             setPcLinkedHere(true);
-            setPcConnectionState('online');
+            const liveState = getDeviceLiveState(status.device);
+            setPcLiveState(liveState);
+            setPcConnectionState(liveState === 'offline' ? 'offline' : 'online');
+            if (liveState === 'offline') {
+              setPcSyncState('connecting');
+              setPcSyncMessage('계정 등록은 완료되었습니다. NAS Drive 백그라운드 연결 신호를 확인하고 있습니다.');
+              return;
+            }
+            stopPcSyncPoll();
+            pcPairingTokenRef.current = '';
             setPcSyncState('connected');
-            setPcSyncMessage('이 PC의 NAS Drive 연결이 확인되었습니다. 파일 탐색기에서 NAS Drive - 개인을 열었습니다.');
+            setPcSyncMessage('이 PC의 NAS Drive 백그라운드 연결이 확인되었습니다. 파일 탐색기에서 NAS Drive를 열 수 있습니다.');
             refreshPcDevices();
             return;
           }
@@ -241,6 +256,7 @@ function ServicePlatform() {
           }
           if (status.status === 'revoked' || status.status === 'expired') {
             stopPcSyncPoll();
+            pcPairingTokenRef.current = '';
             setPcSyncState('error');
             setPcSyncMessage('연결 요청이 만료되었거나 취소되었습니다. 다시 시도해주세요.');
           }
@@ -259,6 +275,8 @@ function ServicePlatform() {
         }
       }, 1500);
     } catch (error) {
+      pcPairingStartingRef.current = false;
+      pcPairingTokenRef.current = '';
       setPcSyncState('error');
       setPcSyncMessage(error.response?.data?.error || error.message || 'PC 연동을 시작하지 못했습니다.');
     }
@@ -320,7 +338,8 @@ function ServicePlatform() {
 
   const openApp = useCallback((app) => {
     if (app.id === 'pc-sync') {
-      if (pcLinkedHere) openLinkedDrive();
+      if (pcPairingActive) setPcSyncOpen(true);
+      else if (pcLinkedHere) openLinkedDrive();
       else startPcSyncFlow();
       return;
     }
@@ -343,7 +362,7 @@ function ServicePlatform() {
       return;
     }
     openAppWindow(app);
-  }, [navigate, openAppWindow, openLinkedDrive, pcLinkedHere, startPcSyncFlow]);
+  }, [navigate, openAppWindow, openLinkedDrive, pcLinkedHere, pcPairingActive, startPcSyncFlow]);
 
   const apps = useMemo(() => {
     const pcStatus = getDeviceStatusUi(pcLiveState);

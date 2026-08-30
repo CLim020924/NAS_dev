@@ -38,6 +38,9 @@ assert.match(nasRoutesSource, /detectedAt: new Date\(\)\.toISOString\(\)/);
 assert.match(nasRoutesSource, /agentTokenHash: null/);
 assert.match(nasRoutesSource, /agentTokenHash: hashAgentToken\(agentToken\),[\s\S]{0,180}revokedAt: null/);
 assert.match(nasRoutesSource, /revokedAt: null,[\s\S]{0,100}syncState: 'connecting'/);
+assert.match(nasRoutesSource, /Registration is not a heartbeat[\s\S]{0,220}lastSeenAt: null/);
+assert.match(nasRoutesSource, /const liveDevice = registeredDeviceId/);
+assert.match(nasRoutesSource, /device: liveDevice \? sanitizeDeviceForResponse\(liveDevice\)/);
 assert.doesNotMatch(nasRoutesSource, /WEB_PAIRING_REQUIRED/);
 
 assert.strictEqual(hasConcurrentFileChange(10_000, 10_000), false);
