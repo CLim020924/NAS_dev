@@ -499,3 +499,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 실제 종료/재시작 검증: 설치 launcher의 `--shutdown-background`가 exit code 0으로 끝난 뒤 정식 설치 launcher·Agent·Provider 잔여가 0이고 `agent.exit`·`agent.pid`가 제거됐으며 설정 hash가 유지됨을 확인했다. 이어 `--background`를 실행해 launcher·Agent·Provider 3개가 다시 시작됐다. 현재 profile은 서버에서 이미 revoked되어 health가 정상적으로 `needs-relink`로 수렴한다.
 - 자동 검증: Agent source/packaged self-test, Node syntax, C# compile, Setup self-test를 통과했다. Windows 로컬 backend suite는 symlink 생성 권한이 필요한 `deviceSyncSecurity` 1개만 EPERM이고 나머지 7개가 통과했으며 NAS에서 다시 검증한다. workbook의 관련 6개 시트를 갱신하고 formula error 0, 렌더 확인, 의도된 과거 `??` 사고 기록 외 한글 손상 없음도 확인했다.
 - 남은 단계: 이 1.10.14 변경을 GitHub에 push하고 NAS에서 pull한 뒤 backend 테스트, PM2 restart/save, 내부·공개 HTTP, 필수 서비스를 검증한다. 실제 profile 로그아웃은 로컬 연결과 DPAPI credential을 제거하는 사용자 의도 확인이 필요한 동작이므로 별도 확인 전에는 실행하지 않는다.
+
+### 1.10.14 GitHub·NAS 배포 검증
+
+- GitHub commit `1d2b591`로 source, Agent/Setup binary, 공개 update version, workbook, relay를 push했다. NAS live worktree가 이 commit으로 fast-forward했고 clean 상태다.
+- NAS에서 Agent source self-test와 backend tests 8/8을 통과했다. Windows에서 권한 때문에 EPERM이었던 symlink 경계 보안 테스트도 NAS에서는 정상 통과했다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
+- NAS 배포 binary hash는 현재 PC 설치본과 일치한다: Agent `6243338F3E11D816E247DB02725F9F7B4DCAF32899DCF7D98D36C77141FD1B18`, Setup/launcher `92BD9326F7B3B99A1C5908DBF8BBB283DDC409CE0DF6249C6DA399618D0BE5D5`.
+- 완료 경계: 종료·재시작·stale lock 복구와 서버 배포는 검증됐다. 현재 활성 로컬 profile은 이미 서버에서 revoked되어 `needs-relink`가 정상이다. 실제 `연결 해제 후 다시 로그인` 실행은 해당 profile과 DPAPI credential을 제거하므로 사용자에게 대상 동작을 다시 알리고 확인을 받은 뒤 진행한다.
