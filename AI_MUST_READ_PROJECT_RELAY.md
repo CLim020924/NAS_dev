@@ -716,3 +716,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 구현: 포커스가 앱 창이면 앱 layer 80, 파일·폴더 창이면 앱 layer 20으로 전환해 기존 단일 WindowContext의 focus/z-index를 실제 화면 순서에 반영한다. 변환 화면에 원본/결과 selector를 파일 선택보다 앞에 두고, 원본 직접 선택 시 NAS picker와 native file input accept를 같은 확장자로 제한한다. 자동 감지는 선택 파일들의 output 교집합만 표시하고 실행 버튼에 원본·수량·결과를 명시한다.
 - 서버 확장: presentation은 PDF/PPTX/ODP, text document는 PDF/DOCX/ODT/RTF, spreadsheet는 PDF/XLSX/ODS/CSV를 지원한다. 동일 형식은 원본을 변경하지 않고 결과 폴더에 복사하며 다른 형식은 작업별 격리 LibreOffice profile에서 변환한다. PDF 합치기 흐름은 유지한다. 현재 NAS에 입력 filter가 없는 HWP/HWPX/CELL/NXL은 거짓 성공 옵션을 표시하지 않고 `변환 도구 준비 필요`로 비활성화한다.
 - 사전 검증: backend 정책 3/3, frontend 형식·layer 정책 4/4가 통과했다. Linux LibreOffice 실변환 통합 테스트, production build, 공개 UI의 형식 필터·버튼 문구·결과 창 전면 활성화는 NAS 배포 후 확인한다.
+
+### 형식 변환·결과 창 GitHub·NAS 배포 및 실화면 검증
+
+- 기능 commit `c90148e`와 결과 뷰어 확장 commit `a1bfb83`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push하고 NAS live worktree가 fast-forward로 받았다.
+- NAS Linux에서 기존 ODT 두 개→PDF 결합, ODT→DOCX 실제 변환, ODT→ODT 바이트 동일 결과 복사를 모두 통과했다. backend 문서 스튜디오 tests 5/5, frontend 형식·창 layer·Office 결과 routing tests 6/6이 통과했다. production build와 PDF.js 호환 gate도 통과했고 최종 live bundle은 `main.6d69cb07.js`다.
+- 공개 로그인 Chrome에서 변환 모드 첫 단계에 `원본 형식 → 결과 형식`이 파일 선택보다 먼저 표시되는 것을 확인했다. DOCX 직접 선택 시 결과는 PDF/DOCX/ODT/RTF만 표시됐고 NAS picker에는 DOCX만 남았다. 파일 두 개 선택 후 실행 버튼은 `DOCX 2개를 DOCX로 변환`으로 표시됐다.
+- 동일 형식 결과 두 개를 실제 저장했고 `원본 형식 유지 복사`로 표시됐다. 이어 DOCX→ODT를 공개 UI에서 실행해 `제인 진 대화.odt`를 만들고 결과 `열기`를 눌렀다. 새 ODT 파일 창이 문서 스튜디오보다 앞에 즉시 활성화됐고 OnlyOffice iframe에서 실제 본문이 렌더됐다.
+- 검증 중 ODT/ODS/ODP/RTF가 생성돼도 기존 WindowContext가 일부를 text로 오인할 수 있는 추가 회귀를 발견해 공통 `officeFormats` 정책으로 보강했다. 지원 결과는 모두 binary viewer 경로를 타며 ODT/RTF→word, ODS/CSV→cell, ODP→slide editor로 분기한다.
+- 현재 NAS에 서버 입력 filter가 없는 HWP/HWPX/CELL/NXL은 source 목록에 `변환 도구 준비 필요`로 비활성 표시한다. 겉보기 선택지만 만들고 실행 시 실패시키지 않는다. PPTX 원본 슬라이드 합치기와 템플릿 일괄 만들기는 이번 형식 변환·창 순서 요청과 직접 겹치지 않아 후속 독립 기능으로 남긴다.
