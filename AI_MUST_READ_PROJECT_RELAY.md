@@ -577,3 +577,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 현재 PC 실검증: 1.10.18 Agent/Setup을 빌드·설치하고 실제 Explorer 바로가기를 열어 `NAS 웹에서 열기` native 창이 앞에 표시되는 화면, Chrome 6개 프로필과 대표 계정, 최근 프로필 선택을 확인했다. `선택한 브라우저로 열기` 뒤 로컬 진단은 `state=opened`, `browser=chrome`이고 서버의 persistent device-bound handoff가 즉시 소비됐다. 선택된 Chrome은 로그인 화면 없이 `filemanager-nas.com/nas`의 `내 클라우드` 파일 목록을 표시했다. 바로가기를 복구 가능한 위치로 옮기자 약 3초 안에 같은 target/argument와 `WindowStyle=1`로 재생성됐다.
 - 검증: desktop handoff/browser 단위 테스트 4/4, source/packaged Agent self-test, Setup self-test, C# compile, `git diff --check`를 통과했다. workbook의 `Request_Archive`, `Patch_Log`, `Feature_Index`, `Relation_Map`, `Do_Not_Break`, `Code_Map`을 갱신하고 각 범위를 렌더했으며 새 formula error와 한글 깨짐이 없음을 확인했다. 배포 version은 1.10.18이다.
 - 안전 경계: Chrome 쿠키·비밀번호·로그인 token을 읽지 않는다. 표시 이메일은 `Local State`의 대표 프로필 계정일 뿐이며 NAS 인증은 기존 장치 소유자에 결합된 handoff만 사용한다. Portable/회사 정책형 별도 User Data는 자동 감지하지 않고 시스템 기본 브라우저 fallback을 유지한다. 사용자 파일과 활성 DPAPI credential은 보존했다.
+
+### 1.10.18 GitHub·NAS 최종 배포 검증
+
+- 기능·binary·workbook·relay commit `22228ef`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS에서 Agent source self-test와 backend tests 10/10을 통과했다. Windows 비관리자 환경에서 symlink 생성 EPERM이었던 `deviceSyncSecurity` 경계도 Linux에서 정상 통과했다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
+- NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `900209166764DCC4421525C391BB4F3CF6FD99FB54D62B87D564E9D69731A8EB`, Setup/launcher SHA-256은 `D586E4099A31593B5C16FCA36CC6A70E67809FF94EECE0AAA8886B710C419931`이다.
+- 최종 현재 PC 상태는 health `up-to-date`, `needsRelink=false`이고 설치 launcher·Agent·계정별 Provider가 실행 중이다. 웹 바로가기는 target `NAS-Drive.exe`, argument `--open-web`, `WindowStyle=1`이다. 사용자 파일·활성 계정 credential·Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
