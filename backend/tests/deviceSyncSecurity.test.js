@@ -33,6 +33,8 @@ assert.match(nasRoutesSource, /verifyPassword\(password, user\.password\)/);
 assert.match(nasRoutesSource, /AGENT_LOGIN_MAX_FAILURES/);
 assert.match(nasRoutesSource, /mode: 'personal-drive'/);
 assert.match(nasRoutesSource, /router\.post\('\/devices\/agent\/logout'/);
+assert.match(nasRoutesSource, /status: 'agent-detected'/);
+assert.match(nasRoutesSource, /detectedAt: new Date\(\)\.toISOString\(\)/);
 assert.match(nasRoutesSource, /agentTokenHash: null/);
 assert.match(nasRoutesSource, /agentTokenHash: hashAgentToken\(agentToken\),[\s\S]{0,180}revokedAt: null/);
 assert.match(nasRoutesSource, /revokedAt: null,[\s\S]{0,100}syncState: 'connecting'/);

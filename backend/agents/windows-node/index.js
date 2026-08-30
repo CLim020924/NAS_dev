@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.12';
+const AGENT_VERSION = '1.10.13';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -2302,16 +2302,22 @@ if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Write-Output "yes" }
 
 async function logoutActiveProfile(config, { confirmed = false, reopenLogin = true } = {}) {
   const profile = getActiveProfile(config);
-  if (!profile?.deviceId || !profile?.agentToken) throw new Error('로그아웃할 NAS 계정 연결이 없습니다.');
+  if (!profile?.deviceId) throw new Error('로그아웃할 NAS 계정 연결이 없습니다.');
   if (!confirmed && !confirmProfileLogout(profile)) return false;
 
-  try {
-    await requestJson('POST', '/api/devices/agent/logout', {
-      deviceId: profile.deviceId
-    }, profile.agentToken, 15_000);
-  } catch (error) {
-    if (!isLogoutAlreadyRevokedError(error)) throw error;
-    log('[logout already revoked]', profile.deviceId, error.message);
+  if (profile.agentToken) {
+    try {
+      await requestJson('POST', '/api/devices/agent/logout', {
+        deviceId: profile.deviceId
+      }, profile.agentToken, 15_000);
+    } catch (error) {
+      // Local sign-out must never be held hostage by a revoked token, an
+      // unreachable server, or a connection that is still being established.
+      // The web device manager can remove an offline server record later.
+      log(isLogoutAlreadyRevokedError(error) ? '[logout already revoked]' : '[logout remote revoke deferred]', profile.deviceId, error.message);
+    }
+  } else {
+    log('[logout local only: token unavailable]', profile.deviceId);
   }
 
   for (const root of getRoots(profile).filter(item => item.kind === 'personal-drive')) {
@@ -2337,7 +2343,7 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
     savedAt: new Date().toISOString()
   };
   saveConfig(nextConfig);
-  setAgentHealth('needs-relink', 'NAS Drive에서 안전하게 로그아웃했습니다. 다시 사용하려면 로그인해 주세요.');
+  setAgentHealth('needs-relink', '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
   restartBackground();
   if (reopenLogin) {
     const launcher = path.join(path.dirname(INSTALLED_EXE), 'NAS-Drive.exe');

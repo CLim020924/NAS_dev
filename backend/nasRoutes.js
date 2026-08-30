@@ -112,7 +112,7 @@ const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.10.12';
+const WINDOWS_AGENT_VERSION = '1.10.13';
 let windowsAgentBuildCache = null;
 const agentMutationWindows = new Map();
 const agentLoginAttempts = new Map();
@@ -3173,9 +3173,11 @@ router.get('/devices/pair/status/:token', verifyToken, (req, res) => {
 
     if (!pairing || pairing.ownerKey !== ownerKey) return res.status(404).json({ error: '연동 세션을 찾을 수 없습니다.' });
 
+    const expired = pairing.status !== 'connected' && new Date(pairing.expiresAt).getTime() <= Date.now();
+
     return res.json({
       success: true,
-      status: pairing.status,
+      status: expired ? 'expired' : pairing.status,
       device: pairing.device ? sanitizeDeviceForResponse(pairing.device) : null,
       expiresAt: pairing.expiresAt
     });
@@ -3260,6 +3262,15 @@ router.post('/devices/agent/lookup', express.json(), (req, res) => {
       pairing.targetDeviceId &&
       pairing.targetDeviceId === device.deviceId
     );
+
+    if (pairing.status === 'pending') {
+      pairings[pairingIndex] = {
+        ...pairing,
+        status: 'agent-detected',
+        detectedAt: new Date().toISOString()
+      };
+      writeJsonArrayFile(DEVICE_PAIRINGS_FILE, pairings);
+    }
 
     return res.json({
       success: true,

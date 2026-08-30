@@ -24,14 +24,29 @@ const getDeviceLiveState = (device, now = Date.now()) => {
 };
 
 const getDeviceStatusUi = (state) => ({
-  'up-to-date': { label: '최신 상태', color: 'primary', iconColor: '#1976d2' },
-  syncing: { label: '동기화 중', color: 'info', iconColor: '#0288d1' },
-  connecting: { label: 'NAS 연결 중', color: 'info', iconColor: '#0288d1' },
+  'up-to-date': { label: '파일 최신 상태', color: 'primary', iconColor: '#1976d2' },
+  syncing: { label: '파일 동기화 중', color: 'info', iconColor: '#0288d1' },
+  connecting: { label: '계정 연결 중', color: 'info', iconColor: '#0288d1' },
   paused: { label: '동기화 일시 중지', color: 'default', iconColor: '#757575' },
   error: { label: '동기화 오류', color: 'error', iconColor: '#d32f2f' },
-  offline: { label: 'NAS 서버 오프라인', color: 'warning', iconColor: '#ed8b00' },
+  offline: { label: 'PC 연결 끊김', color: 'warning', iconColor: '#ed8b00' },
   revoked: { label: '연결 해제됨', color: 'default', iconColor: '#9e9e9e' }
 }[state] || { label: '상태 확인 중', color: 'default', iconColor: '#9e9e9e' });
+
+const getDeviceConnectionUi = (device, now = Date.now()) => {
+  const state = getDeviceLiveState(device, now);
+  if (state === 'revoked') return { label: '연결 해제됨', color: 'default' };
+  if (state === 'offline') return { label: '현재 연결 끊김', color: 'warning' };
+  return { label: '현재 PC 연결됨', color: 'success' };
+};
+
+const getPairingStatusUi = (state) => ({
+  preparing: { label: '연동 준비 중', color: 'info' },
+  'needs-install': { label: '프로그램 실행 대기', color: 'warning' },
+  installing: { label: '설치·연동 대기', color: 'warning' },
+  detecting: { label: 'PC 연동 요청 중', color: 'info' },
+  connecting: { label: 'PC 연동 중', color: 'info' }
+}[state] || null);
 
 function ServicePlatform() {
   const navigate = useNavigate();
@@ -58,6 +73,8 @@ function ServicePlatform() {
   const accountKey = String(user.userUid || user.loginId || user.id || user.username || 'unknown');
   const localLinkKey = `nas_drive_linked_here:${accountKey}`;
   const canOpenBackup = user.role === 'MASTER' || user.Masters || user.globalAccess;
+  const pairingStatus = getPairingStatusUi(pcSyncState);
+  const pcPairingActive = !!pairingStatus;
 
   const refreshPcDevices = useCallback(async () => {
     try {
@@ -189,6 +206,10 @@ function ServicePlatform() {
             refreshPcDevices();
             return;
           }
+          if (status.status === 'agent-detected') {
+            setPcSyncState('connecting');
+            setPcSyncMessage('NAS Drive 프로그램이 응답했습니다. 계정과 파일 탐색기 연결을 마무리하고 있습니다.');
+          }
           if (status.status === 'revoked' || status.status === 'expired') {
             stopPcSyncPoll();
             setPcSyncState('error');
@@ -202,7 +223,7 @@ function ServicePlatform() {
           }
         }
 
-        if (attempts >= 40) {
+        if (attempts >= 200) {
           stopPcSyncPoll();
           setPcSyncState('needs-install');
           setPcSyncMessage('자동 확인 시간이 지났습니다. 설치 파일을 실행한 뒤 다시 시도할 수 있습니다.');
@@ -299,7 +320,7 @@ function ServicePlatform() {
     const pcStatus = getDeviceStatusUi(pcLiveState);
     const baseApps = [
       { id: 'files', title: '파일 관리자', icon: FolderIcon, route: '/nas', color: theme.palette.primary.main },
-      { id: 'pc-sync', title: pcLinkedHere ? (pcLiveState === 'up-to-date' ? 'NAS Drive 열기' : `NAS Drive · ${pcStatus.label}`) : 'PC 연동', icon: DesktopWindowsIcon, color: pcLinkedHere ? pcStatus.iconColor : theme.palette.text.disabled, statusState: pcLinkedHere ? pcLiveState : 'not-linked', statusLabel: pcLinkedHere ? pcStatus.label : '설치되지 않음' },
+      { id: 'pc-sync', title: pcLinkedHere ? (pcLiveState === 'up-to-date' ? 'NAS Drive 열기' : `NAS Drive · ${pcStatus.label}`) : (pcPairingActive ? pairingStatus.label : 'PC 연동'), icon: DesktopWindowsIcon, color: pcLinkedHere ? pcStatus.iconColor : (pcPairingActive ? theme.palette.info.main : theme.palette.text.disabled), statusState: pcLinkedHere ? pcLiveState : (pcPairingActive ? 'connecting' : 'not-linked'), statusLabel: pcLinkedHere ? pcStatus.label : (pairingStatus?.label || '설치되지 않음') },
       { id: 'meeting', title: '화상회의', icon: VideocamIcon, component: MeetingApp, color: theme.palette.info.main, width: 920, height: 640 },
       { id: 'settings', title: '설정', icon: SettingsIcon, route: '/settings', color: theme.palette.text.secondary }
     ];
@@ -316,6 +337,9 @@ function ServicePlatform() {
     theme.palette.primary.main,
     pcLinkedHere,
     pcLiveState,
+    pcPairingActive,
+    pairingStatus,
+    theme.palette.info.main,
     theme.palette.text.disabled,
     theme.palette.text.secondary
   ]);
@@ -365,7 +389,7 @@ function ServicePlatform() {
             <Tooltip key={app.id} title={app.id === 'pc-sync' ? `${app.title} · 우클릭: 연결 관리` : app.title} placement="right">
               <IconButton onClick={() => openApp(app)} onContextMenu={app.id === 'pc-sync' ? openPcManager : undefined} sx={{ width: 44, height: 44, position: 'relative', color: app.color, bgcolor: alpha(app.color, 0.08), '&:hover': { bgcolor: alpha(app.color, 0.16) } }}>
                 <Icon />
-                {app.id === 'pc-sync' && pcLinkedHere && <Box component="span" aria-label={app.statusLabel} sx={{ position: 'absolute', right: 5, top: 5, width: 10, height: 10, borderRadius: '50%', bgcolor: app.color, border: `2px solid ${theme.palette.background.paper}`, boxShadow: `0 0 0 1px ${alpha(app.color, 0.35)}`, ...(app.statusState === 'syncing' || app.statusState === 'connecting' ? { animation: 'nasStatusPulse 1.1s ease-in-out infinite', '@keyframes nasStatusPulse': { '0%, 100%': { transform: 'scale(0.8)', opacity: 0.55 }, '50%': { transform: 'scale(1.25)', opacity: 1 } } } : {}) }} />}
+                {app.id === 'pc-sync' && (pcLinkedHere || pcPairingActive) && <Box component="span" aria-label={app.statusLabel} sx={{ position: 'absolute', right: 5, top: 5, width: 10, height: 10, borderRadius: '50%', bgcolor: app.color, border: `2px solid ${theme.palette.background.paper}`, boxShadow: `0 0 0 1px ${alpha(app.color, 0.35)}`, ...(app.statusState === 'syncing' || app.statusState === 'connecting' ? { animation: 'nasStatusPulse 1.1s ease-in-out infinite', '@keyframes nasStatusPulse': { '0%, 100%': { transform: 'scale(0.8)', opacity: 0.55 }, '50%': { transform: 'scale(1.25)', opacity: 1 } } } : {}) }} />}
               </IconButton>
             </Tooltip>
           );
@@ -379,7 +403,7 @@ function ServicePlatform() {
             <Box key={`desktop_${app.id}`} onDoubleClick={() => openApp(app)} onClick={() => openApp(app)} onContextMenu={app.id === 'pc-sync' ? openPcManager : undefined} sx={{ cursor: 'pointer', textAlign: 'center', color: 'text.primary' }}>
               <Box sx={{ width: 58, height: 58, mx: 'auto', position: 'relative', borderRadius: 2, display: 'grid', placeItems: 'center', color: app.color, bgcolor: alpha(theme.palette.background.paper, 0.82), border: `1px solid ${theme.palette.divider}`, boxShadow: `0 10px 28px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.22 : 0.08)}` }}>
                 <Icon sx={{ fontSize: 30 }} />
-                {app.id === 'pc-sync' && pcLinkedHere && <Box component="span" aria-label={app.statusLabel} sx={{ position: 'absolute', right: 5, top: 5, width: 11, height: 11, borderRadius: '50%', bgcolor: app.color, border: `2px solid ${theme.palette.background.paper}`, ...(app.statusState === 'syncing' || app.statusState === 'connecting' ? { animation: 'nasStatusPulse 1.1s ease-in-out infinite', '@keyframes nasStatusPulse': { '0%, 100%': { transform: 'scale(0.8)', opacity: 0.55 }, '50%': { transform: 'scale(1.25)', opacity: 1 } } } : {}) }} />}
+                {app.id === 'pc-sync' && (pcLinkedHere || pcPairingActive) && <Box component="span" aria-label={app.statusLabel} sx={{ position: 'absolute', right: 5, top: 5, width: 11, height: 11, borderRadius: '50%', bgcolor: app.color, border: `2px solid ${theme.palette.background.paper}`, ...(app.statusState === 'syncing' || app.statusState === 'connecting' ? { animation: 'nasStatusPulse 1.1s ease-in-out infinite', '@keyframes nasStatusPulse': { '0%, 100%': { transform: 'scale(0.8)', opacity: 0.55 }, '50%': { transform: 'scale(1.25)', opacity: 1 } } } : {}) }} />}
               </Box>
               <Typography variant="caption" sx={{ display: 'block', mt: 0.75, fontWeight: 800, lineHeight: 1.2 }}>{app.title}</Typography>
             </Box>
@@ -387,14 +411,14 @@ function ServicePlatform() {
         })}
       </Box>
 
-      <Dialog open={pcSyncOpen} onClose={() => { stopPcSyncPoll(); setPcSyncOpen(false); }} fullWidth maxWidth="sm">
+      <Dialog open={pcSyncOpen} onClose={() => setPcSyncOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>{pcLinkedHere ? 'NAS Drive' : 'PC에 NAS Drive 설치'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            {(pcSyncState === 'preparing' || pcSyncState === 'detecting' || pcSyncState === 'installing') && <CircularProgress size={30} />}
+            {(pcSyncState === 'preparing' || pcSyncState === 'detecting' || pcSyncState === 'installing' || pcSyncState === 'connecting') && <CircularProgress size={30} />}
             <Typography>{pcSyncMessage}</Typography>
             <Stack direction="row" spacing={1} alignItems="center">
-              <Chip size="small" color={pcLinkedHere ? getDeviceStatusUi(pcLiveState).color : 'default'} label={pcLinkedHere ? getDeviceStatusUi(pcLiveState).label : '설치되지 않음'} />
+              <Chip size="small" color={pcLinkedHere ? getDeviceStatusUi(pcLiveState).color : (pairingStatus?.color || 'default')} label={pcLinkedHere ? getDeviceStatusUi(pcLiveState).label : (pairingStatus?.label || '연결되지 않음')} />
               <Button size="small" onClick={() => setShowDeviceManager((value) => !value)}>{showDeviceManager ? '간단히 보기' : '연결된 PC 관리'}</Button>
             </Stack>
             {showDeviceManager ? (
@@ -404,12 +428,14 @@ function ServicePlatform() {
                 {pcDevices.map((device) => {
                   const deviceState = getDeviceLiveState(device, statusNow);
                   const deviceStatus = getDeviceStatusUi(deviceState);
+                  const connectionStatus = getDeviceConnectionUi(device, statusNow);
                   return (
                   <Box key={device.deviceId} sx={{ display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 1, p: 1.25, border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Stack direction="row" spacing={0.75} alignItems="center">
                         <Typography sx={{ fontWeight: 800 }}>{device.deviceName || 'Windows PC'}</Typography>
-                        <Chip size="small" color={deviceStatus.color} label={deviceStatus.label} />
+                        <Chip size="small" color={connectionStatus.color} label={connectionStatus.label} />
+                        {deviceState !== 'offline' && deviceState !== 'revoked' && <Chip size="small" variant="outlined" color={deviceStatus.color} label={deviceStatus.label} />}
                       </Stack>
                       <Typography variant="caption" color="text.secondary">마지막 상태 수신: {device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : '접속 기록 없음'}</Typography>
                       {!!device.lastError && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.25 }}>{device.lastError}</Typography>}
@@ -437,7 +463,7 @@ function ServicePlatform() {
           {pcSyncState === 'error' && <Button variant="contained" onClick={startPcSyncFlow}>다시 시도</Button>}
           {pcSyncState === 'connected' && <Button variant="contained" onClick={openLinkedDrive}>파일 탐색기에서 열기</Button>}
           {pcSyncState === 'manager' && pcLinkedHere && <Button variant="contained" onClick={openLinkedDrive}>파일 탐색기에서 열기</Button>}
-          <Button onClick={() => { stopPcSyncPoll(); setPcSyncOpen(false); }}>닫기</Button>
+          <Button onClick={() => setPcSyncOpen(false)}>닫기</Button>
         </DialogActions>
       </Dialog>
     </Box>

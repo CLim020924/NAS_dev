@@ -472,3 +472,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 복구 원칙: 웹 protocol, native 로그인, 설치/복구 실행은 하나의 instance coordinator/IPC로 직렬화하고 기존 인스턴스에 요청을 전달한다. 중복 실행이면 막연히 `이미 실행 중`이라고 끝내지 않고 기존 작업 표시, 포커스, 재시도 또는 안전한 stale-state 복구 중 하나로 결정한다.
 - 검증 기준: 계정 정상 삭제, 서버측 강제 revoke, token 불일치, 서버/네트워크 중단, tray 종료 직후 재실행, Agent/Provider 강제 종료, stale PID와 PID 재사용, 웹 연동 연속 클릭, installer 동시 실행, 다중 계정 중 한 계정만 폐기된 경우를 E2E 장애 주입으로 검증한다. 모든 경우 재부팅 없이 정상·로그인 필요·오프라인 중 하나의 명확한 상태로 수렴해야 한다.
 - 현재 경계: 이번 응답은 이 요구사항과 수용 기준을 확정한 것이며 아직 코드·설정·workbook을 변경하지 않았다. 사용자가 구현 진행을 요청하면 앞선 진단을 기반으로 수명주기 전반을 하나의 수정 단위로 처리한다.
+
+## 2026-08-30 구현: 연결 중 로그아웃·PC 연동 진행·연결 PC 상태 분리
+
+- 사용자 요청: `계정 연결 중` 상태에서도 로그아웃하여 기존 관계를 완전히 끊거나 즉시 다시 연결할 수 있게 한다. 웹 메인 플랫폼의 PC 연동 버튼에는 실제 연동 진행 상태를 확실히 표시하고, 연결된 PC 관리에서는 현재 PC 접속 여부를 명확히 보여준다.
+- Agent/launcher 1.10.13: `--open`은 health가 `needs-relink`여도 저장된 profile이 있으면 native control center를 열어 `연결 해제 후 다시 로그인` 버튼에 접근시킨다. 로그아웃은 서버 revoke를 먼저 시도하지만 token이 이미 폐기됐거나 서버가 오프라인이어도 로컬 profile, 계정별 DPAPI credential, personal-drive Provider 등록과 shell metadata를 정리하고 로그인창으로 전환한다. 다른 profile과 사용자 파일은 보존한다.
+- pairing 상태: Agent가 유효한 연동 URL을 실제 조회하면 서버 pairing을 `pending`에서 `agent-detected`로 바꾸고 감지 시각을 기록한다. status API는 만료도 `expired`로 명시한다. frontend는 이 상태를 받아 `PC 연동 중`으로 전환한다.
+- 웹 UI: PC 연동 dialog를 닫아도 최대 5분 동안 상태 polling을 유지한다. desktop/side 아이콘은 연동 준비, 프로그램 실행 대기, 설치·연동 대기, PC 연동 요청, PC 연동 중을 문구와 pulse dot으로 표시한다. 연결된 PC 관리에서는 heartbeat 기반 `현재 PC 연결됨/현재 연결 끊김/연결 해제됨`과 파일 `연결 중/동기화 중/최신/오류/중지`를 별도 badge로 표시한다.
+- 빌드·검증: Agent source self-test, 새 packaged Agent self-test, Setup self-test, Node syntax, C# compile, frontend production build를 통과했다. 로컬 backend 테스트는 desktop handoff 2개와 file trash/version, Office access, password, quota 테스트가 통과했다. `deviceSyncSecurity`의 symlink test는 Windows 개발자 권한 부재로 EPERM이어서 NAS에서 재검증한다. workbook의 `Request_Archive`, `Patch_Log`, `Do_Not_Break`, `Feature_Index`, `Relation_Map`, `Code_Map`을 기존 형식으로 갱신하고 수식 오류 0·관련 시트 렌더를 확인했다.
+- 배포 경계: 이 기록 시점에는 source와 Agent/Setup binary 빌드가 완료됐고 실제 NAS pull, backend restart, frontend `/var/www/html` 반영, 현재 Windows PC 보존 업데이트와 재부팅 없는 로그아웃·재연결 E2E가 남아 있다. 완료로 과장하지 않으며 다음 단계에서 NAS clean 확인 후 배포한다.
+- 회귀 금지: pairing session, PC heartbeat connection, file sync state를 다시 하나의 모호한 `연결 중`으로 합치지 않는다. 서버 응답 실패를 이유로 로컬 로그아웃을 막지 않으며, 로그아웃 과정에서 다른 계정·사용자 파일·다른 경로의 동명 프로세스를 삭제하거나 종료하지 않는다.

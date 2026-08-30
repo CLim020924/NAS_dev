@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.12.0")]
-[assembly: AssemblyFileVersion("1.10.12.0")]
+[assembly: AssemblyVersion("1.10.13.0")]
+[assembly: AssemblyFileVersion("1.10.13.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.12";
+        internal const string ProductVersion = "1.10.13";
 
         [STAThread]
         private static void Main(string[] args)
@@ -152,9 +152,9 @@ namespace NasDriveSetup
                     }
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
-                    bool hasProfile = NativeControlCenter.HasUsableProfile();
-                    if (open && hasProfile) StartBackgroundLauncher();
-                    if (login || !hasProfile) Application.Run(new NativeLoginForm(installedExe));
+                    bool hasConfiguredProfile = NativeControlCenter.HasConfiguredProfile();
+                    if (open && hasConfiguredProfile) StartBackgroundLauncher();
+                    if (login || !hasConfiguredProfile) Application.Run(new NativeLoginForm(installedExe));
                     else Application.Run(new NativeControlCenter(installedExe));
                 }
                 return true;
@@ -727,6 +727,7 @@ namespace NasDriveSetup
                 : state == "syncing" || state == "connecting" || state == "updating" ? Color.FromArgb(218, 132, 21) : BrandBlue;
             driveLabel.Text = "저장 위치" + Environment.NewLine + (string.IsNullOrWhiteSpace(drive) ? "연결된 폴더 없음" : drive)
                 + Environment.NewLine + "연결 계정 " + (account == null ? "0" : account.AccountCount.ToString()) + "개";
+            logoutButton.Text = state == "needs-relink" || state == "connecting" ? "연결 해제 후 다시 로그인" : "로그아웃";
         }
 
         private static string ReadJsonValue(string file, string name)
@@ -758,7 +759,7 @@ namespace NasDriveSetup
             try
             {
                 int exitCode = await Task.Run(() => RunLogout());
-                if (exitCode != 0) throw new InvalidOperationException("서버에 연결할 수 없어 로그아웃하지 못했습니다. 연결이 복구된 뒤 다시 시도해 주세요.");
+                if (exitCode != 0) throw new InvalidOperationException("로컬 연결을 해제하지 못했습니다. NAS Drive를 다시 열어 재시도해 주세요.");
                 Hide();
                 using (var login = new NativeLoginForm(agentExe)) login.ShowDialog(this);
                 Close();
