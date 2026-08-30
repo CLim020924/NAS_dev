@@ -568,3 +568,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
 - NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `7D6821CBBC376A448A43B1070F0865140EF1FD22759E77421521EF21AA2C1717`, Setup/launcher SHA-256은 `C0D2DBC9BA45706AE65016C924F5760E138243491C82863C75C3383E485740F2`다.
 - 최종 정상 상태: 현재 PC health는 `up-to-date`, 제어창은 닫혀 있고 background launcher·Agent·계정별 Provider가 실행 중이다. PM2 backend와 공개 사이트가 정상이다. 사용자 파일·활성 계정 credential은 보존됐다. 실제 활성 로그아웃과 폐기 legacy profile 삭제는 자격 증명/관계 제거 동작이므로 자동 실행하지 않았다.
+## 2026-08-30 진행 중: NAS 웹 브라우저·Chrome 프로필 선택 및 자동 로그인
+
+- 사용자 요청: NAS Drive의 웹 바로가기/웹에서 관리 버튼이 기본 브라우저를 즉시 열지 않고 브라우저와 Chrome/Edge 사용자 프로필을 선택하게 하며, 선택한 프로필에서 현재 NAS Drive 계정으로 웹 NAS에 자동 로그인하고, 새 PC의 개인 Drive 루트에 관리 바로가기를 자동 생성·삭제 후 복구하게 한다.
+- 확인: 기존 `/api/devices/agent/web-session`과 `/api/auth/desktop-handoff`는 장치 소유자에 결합된 45초·1회용 token을 발급·소비한 뒤 선택된 브라우저에 30일 세션 쿠키를 설정한다. NAS 로그인은 Google OAuth가 아니므로 Google 쿠키/비밀번호를 읽거나 별도 OAuth 앱을 추가하지 않는다.
+- 현재 구현 경계: `backend/agents/windows-node/web-browser.js`에 표준 설치 경로 Chrome/Edge 탐지, 제한된 `Local State` profile.info_cache 읽기, 숨김 프로필/비표준 디렉터리 제외, HMAC 임시 프로필 token, WinForms 선택 UI, shell:false 프로필별 실행을 추가했다. `index.js`는 선택을 handoff 발급 전에 수행하고 선택된 브라우저로 신뢰된 NAS URL만 열며, 개인 Drive 관리 바로가기가 삭제되면 background tick에서 다시 생성하도록 보강했다. 구문 검사와 Agent source self-test는 통과했다.
+- 미완료: 개발용 선택 창의 실제 Windows 화면 검증 중 Computer Use가 Chrome URL을 안전하게 식별하지 못해 자동 제어를 중단했다. UI 도구 중단 이후 입력을 계속하지 않았고 개발용 picker 프로세스만 종료했다. 버전 상승, 빌드·설치·서버 배포, 실제 프로필 선택→자동 NAS 로그인, 바로가기 삭제→자동 복구, workbook 갱신은 아직 수행하지 않았다.
+- 다음 안전 조치: 다음 작업에서 현재 dirty 변경을 보존한 채 선택 UI를 다시 관찰하고 실제 클릭 E2E를 통과시킨 후 1.10.18 빌드·설치·배포와 메모리 갱신을 완료한다.
