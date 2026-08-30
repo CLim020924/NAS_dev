@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
+import { BINARY_VIEWER_EXTENSIONS } from '../utils/officeFormats';
 
 const WindowContext = createContext();
 
@@ -265,7 +266,7 @@ export const WindowProvider = ({ children }) => {
     const safeApiUrl = `/api/file/download?path=${encodeURIComponent(safePath)}`;
     const fallbackName = preferredName || getPathLeafName(safePath);
     let ext = fallbackName.includes('.') ? fallbackName.split('.').pop().toLowerCase() : '';
-    const binaryExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'mp3', 'wav', 'flac', 'm4a', 'pdf', 'heic', 'heif', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'hwp', 'hwpx', 'zip', 'tar', 'gz'];
+    const binaryExts = BINARY_VIEWER_EXTENSIONS;
 
     if (ext === '') {
       try {

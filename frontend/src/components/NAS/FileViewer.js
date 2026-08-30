@@ -16,6 +16,7 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { DocumentEditor } from "@onlyoffice/document-editor-react";
 import { useWindows } from '../../contexts/WindowContext';
+import { getOnlyOfficeDocumentType, isOnlyOfficeFormat } from '../../utils/officeFormats';
 import RhwpDocumentViewer from '../shared/RhwpDocumentViewer';
 import { transferUrl } from '../../transferBaseUrl';
 import { getPdfZoomKeyDirection, stepPdfZoom } from './pdfZoom';
@@ -49,7 +50,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic', 'heif'].includes(ext);
   const isVideo = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(ext);
   const isAudio = ['mp3', 'wav', 'flac', 'm4a'].includes(ext);
-  const isOffice = ['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt'].includes(ext);
+  const isOffice = isOnlyOfficeFormat(ext);
   const isHwp = ['hwp', 'hwpx'].includes(ext);
   const isPDF = ext === 'pdf';
   const isMarkdown = ext === 'md';
@@ -369,7 +370,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
         title: name,
         url: absoluteUrl
       },
-      documentType: ['xls', 'xlsx', 'csv'].includes(ext) ? 'cell' : (['ppt', 'pptx'].includes(ext) ? 'slide' : 'word'),
+      documentType: getOnlyOfficeDocumentType(ext),
       editorConfig: {
         callbackUrl,
         lang: "en-US",
