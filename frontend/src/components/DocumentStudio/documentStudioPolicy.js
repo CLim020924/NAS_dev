@@ -10,9 +10,12 @@ export const getStudioExtension = (name = '') => String(name).split('.').pop().t
 
 export const isDocumentStudioFile = (name) => DOCUMENT_STUDIO_EXTENSIONS.includes(getStudioExtension(name));
 
-export const sanitizeStudioUploadName = (name = '문서') => (
-  String(name || '문서').split(/[\\/]/).pop().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_') || '문서'
-);
+export const sanitizeStudioUploadName = (name = '문서') => {
+  const leafName = String(name || '문서').split(/[\\/]/).pop();
+  return [...leafName]
+    .map((character) => (character.charCodeAt(0) < 32 || /[<>:"/\\|?*]/.test(character) ? '_' : character))
+    .join('') || '문서';
+};
 
 export const makeUniqueStudioNames = (files = []) => {
   const used = new Set();
