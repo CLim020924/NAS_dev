@@ -137,8 +137,8 @@ const DocumentStudio = () => {
   );
 
   useEffect(() => {
-    if (!availableOutputFormats.includes(outputFormat)) setOutputFormat(availableOutputFormats[0] || '');
-  }, [availableOutputFormats, outputFormat]);
+    if (mode === 'convert-pdf' && !availableOutputFormats.includes(outputFormat)) setOutputFormat(availableOutputFormats[0] || '');
+  }, [availableOutputFormats, outputFormat, mode]);
 
   const activeSourceFilter = mode === 'merge-pdf' ? 'pdf' : ((mode === 'merge-pptx' || mode === 'template-pptx') ? 'pptx' : (mode === 'convert-pdf' ? sourceFormat : 'auto'));
   const activeAccept = getStudioAccept(activeSourceFilter, formatMatrix) || DOCUMENT_STUDIO_ACCEPT;
