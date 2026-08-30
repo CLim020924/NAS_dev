@@ -452,3 +452,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 향후 라우팅: 웹 파일 기능은 `nasRoutes.js`와 NAS/FileViewer/Transfer Context부터, 로그인·권한은 `index.js`와 보안 모듈부터, 채팅·회의는 해당 router/Context부터, Windows 동기화는 Agent와 device API부터, Explorer 상태·온라인 전용은 CFAPI Provider부터, 설치·자동복구는 installer/launcher부터 추적한다. 관련 workbook 행과 회귀 규칙을 함께 확인한 뒤 최소 범위로 수정한다.
 - 미완료·주의 항목: Explorer 웹 바로가기의 사용자 클릭 의존, Authenticode/SmartScreen, 숨은 PowerShell tray helper의 완전 native 대체, 다중 PC 충돌, 대용량 전송 장애·재개, 규모 진단과 DR E2E는 아직 별도 검증·완료가 필요하다. 과거 patch/fix 스크립트는 현재 진입점으로 오인하지 않는다.
 - 로컬 작업 메모리: 새 PC의 Git 저장소 밖 `outputs/NAS_PROJECT_ARCHITECTURE_MEMORY.md`에 구성도, 요청 유형별 최초 확인 파일, 데이터 경계, 회귀 규칙과 기본 작업 절차를 정리했다. 이번 요청은 코드·설정·workbook을 변경하지 않은 구조 감사이므로 이 릴레이만 Git에 기록한다.
+
+## 2026-08-30 진단: Windows NAS Drive 연결 중 고착 및 종료 후 실행 중 오인
+
+- 사용자 보고: 알림 영역의 NAS Drive 창이 간헐적으로 `계정 연결 중`에 고착되고, 웹 PC 연동 또는 설치 파일 실행 시 이미 실행 중이라는 안내가 반복된다. 트레이 메뉴에서 종료해도 같은 안내가 남으며 재부팅 없이 복구되어야 한다. 요청에 따라 이번에는 수정하지 않고 원인만 조사했다.
+- 실제 PC 확인: 정식 설치 경로의 native launcher, Node Agent, CFAPI Provider 세 프로세스가 launcher→Agent→Provider 관계로 실행 중이었다. 로컬 health는 `needs-relink`이고 최근 오류는 HTTP 403 `Agent 인증 실패`였다. 로컬 설정에는 두 계정 profile이 남아 있으나 서버의 해당 두 장치 레코드는 모두 revoked이며 token hash가 제거되어 있어 현재 token으로는 재연결될 수 없다.
+- 주원인: 폐기된 profile을 로컬 구성에서 격리하거나 유효한 재연동으로 교체하지 않은 채 background Agent가 계속 재시도한다. 시작 시 health를 먼저 `connecting`으로 기록한 뒤 403을 받는 흐름 때문에 사용자에게 연결 시도처럼 보이지만 인증상 성공 가능성이 없는 상태다.
+- 종료 결함: native tray의 `NAS Drive 종료`는 `agent.exit` 파일을 쓰고 tray UI만 즉시 종료한다. Agent와 Provider를 직접 종료하거나 종료 완료를 기다리지 않는다. Agent는 최대 약 3초 뒤 exit 파일을 보고 종료하지만 그 경로에는 Provider 정리 보장이 없어, 트레이 아이콘이 사라진 뒤에도 자식 구성요소가 남아 `실행 중` 판정과 충돌할 수 있다.
+- 단일 인스턴스 결함: foreground lock은 `foreground.pid`의 PID가 살아 있는지만 확인하고 그 PID가 실제 NAS Agent인지 실행 경로를 검증하지 않는다. 현재도 종료된 PID를 담은 stale lock 파일이 남아 있었다. 다음 실행에서 죽은 PID면 정리되지만 Windows가 같은 PID를 다른 프로세스에 재사용하면 설정창이 없는데도 `이미 열려 있습니다`로 오인할 수 있다. installer mutex, native control-center mutex, Agent PID lock이 서로 다른 방식으로 분리되어 웹 protocol 요청을 기존 인스턴스에 전달하는 통합 IPC도 없다.
+- 구분해야 할 메시지: 설치기 mutex의 `NAS Drive 설치 창이 이미 열려 있습니다`, native UI mutex의 `NAS Drive 창이 이미 열려 있습니다`, Agent foreground lock의 `NAS Drive 설정 창이 이미 열려 있습니다`는 서로 다른 잠금이다. 현재 구현은 이 상태들을 사용자에게 하나의 실제 실행 상태처럼 일관되게 설명하거나 자동 복구하지 않는다.
+- 다음 안전 조치: 수정 요청이 오면 revoked profile 복구 흐름, 경로 검증된 단일 인스턴스/IPC, tray 종료 시 launcher·Agent·Provider의 bounded graceful shutdown 및 잔존 프로세스 정리, stale lock 회수, 웹 protocol 재연동 E2E를 하나의 수명주기 수정으로 다뤄야 한다. 재부팅을 복구 절차로 요구하지 않으며 계정 설정·DPAPI token 원문·로컬 파일은 보존한다.
+- 검증 경계: 이번 요청에서는 프로세스 종료, 재로그인, 재설치, token 삭제, 코드·설정·workbook 변경을 수행하지 않았다. 진단용 읽기와 이 릴레이 기록만 수행했다.
