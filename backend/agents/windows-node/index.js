@@ -9,9 +9,16 @@ const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const {
+  listPublicBrowserChoices,
+  resolvePublicSelection,
+  resolveDirectSelection,
+  chooseWebBrowser,
+  launchSelectedBrowser
+} = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.17';
+const AGENT_VERSION = '1.10.18';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -555,7 +562,7 @@ function setPersonalDriveWebShortcut(rootPath, profile, enabled) {
       '$shortcut.WorkingDirectory = Split-Path -Parent $target',
       '$shortcut.IconLocation = $icon + ",0"',
       '$shortcut.Description = "NAS Drive 웹에서 관리"',
-      '$shortcut.WindowStyle = 7',
+      '$shortcut.WindowStyle = 1',
       '$shortcut.Save()'
     ].join('; ');
     const result = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-NonInteractive', '-Command', script], {
@@ -575,6 +582,12 @@ function setPersonalDriveWebShortcut(rootPath, profile, enabled) {
   } catch (err) {
     log('[personal drive web shortcut failed]', err.message);
   }
+}
+
+function ensurePersonalDriveWebShortcut(rootPath, profile) {
+  if (!rootPath) return;
+  const shortcutPath = path.join(path.resolve(rootPath), PERSONAL_DRIVE_WEB_SHORTCUT_NAME);
+  if (!fs.existsSync(shortcutPath)) setPersonalDriveWebShortcut(rootPath, profile, true);
 }
 
 function setPersonalDriveHomePin(rootPath, pinned) {
@@ -809,17 +822,13 @@ async function openPersonalDrive(profile) {
   return true;
 }
 
-function launchTrustedWebUrl(urlText) {
+function launchTrustedWebUrl(urlText, browser = { id: 'system' }) {
   const target = new URL(String(urlText || ''));
   const expected = new URL(SERVER_BASE);
   if (target.protocol !== 'https:' || target.origin !== expected.origin) {
     throw new Error('NAS Drive가 신뢰하지 않는 웹 주소를 차단했습니다.');
   }
-  spawn('rundll32.exe', ['url.dll,FileProtocolHandler', target.toString()], {
-    windowsHide: true,
-    detached: true,
-    stdio: 'ignore'
-  }).unref();
+  launchSelectedBrowser(browser, target.toString());
 }
 
 function friendlyOpenWebError(error) {
@@ -869,6 +878,11 @@ async function openWebForProfile(profile) {
     });
     throw error;
   }
+  const requestedBrowser = getCommandArgument('--web-browser');
+  const requestedBrowserProfile = getCommandArgument('--web-browser-profile');
+  const selectedBrowser = requestedBrowser
+    ? resolveDirectSelection(requestedBrowser, requestedBrowserProfile)
+    : chooseWebBrowser();
   const retryDelays = [0, 800, 2_000, 4_000];
   let lastError = null;
   for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
@@ -882,13 +896,13 @@ async function openWebForProfile(profile) {
         throw Object.assign(new Error('NAS 웹 로그인 주소를 만들지 못했습니다.'), { code: 'WEB_SESSION_URL_MISSING' });
       }
       try {
-        launchTrustedWebUrl(result.openUrl);
+        launchTrustedWebUrl(result.openUrl, selectedBrowser);
       } catch (error) {
         error.code = error.code || 'WEB_URL_BLOCKED';
         writeOpenWebDiagnostic({ state: 'error', stage: 'launch', attempt: attempt + 1, error: safeOpenWebError(error) });
         throw error;
       }
-      writeOpenWebDiagnostic({ state: 'opened', stage: 'launch', attempt: attempt + 1, deviceId: String(profile.deviceId) });
+      writeOpenWebDiagnostic({ state: 'opened', stage: 'launch', attempt: attempt + 1, deviceId: String(profile.deviceId), browser: selectedBrowser.id });
       return true;
     } catch (error) {
       lastError = error;
@@ -3387,6 +3401,7 @@ async function runBackground() {
         }
         job.profile._paused = !!heartbeat.commands?.paused;
         for (const root of job.roots.filter(item => item.kind === 'personal-drive')) {
+          ensurePersonalDriveWebShortcut(root.localPath, job.profile);
           if (!isPersonalDriveProviderAlive(job.profile, root)) {
             setProfileHealth(job.profile, 'connecting', '파일 탐색기 연결을 복구하는 중입니다.');
             await ensurePersonalDriveProvider(job.profile, root);
@@ -3488,6 +3503,12 @@ function runSelfTest() {
   if (classifyAgentError(Object.assign(new Error('connect failed'), { code: 'EHOSTUNREACH' })) !== 'offline') throw new Error('Host-unreachable web shortcut classification test failed.');
   if (friendlyOpenWebError(new Error('HTTP 403: Agent 인증 실패')).state !== 'needs-relink') throw new Error('Relink web shortcut classification test failed.');
   if (!friendlyOpenWebError(Object.assign(new Error('DPAPI unavailable'), { code: 'WEB_PROFILE_TOKEN_UNAVAILABLE' })).message.includes('로그인 정보를 지우지 않았습니다')) throw new Error('DPAPI profile preservation message test failed.');
+  const browserTokenSecret = crypto.randomBytes(32);
+  const browserChoices = listPublicBrowserChoices({}, browserTokenSecret);
+  if (!browserChoices.some(choice => choice.id === 'system')) throw new Error('System browser fallback test failed.');
+  if (browserChoices.some(choice => choice.profiles.some(profile => !/^[A-Za-z0-9_-]{43}$/.test(profile.token)))) throw new Error('Browser profile tokenization test failed.');
+  if (resolvePublicSelection({ browserId: 'system', profileToken: '' }, {}, browserTokenSecret).id !== 'system') throw new Error('System browser selection test failed.');
+  if (resolveDirectSelection('system').id !== 'system') throw new Error('Direct system browser selection test failed.');
   const redactedOpenWebError = safeOpenWebError(Object.assign(new Error('GET https://filemanager-nas.com/api/auth/desktop-handoff?token=desktop_secret'), { code: 'EPROTO' }));
   if (redactedOpenWebError.message.includes('desktop_secret') || redactedOpenWebError.message.includes('filemanager-nas.com')) throw new Error('Open web diagnostic redaction test failed.');
   if (new URL(SERVER_BASE).protocol !== 'https:') throw new Error('Trusted web origin must use HTTPS.');
@@ -3520,6 +3541,11 @@ async function runForeground() {
     try {
       await openWebForProfile(profile);
     } catch (err) {
+      if (err?.code === 'WEB_BROWSER_SELECTION_CANCELLED') {
+        writeOpenWebDiagnostic({ state: 'cancelled', stage: 'browser-selection', attempt: 0, error: safeOpenWebError(err) });
+        startBackground();
+        return;
+      }
       const friendly = friendlyOpenWebError(err);
       log('[open web failed]', err.message || err);
       setProfileHealth(profile, friendly.state, friendly.message);

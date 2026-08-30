@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.17.0")]
-[assembly: AssemblyFileVersion("1.10.17.0")]
+[assembly: AssemblyVersion("1.10.18.0")]
+[assembly: AssemblyFileVersion("1.10.18.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.17";
+        internal const string ProductVersion = "1.10.18";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
@@ -132,6 +132,7 @@ namespace NasDriveSetup
                 if (string.Equals(arg, "--shutdown-background", StringComparison.OrdinalIgnoreCase)) shutdownBackground = true;
                 if (string.Equals(arg, "--notify-base64", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) notificationPayload = args[++index];
             }
+            if (protocolUrl.StartsWith("nas-sync://open-web", StringComparison.OrdinalIgnoreCase)) openWeb = true;
             if (!string.IsNullOrWhiteSpace(notificationPayload))
             {
                 ShowNativeNotification(notificationPayload);
@@ -156,7 +157,7 @@ namespace NasDriveSetup
 
             if (openWeb)
             {
-                StartInstalledAgent(installedExe, "--open-web --hidden-bootstrap");
+                OpenWebWithBrowserPicker(installedExe);
                 return true;
             }
 
@@ -399,6 +400,31 @@ namespace NasDriveSetup
             });
         }
 
+        internal static void OpenWebWithBrowserPicker(string installedExe)
+        {
+            bool created;
+            using (var pickerMutex = new Mutex(true, "Local\\NAS-Drive-Web-Browser-Picker-SingleInstance", out created))
+            {
+                if (!created)
+                {
+                    FocusExistingLauncherWindow("NAS 웹에서 열기");
+                    return;
+                }
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                BrowserSelection selection;
+                using (var picker = new WebBrowserPickerForm())
+                {
+                    if (picker.ShowDialog() != DialogResult.OK || picker.Selection == null) return;
+                    selection = picker.Selection;
+                }
+                string arguments = "--open-web --hidden-bootstrap --web-browser " + QuoteArgument(selection.BrowserId);
+                if (!string.IsNullOrWhiteSpace(selection.ProfileDirectory))
+                    arguments += " --web-browser-profile " + QuoteArgument(selection.ProfileDirectory);
+                StartInstalledAgent(installedExe, arguments);
+            }
+        }
+
         private static void StartBackgroundLauncher()
         {
             string launcher = Application.ExecutablePath;
@@ -506,6 +532,279 @@ namespace NasDriveSetup
                 return InstallState.Repair;
             }
             return InstallState.Upgrade;
+        }
+    }
+
+    internal sealed class BrowserSelection
+    {
+        internal string BrowserId = "system";
+        internal string ProfileDirectory = "";
+    }
+
+    internal sealed class BrowserProfileChoice
+    {
+        internal string DirectoryName = "";
+        internal string Label = "";
+        internal string Account = "";
+        internal bool IsLastUsed;
+
+        public override string ToString()
+        {
+            string text = Label;
+            if (!string.IsNullOrWhiteSpace(Account)) text += "  ·  " + Account;
+            if (IsLastUsed) text += "  (최근 사용)";
+            return text;
+        }
+    }
+
+    internal sealed class BrowserChoice
+    {
+        internal string Id = "system";
+        internal string Label = "Windows 기본 브라우저";
+        internal readonly List<BrowserProfileChoice> Profiles = new List<BrowserProfileChoice>();
+        public override string ToString() { return Label; }
+    }
+
+    internal sealed class WebBrowserPickerForm : Form
+    {
+        private readonly ComboBox browsers = new ComboBox();
+        private readonly ListBox profiles = new ListBox();
+        private readonly Button openButton = new Button();
+        internal BrowserSelection Selection { get; private set; }
+
+        internal WebBrowserPickerForm()
+        {
+            BuildUi();
+            LoadChoices();
+        }
+
+        private void BuildUi()
+        {
+            AutoScaleMode = AutoScaleMode.None;
+            Text = "NAS 웹에서 열기";
+            ClientSize = new Size(610, 430);
+            StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            TopMost = true;
+            BackColor = Color.White;
+
+            Controls.Add(new Label { Text = "웹 브라우저와 사용자를 선택하세요", Location = new Point(24, 22), Size = new Size(560, 34), Font = Program.UiFont("Segoe UI Semibold", 15f) });
+            Controls.Add(new Label { Text = "선택한 브라우저에서 현재 NAS Drive 계정으로 자동 로그인합니다.", Location = new Point(26, 62), Size = new Size(555, 24), Font = Program.UiFont("Segoe UI", 9.5f) });
+            Controls.Add(new Label { Text = "브라우저", Location = new Point(26, 102), Size = new Size(120, 22), Font = Program.UiFont("Segoe UI Semibold", 9.5f) });
+
+            browsers.Location = new Point(26, 127);
+            browsers.Size = new Size(555, 30);
+            browsers.DropDownStyle = ComboBoxStyle.DropDownList;
+            browsers.Font = Program.UiFont("Segoe UI", 10f);
+            browsers.SelectedIndexChanged += (sender, args) => RefreshProfiles();
+            Controls.Add(browsers);
+
+            Controls.Add(new Label { Text = "Chrome / Edge 사용자 프로필", Location = new Point(26, 174), Size = new Size(300, 22), Font = Program.UiFont("Segoe UI Semibold", 9.5f) });
+            profiles.Location = new Point(26, 199);
+            profiles.Size = new Size(555, 132);
+            profiles.Font = Program.UiFont("Segoe UI", 10f);
+            profiles.DoubleClick += (sender, args) => CompleteSelection();
+            Controls.Add(profiles);
+
+            Controls.Add(new Label
+            {
+                Text = "표시된 이메일은 프로필의 대표 계정입니다. NAS 비밀번호나 Chrome 쿠키는 읽지 않습니다.",
+                Location = new Point(27, 338),
+                Size = new Size(555, 38),
+                ForeColor = Color.DimGray,
+                Font = Program.UiFont("Segoe UI", 9f)
+            });
+
+            var cancel = new Button { Text = "취소", Location = new Point(272, 382), Size = new Size(96, 36), DialogResult = DialogResult.Cancel, Font = Program.UiFont("Segoe UI", 9.5f) };
+            Controls.Add(cancel);
+            openButton.Text = "선택한 브라우저로 열기";
+            openButton.Location = new Point(378, 382);
+            openButton.Size = new Size(203, 36);
+            openButton.BackColor = Color.FromArgb(26, 86, 219);
+            openButton.ForeColor = Color.White;
+            openButton.FlatStyle = FlatStyle.Flat;
+            openButton.Font = Program.UiFont("Segoe UI Semibold", 9.5f);
+            openButton.Click += (sender, args) => CompleteSelection();
+            Controls.Add(openButton);
+            AcceptButton = openButton;
+            CancelButton = cancel;
+        }
+
+        private void LoadChoices()
+        {
+            List<BrowserChoice> choices = DiscoverBrowsers();
+            foreach (BrowserChoice choice in choices) browsers.Items.Add(choice);
+            int chromeIndex = choices.FindIndex(choice => choice.Id == "chrome");
+            browsers.SelectedIndex = chromeIndex >= 0 ? chromeIndex : 0;
+        }
+
+        private void RefreshProfiles()
+        {
+            profiles.Items.Clear();
+            BrowserChoice choice = browsers.SelectedItem as BrowserChoice;
+            if (choice == null) { openButton.Enabled = false; return; }
+            if (choice.Id == "system")
+            {
+                profiles.Items.Add(new BrowserProfileChoice { Label = "Windows에서 설정된 기본 브라우저" });
+                profiles.Enabled = false;
+                profiles.SelectedIndex = 0;
+                openButton.Enabled = true;
+                return;
+            }
+            profiles.Enabled = true;
+            if (choice.Profiles.Count == 0) choice.Profiles.Add(new BrowserProfileChoice { Label = "브라우저 기본 사용자" });
+            int recentIndex = 0;
+            for (int index = 0; index < choice.Profiles.Count; index++)
+            {
+                profiles.Items.Add(choice.Profiles[index]);
+                if (choice.Profiles[index].IsLastUsed) recentIndex = index;
+            }
+            profiles.SelectedIndex = recentIndex;
+            openButton.Enabled = true;
+        }
+
+        private void CompleteSelection()
+        {
+            BrowserChoice browser = browsers.SelectedItem as BrowserChoice;
+            BrowserProfileChoice profile = profiles.SelectedItem as BrowserProfileChoice;
+            if (browser == null) return;
+            Selection = new BrowserSelection { BrowserId = browser.Id, ProfileDirectory = browser.Id == "system" ? "" : (profile == null ? "" : profile.DirectoryName) };
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+
+        private static List<BrowserChoice> DiscoverBrowsers()
+        {
+            var result = new List<BrowserChoice>();
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            AddChromiumBrowser(result, "chrome", "Google Chrome", new[]
+            {
+                Path.Combine(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+                Path.Combine(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+                Path.Combine(localAppData, "Google", "Chrome", "Application", "chrome.exe")
+            }, Path.Combine(localAppData, "Google", "Chrome", "User Data"));
+            AddChromiumBrowser(result, "edge", "Microsoft Edge", new[]
+            {
+                Path.Combine(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+                Path.Combine(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+                Path.Combine(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")
+            }, Path.Combine(localAppData, "Microsoft", "Edge", "User Data"));
+            result.Add(new BrowserChoice { Id = "system", Label = "Windows 기본 브라우저" });
+            return result;
+        }
+
+        private static void AddChromiumBrowser(List<BrowserChoice> choices, string id, string label, IEnumerable<string> executables, string userDataRoot)
+        {
+            bool installed = false;
+            foreach (string executable in executables)
+            {
+                if (File.Exists(executable)) { installed = true; break; }
+            }
+            if (!installed) return;
+            var choice = new BrowserChoice { Id = id, Label = label };
+            foreach (BrowserProfileChoice profile in ReadProfiles(userDataRoot)) choice.Profiles.Add(profile);
+            choices.Add(choice);
+        }
+
+        private static List<BrowserProfileChoice> ReadProfiles(string userDataRoot)
+        {
+            var profiles = new List<BrowserProfileChoice>();
+            try
+            {
+                string localStatePath = Path.Combine(userDataRoot, "Local State");
+                var info = new FileInfo(localStatePath);
+                if (!info.Exists || info.Length > 8 * 1024 * 1024) return profiles;
+                string json;
+                using (var stream = new FileStream(localStatePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true)) json = reader.ReadToEnd();
+                if (Encoding.UTF8.GetByteCount(json) > 8 * 1024 * 1024) return profiles;
+                var root = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 }.DeserializeObject(json) as Dictionary<string, object>;
+                Dictionary<string, object> profileState = GetDictionary(root, "profile");
+                Dictionary<string, object> infoCache = GetDictionary(profileState, "info_cache");
+                if (infoCache == null) return profiles;
+                string lastUsed = SafeProfileDirectory(GetString(profileState, "last_used"));
+                var order = new List<string>();
+                AppendProfileOrder(order, profileState, "profiles_order");
+                AppendProfileOrder(order, profileState, "last_active_profiles");
+                AppendUnique(order, lastUsed);
+                foreach (string key in infoCache.Keys) AppendUnique(order, SafeProfileDirectory(key));
+                foreach (string directoryName in order)
+                {
+                    if (string.IsNullOrWhiteSpace(directoryName) || !Directory.Exists(Path.Combine(userDataRoot, directoryName))) continue;
+                    object rawInfo;
+                    if (!infoCache.TryGetValue(directoryName, out rawInfo)) continue;
+                    var profileInfo = rawInfo as Dictionary<string, object>;
+                    if (profileInfo == null || GetBool(profileInfo, "is_omitted_from_profile_list")) continue;
+                    string displayName = CleanPublicText(GetString(profileInfo, "name"), 80);
+                    if (string.IsNullOrWhiteSpace(displayName)) displayName = CleanPublicText(GetString(profileInfo, "shortcut_name"), 80);
+                    if (string.IsNullOrWhiteSpace(displayName)) displayName = labelForProfile(directoryName);
+                    profiles.Add(new BrowserProfileChoice
+                    {
+                        DirectoryName = directoryName,
+                        Label = displayName,
+                        Account = CleanPublicText(GetString(profileInfo, "user_name"), 320),
+                        IsLastUsed = string.Equals(directoryName, lastUsed, StringComparison.Ordinal)
+                    });
+                }
+            }
+            catch { }
+            return profiles;
+        }
+
+        private static string labelForProfile(string directoryName)
+        {
+            return directoryName == "Default" ? "기본 사용자" : "브라우저 사용자";
+        }
+
+        private static Dictionary<string, object> GetDictionary(Dictionary<string, object> source, string key)
+        {
+            object value;
+            return source != null && source.TryGetValue(key, out value) ? value as Dictionary<string, object> : null;
+        }
+
+        private static string GetString(Dictionary<string, object> source, string key)
+        {
+            object value;
+            return source != null && source.TryGetValue(key, out value) ? Convert.ToString(value) ?? "" : "";
+        }
+
+        private static bool GetBool(Dictionary<string, object> source, string key)
+        {
+            object value;
+            if (source == null || !source.TryGetValue(key, out value) || value == null) return false;
+            bool result;
+            return bool.TryParse(Convert.ToString(value), out result) && result;
+        }
+
+        private static void AppendProfileOrder(List<string> order, Dictionary<string, object> profileState, string key)
+        {
+            object raw;
+            if (profileState == null || !profileState.TryGetValue(key, out raw)) return;
+            object[] values = raw as object[];
+            if (values == null) return;
+            foreach (object value in values) AppendUnique(order, SafeProfileDirectory(Convert.ToString(value)));
+        }
+
+        private static void AppendUnique(List<string> order, string value)
+        {
+            if (!string.IsNullOrWhiteSpace(value) && !order.Contains(value)) order.Add(value);
+        }
+
+        private static string SafeProfileDirectory(string value)
+        {
+            string text = (value ?? "").Trim();
+            return Regex.IsMatch(text, @"^(Default|Profile [1-9][0-9]{0,5})$") ? text : "";
+        }
+
+        private static string CleanPublicText(string value, int maxLength)
+        {
+            string text = Regex.Replace(value ?? "", @"[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]", " ");
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+            return text.Length <= maxLength ? text : text.Substring(0, maxLength);
         }
     }
 
@@ -905,7 +1204,7 @@ namespace NasDriveSetup
             Controls.Add(openDrive);
 
             var openWeb = new Button { Text = "웹에서 관리", Location = new Point(218, 492), Size = new Size(150, 44), Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
-            openWeb.Click += (sender, args) => Program.StartInstalledAgent(agentExe, "--open-web --hidden-bootstrap");
+            openWeb.Click += (sender, args) => Program.OpenWebWithBrowserPicker(agentExe);
             Controls.Add(openWeb);
 
             logoutButton.Text = "로그아웃";
@@ -1037,7 +1336,7 @@ namespace NasDriveSetup
             openDriveItem.Click += (sender, args) => OpenDrive();
             accountActionItem.Click += (sender, args) => OpenControlCenter();
             var webItem = new ToolStripMenuItem("NAS 웹 열기");
-            webItem.Click += (sender, args) => Program.StartInstalledAgent(agentExe, "--open-web --hidden-bootstrap");
+            webItem.Click += (sender, args) => Program.OpenWebWithBrowserPicker(agentExe);
             var exitItem = new ToolStripMenuItem("NAS Drive 종료");
             exitItem.Click += (sender, args) => ExitNasDrive();
 
