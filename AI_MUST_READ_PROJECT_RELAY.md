@@ -507,3 +507,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
 - NAS 배포 binary hash는 현재 PC 설치본과 일치한다: Agent `6243338F3E11D816E247DB02725F9F7B4DCAF32899DCF7D98D36C77141FD1B18`, Setup/launcher `92BD9326F7B3B99A1C5908DBF8BBB283DDC409CE0DF6249C6DA399618D0BE5D5`.
 - 완료 경계: 종료·재시작·stale lock 복구와 서버 배포는 검증됐다. 현재 활성 로컬 profile은 이미 서버에서 revoked되어 `needs-relink`가 정상이다. 실제 `연결 해제 후 다시 로그인` 실행은 해당 profile과 DPAPI credential을 제거하므로 사용자에게 대상 동작을 다시 알리고 확인을 받은 뒤 진행한다.
+
+## 2026-08-30 상태 일관성 교정: PC 앱과 NAS 웹 PC 연동 상태
+
+- 사용자 질문/교정: PC에 설치된 NAS Drive가 표시하는 상태와 NAS 서버의 PC 연동 상태는 항상 같아야 하는 것 아닌지 확인했다.
+- 확인 결과: 같은 실제 관계를 가리켜야 한다는 요구는 맞지만 현재 1.10.14가 매 순간 동일 상태를 보장한다고 말할 수는 없다. 로컬 앱은 `agent-health.json`을 즉시 읽고 인증 403을 `needs-relink`로 바꾸며, 서버는 Agent heartbeat의 `lastSeenAt`과 `syncState`를 저장한다. 웹은 9초 heartbeat timeout과 15초 API polling을 사용하므로 정상 전이에도 짧은 시간차가 있다.
+- 네트워크 경계: NAS/네트워크가 끊긴 상태에서 사용자가 로컬 관계를 해제하면 서버는 그 사건을 즉시 받을 수 없다. 따라서 물리적으로 항상 동시 갱신은 불가능하지만, 웹이 오래된 상태를 `연결됨`으로 단정하지 않고 마지막 확인 시각·오프라인·로컬 해제 미반영을 명확히 구분하고 재연결 시 수렴시켜야 한다.
+- 상태 축: 계정 관계(`linked/revoked/needs-relink`), PC 접속(`online/offline`), 파일 동기화(`connecting/syncing/up-to-date/error/paused`), 신규 pairing(`pending/agent-detected/connected/expired`)은 서로 다른 축이다. 양쪽에서 같은 축의 의미는 일치해야 하지만 이 네 축을 한 문구로 합치면 안 된다.
+- 미완료: 서버 권위의 관계 상태와 로컬 상태를 공통 revision/event로 조정하고, 웹의 polling 지연과 오프라인 로컬 로그아웃 pending reconciliation을 표시·수렴시키는 E2E는 아직 구현되지 않았다. 이 보강 전에는 “양쪽 상태가 항상 같다”고 완료 보고하지 않는다.
