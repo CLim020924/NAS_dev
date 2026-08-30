@@ -640,3 +640,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 구현: `WebPickerActionButton`의 표시 문자열만 `BACK`으로 교체했다. 기존 라운드 외형, hover/pressed/focus, Click의 `ShowBrowserPage`, 한국어 접근성 이름 `브라우저 선택으로 돌아가기`는 그대로 유지한다. Agent/Setup과 서버 공개 version을 1.10.22로 올렸다.
 - 현재 PC 실화면 E2E: 최종 Agent/launcher를 보존 업데이트하고 실제 `NAS 웹에서 열기`의 Chrome 프로필 선택 화면에서 좌측 상단에 화살표 없는 `BACK`이 표시되는 것을 확인했다. 프로필 카드·취소 버튼과 3열 layout은 유지됐고 접근성 tree에서는 뒤로가기 단추가 한국어 AccessibleName으로 노출된다. 검증용 picker만 닫고 background launcher·Agent·Provider와 사용자 계정 자료는 유지했다.
 - 기록: workbook `Request_Archive`, `Patch_Log`, `Feature_Index`, `Do_Not_Break`, `Code_Map`을 1.10.22 기준으로 갱신하고 관련 범위 렌더와 formula error 0을 확인했다. 다음 단계는 자동 테스트, GitHub push, NAS 전체 테스트와 live 배포 검증이다.
+
+### 1.10.22 GitHub·NAS 최종 배포 검증
+
+- 기능·binary·workbook·relay commit `27e44c7`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- 로컬 desktop handoff/browser tests 4/4와 packaged Agent·Setup self-test를 통과했다. NAS에서는 Agent source self-test와 symlink 보안 경계를 포함한 backend tests 10/10을 통과했다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 HTTP 200이다.
+- NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `5D2095DAED0E7593B2AED249BBFB8FDB657704DBEEED75A6C1359F8F3D0297A5`, Setup/launcher SHA-256은 `3A88FC4E79C6FE703DD6B4D00584BA354B0B3AB824331DE53260C35E5FEC1EDB`다.
+- 최종 현재 PC는 launcher 1.10.22, health `up-to-date`, `needsRelink=false`이고 background launcher·Agent·Provider가 정상 실행 중이다. 사용자 파일·활성 credential은 보존됐다.
