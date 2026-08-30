@@ -432,3 +432,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 답변/조건: 시작 프롬프트를 새 GPT 대화에 붙여 넣고, 해당 GPT가 터미널·GitHub/SSH 접근 권한을 가진 Codex 작업 환경이면 저장소를 clone 또는 NAS SSH로 연 뒤 AGENTS.md의 필독 순서에 따라 릴레이·Tailscale handoff·Excel을 읽는다.
 - 한계: 일반 채팅만 가능한 GPT는 로컬 프로그램 설치, Git clone, SSH 실행을 직접 할 수 없다. 또한 private GitHub 저장소 인증과 Tailscale 로그인/UAC/SSH 공개키 최초 등록은 새 PC 또는 사용자의 승인이 필요하다.
 - 안전 원칙: Git 문서는 연결 정보를 설명하지만 Git 접근 권한·Tailnet 가입·SSH 권한을 자동 부여하지 않는다. 권한이 갖춰진 뒤에는 프롬프트가 설치·검증·메모리 확인 순서를 자동으로 이어가게 한다.
+
+## 2026-08-30 새 Windows PC NAS 개발 환경 연결
+
+- 사용자 요청: 새 Windows PC에서 Tailscale 설치, NAS SSH 연결, 프로젝트 메모리 확인과 서비스 검증까지 진행해 이 대화에서 NAS 개발을 이어갈 수 있게 구성한다.
+- 로컬 준비: Windows 11에서 Git과 OpenSSH Client를 확인하고 Tailscale 1.102.3을 공식 winget 패키지로 설치했다. 사용자가 Tailscale 계정 로그인을 완료했으며 새 장치 `chan`의 Tailscale IP는 `100.88.246.29`다.
+- 네트워크 검증: NAS `chanyoung`(`100.80.39.112`)에 Tailscale ping 2ms와 TCP 22 연결 성공을 확인했다. 공개 `https://filemanager-nas.com`도 HTTP 200이다.
+- SSH 구성: 이 PC 전용 ed25519 키와 `%USERPROFILE%/.ssh/config`의 `nas` alias를 구성하고 NAS `authorized_keys`에 공개키만 등록했다. 최초 키 생성 인수 오류로 서명이 거부된 중간 상태는 기존 키 전용 drop-in을 즉시 롤백해 복구했고, 실제 서명이 검증된 키의 로컬 암호를 정상화한 뒤 `limchanyoung`에만 `AuthenticationMethods publickey`를 적용했다. 비밀번호는 Windows 일회 입력창에서 SSH 프로세스에만 전달했으며 파일·로그·Git에 저장하지 않았다.
+- NAS 실제 검증: `whoami=limchanyoung`, `hostname=chanyoung`, 브랜치 `cleanup/git-tracking-2026-06-08`, clean worktree를 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 enabled+active, `msp-backend`는 online, 내부 `127.0.0.1:3030`은 HTTP 200이었다.
+- 프로젝트 메모리: `AGENTS.md`, 이 릴레이, 다른 PC Tailscale handoff, 메모리 정책과 workbook의 `README`, `Memory_Process`, `Do_Not_Break`, `Feature_Index`, `Relation_Map`, `Network_Config`를 확인했다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+- 최종 SSH 검증: 새 프로세스에서 `ssh -o BatchMode=yes nas`가 비밀번호 없이 성공했다. 해당 사용자에 대한 유효 정책은 `pubkeyauthentication yes`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `authenticationmethods publickey`다. 실제 코드 변경 요청은 NAS worktree 상태를 다시 확인한 뒤 진행한다.
