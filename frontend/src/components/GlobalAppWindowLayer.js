@@ -9,6 +9,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Rnd } from 'react-rnd';
 import { useWindows } from '../contexts/WindowContext';
 import MeetingApp from './MeetingApp';
+import DocumentStudio from './DocumentStudio/DocumentStudio';
 
 class AppWindowErrorBoundary extends React.Component {
   constructor(props) {
@@ -67,6 +68,9 @@ const GlobalAppWindowLayer = () => {
   const renderAppContent = (win) => {
     if (win.appId === 'meeting') {
       return <MeetingApp inWindow initialRoomCode={win.payload?.roomCode} autoJoin={!!win.payload?.autoJoin} conversationId={win.payload?.conversationId || null} />;
+    }
+    if (win.appId === 'document-studio') {
+      return <DocumentStudio />;
     }
     return null;
   };

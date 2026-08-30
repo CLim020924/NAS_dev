@@ -6,11 +6,13 @@ import HistoryIcon from '@mui/icons-material/History';
 import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
 import SettingsIcon from '@mui/icons-material/Settings';
 import VideocamIcon from '@mui/icons-material/Videocam';
+import AutoAwesomeMotionIcon from '@mui/icons-material/AutoAwesomeMotion';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useWindows } from '../contexts/WindowContext';
 import socket from '../socket';
 import MeetingApp from './MeetingApp';
+import DocumentStudio from './DocumentStudio/DocumentStudio';
 
 const appOpenMode = () => localStorage.getItem('platform_app_open_mode') || 'window';
 const DEVICE_OFFLINE_AFTER_MS = 9000;
@@ -370,6 +372,7 @@ function ServicePlatform() {
       { id: 'files', title: '파일 관리자', icon: FolderIcon, route: '/nas', color: theme.palette.primary.main },
       { id: 'pc-sync', title: pcLinkedHere ? (pcLiveState === 'up-to-date' ? 'NAS Drive 열기' : `NAS Drive · ${pcStatus.label}`) : (pcPairingActive ? pairingStatus.label : 'PC 연동'), icon: DesktopWindowsIcon, color: pcLinkedHere ? pcStatus.iconColor : (pcPairingActive ? theme.palette.info.main : theme.palette.text.disabled), statusState: pcLinkedHere ? pcLiveState : (pcPairingActive ? 'connecting' : 'not-linked'), statusLabel: pcLinkedHere ? pcStatus.label : (pairingStatus?.label || '설치되지 않음') },
       { id: 'meeting', title: '화상회의', icon: VideocamIcon, component: MeetingApp, color: theme.palette.info.main, width: 920, height: 640 },
+      { id: 'document-studio', title: '문서 스튜디오', icon: AutoAwesomeMotionIcon, component: DocumentStudio, color: theme.palette.secondary.main, width: 1120, height: 760 },
       { id: 'settings', title: '설정', icon: SettingsIcon, route: '/settings', color: theme.palette.text.secondary }
     ];
 
@@ -383,6 +386,7 @@ function ServicePlatform() {
     theme.palette.error.main,
     theme.palette.info.main,
     theme.palette.primary.main,
+    theme.palette.secondary.main,
     pcLinkedHere,
     pcLiveState,
     pcPairingActive,
@@ -421,7 +425,7 @@ function ServicePlatform() {
                 setInlineApp(null);
               }}
             />
-          ) : null}
+          ) : inlineApp.id === 'document-studio' ? <DocumentStudio /> : null}
         </Box>
       </Box>
     );

@@ -54,6 +54,11 @@ const {
 } = require('./fileVersioning');
 const { verifyPassword } = require('./passwordSecurity');
 const { createDesktopWebSession } = require('./desktopWebSession');
+const {
+  getDocumentStudioCapabilities,
+  processDocumentStudioJob,
+  sanitizeFileName: sanitizeDocumentStudioFileName
+} = require('./documentStudioService');
 
 const router = express.Router();
 
@@ -1202,6 +1207,26 @@ const toNasRelativePath = (basePath, targetPath) => {
   return rel ? `/${rel}` : '/';
 };
 
+const getUniqueDocumentStudioTarget = (outputDir, requestedName) => {
+  const safeName = sanitizeDocumentStudioFileName(requestedName, '완료.pdf');
+  const parsed = path.parse(safeName);
+  let candidate = path.join(outputDir, safeName);
+  let index = 2;
+  while (fs.existsSync(candidate)) candidate = path.join(outputDir, `${parsed.name} (${index++})${parsed.ext}`);
+  return candidate;
+};
+
+const publishDocumentStudioResult = (sourcePath, targetPath) => {
+  const tempName = `.${path.basename(targetPath)}.${crypto.randomUUID()}.tmp`;
+  const tempPath = path.join(path.dirname(targetPath), tempName);
+  try {
+    fs.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+    fs.renameSync(tempPath, targetPath);
+  } finally {
+    safeRmSync(tempPath);
+  }
+};
+
 const searchFilesRecursive = (basePath, query) => {
   const needle = String(query || '').trim().toLowerCase();
   if (!needle) return [];
@@ -1307,6 +1332,68 @@ router.get('/storage/path', verifyToken, async (req, res) => {
     });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message || '경로 용량을 계산하지 못했습니다.' });
+  }
+});
+
+router.get('/document-studio/capabilities', verifyToken, (req, res) => {
+  res.json(getDocumentStudioCapabilities());
+});
+
+router.post('/document-studio/run', verifyToken, async (req, res) => {
+  let workspaceDir = '';
+  try {
+    const sourceRows = Array.isArray(req.body?.sources) ? req.body.sources : [];
+    const { basePath } = getValidatedPath(req.user, '/');
+    const sources = sourceRows.map((source) => {
+      const { targetPath } = getValidatedPath(req.user, source?.fullPath || '');
+      assertRealPathInside(basePath, targetPath);
+      if (!fs.existsSync(targetPath)) throw Object.assign(new Error(`${source?.name || '파일'}을 찾을 수 없습니다.`), { status: 404 });
+      return { path: targetPath, name: source?.name || path.basename(targetPath) };
+    });
+    const requestedOutputPath = req.body?.outputPath || '/문서 스튜디오/완료 파일';
+    const { targetPath: outputDir } = getValidatedPath(req.user, requestedOutputPath);
+    assertRealPathInside(basePath, outputDir);
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const studioTmpRoot = path.join(WEB_INCOMING_ROOT, 'document-studio');
+    fs.mkdirSync(studioTmpRoot, { recursive: true });
+    workspaceDir = fs.mkdtempSync(path.join(studioTmpRoot, 'job-'));
+    const processed = await processDocumentStudioJob({
+      mode: req.body?.mode,
+      sources,
+      workspaceDir,
+      outputName: req.body?.outputName,
+    });
+
+    const totalOutputBytes = processed.reduce((sum, item) => sum + fs.statSync(item.path).size, 0);
+    await assertQuotaAvailable(req.user, totalOutputBytes, outputDir);
+    const targets = processed.map((item) => ({ ...item, targetPath: getUniqueDocumentStudioTarget(outputDir, item.name) }));
+    for (const item of targets) {
+      publishDocumentStudioResult(item.path, item.targetPath);
+      invalidateUsageCache(item.targetPath);
+      appendActivity(basePath, {
+        type: 'file-created',
+        path: toNasRelativePath(basePath, item.targetPath),
+        actor: getActivityActor(req.user),
+        source: 'document-studio'
+      });
+    }
+
+    return res.json({
+      success: true,
+      outputPath: toNasRelativePath(basePath, outputDir),
+      results: targets.map((item) => ({
+        name: path.basename(item.targetPath),
+        fullPath: toNasRelativePath(basePath, item.targetPath),
+        size: fs.statSync(item.targetPath).size,
+        compatibility: item.compatibility,
+        sourceName: item.sourceName || null,
+      })),
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || '문서 작업에 실패했습니다.' });
+  } finally {
+    if (workspaceDir) safeRmSync(workspaceDir);
   }
 });
 
