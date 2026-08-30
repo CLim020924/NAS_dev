@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Box, Typography, Button, useTheme, useMediaQuery } from '@mui/material';
+import { Box, Typography, Button, IconButton, useTheme, useMediaQuery } from '@mui/material';
 import axios from 'axios';
 import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
 import PrintIcon from '@mui/icons-material/Print';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -15,6 +18,7 @@ import { DocumentEditor } from "@onlyoffice/document-editor-react";
 import { useWindows } from '../../contexts/WindowContext';
 import RhwpDocumentViewer from '../shared/RhwpDocumentViewer';
 import { transferUrl } from '../../transferBaseUrl';
+import { getPdfZoomKeyDirection, stepPdfZoom } from './pdfZoom';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -29,6 +33,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const [pdfPageCount, setPdfPageCount] = useState(0);
   const [pdfError, setPdfError] = useState('');
   const [pdfPageWidth, setPdfPageWidth] = useState(720);
+  const [pdfZoom, setPdfZoom] = useState(1);
   const [officeAccessToken, setOfficeAccessToken] = useState('');
   const [officeDocumentRevisionKey, setOfficeDocumentRevisionKey] = useState('');
   const [officeAccessError, setOfficeAccessError] = useState('');
@@ -209,6 +214,17 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
       const key = e.key.toLowerCase();
       if (!isCtrl) return;
 
+      if (isPDF) {
+        const zoomDirection = getPdfZoomKeyDirection(e.key);
+        if (zoomDirection !== 0 || key === '0') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (key === '0') setPdfZoom(1);
+          else setPdfZoom((value) => stepPdfZoom(value, zoomDirection));
+          return;
+        }
+      }
+
       if (isOffice && editorRef.current && (key === 'p' || key === 's')) {
         e.preventDefault();
         e.stopPropagation();
@@ -255,6 +271,8 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   useEffect(() => {
     if (!isPDF) return undefined;
 
+    setPdfZoom(1);
+
     const updatePdfWidth = () => {
       const width = pdfContainerRef.current?.clientWidth || 720;
       setPdfPageWidth(Math.max(260, Math.min(960, width - 32)));
@@ -267,6 +285,21 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
       window.removeEventListener('resize', updatePdfWidth);
       clearTimeout(timer);
     };
+  }, [isPDF, win.id]);
+
+  useEffect(() => {
+    const container = pdfContainerRef.current;
+    if (!isPDF || !container) return undefined;
+
+    const handlePdfWheel = (event) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPdfZoom((value) => stepPdfZoom(value, event.deltaY < 0 ? 1 : -1));
+    };
+
+    container.addEventListener('wheel', handlePdfWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handlePdfWheel);
   }, [isPDF, win.id]);
 
   useEffect(() => {
@@ -421,8 +454,10 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
                   mb: 2,
                   display: 'flex',
                   justifyContent: 'center',
+                  width: 'fit-content',
+                  minWidth: '100%',
                   '& canvas': {
-                    maxWidth: '100%',
+                    maxWidth: pdfZoom <= 1 ? '100%' : 'none',
                     height: 'auto !important',
                     boxShadow: theme.palette.mode === 'dark'
                       ? '0 16px 40px rgba(0,0,0,0.35)'
@@ -432,7 +467,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
               >
                 <Page
                   pageNumber={index + 1}
-                  width={pdfPageWidth}
+                  width={Math.round(pdfPageWidth * pdfZoom)}
                   renderAnnotationLayer
                   renderTextLayer
                 />
@@ -449,19 +484,34 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', backgroundColor: (isImage || isVideo || isAudio) ? '#000' : theme.palette.background.paper }}>
-      {(isOffice || isTextEditable) && (
+      {(isOffice || isTextEditable || isPDF) && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 0.5, borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: theme.palette.mode === 'dark' ? '#1e293b' : '#f8fafc', zIndex: 10 }}>
-          <Button
-            size="small"
-            variant="contained"
-            startIcon={<SaveIcon />}
-            onClick={handleNasSave}
-            disabled={isOffice ? (isSaving || ext === 'pdf') : mode !== 'edit'}
-          >
-            {isOffice && isSaving ? '저장 중...' : '저장'}
-          </Button>
+          {!isPDF && (
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<SaveIcon />}
+              onClick={handleNasSave}
+              disabled={isOffice ? isSaving : mode !== 'edit'}
+            >
+              {isOffice && isSaving ? '저장 중...' : '저장'}
+            </Button>
+          )}
 
-          {isOffice ? (
+          {isPDF ? (
+            <>
+              <IconButton size="small" onClick={() => setPdfZoom((value) => stepPdfZoom(value, -1))} aria-label="PDF 축소">
+                <ZoomOutIcon fontSize="small" />
+              </IconButton>
+              <Typography variant="caption" sx={{ minWidth: 48, textAlign: 'center', fontWeight: 700 }}>{Math.round(pdfZoom * 100)}%</Typography>
+              <IconButton size="small" onClick={() => setPdfZoom((value) => stepPdfZoom(value, 1))} aria-label="PDF 확대">
+                <ZoomInIcon fontSize="small" />
+              </IconButton>
+              <IconButton size="small" onClick={() => setPdfZoom(1)} aria-label="PDF 원래 크기">
+                <RestartAltIcon fontSize="small" />
+              </IconButton>
+            </>
+          ) : isOffice ? (
             <Button size="small" variant="outlined" startIcon={<PrintIcon />} onClick={handleNasPrint}>인쇄</Button>
           ) : (
             <Button

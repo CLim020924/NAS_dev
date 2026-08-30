@@ -664,3 +664,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - live `/var/www/html`에는 hashed asset을 먼저 복사하고 `index.html`을 마지막에 원자 교체했다. 내부·공개 index는 모두 `main.18c5b581.js`를 가리키며 공개 Worker 응답은 4.8.69를 포함하고 5.6.205를 포함하지 않는다. index는 no-store/no-cache이고 Worker는 max-age=0이라 오래된 혼합 cache를 지속시키지 않는다.
 - 실제 로그인 Chrome을 새로고침한 뒤 같은 `합친 PDF.pdf`를 다시 열었다. API/Worker 오류와 PDF 로드 실패 문구는 0건이고 PDF page canvas 11개와 text layer 내용이 렌더됐다. PDF 원본은 변경하지 않았다.
 - NAS backend tests 10/10을 통과했다. `msp-backend`는 변경이 없어 불필요한 재시작을 하지 않았고 계속 online이다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, 내부 3030·공개 HTTPS는 HTTP 200이며 NAS worktree는 clean이다.
+
+## 2026-08-30 PDF 창 내부 확대/축소 격리
+
+- 사용자 보고: NAS 작업공간에서 PDF 파일 창을 연 뒤 `Ctrl+마우스 휠` 또는 `+`를 사용하면 PDF 문서만 확대되어야 하지만 브라우저 페이지 전체 배율이 바뀌는 문제가 남아 있었다.
+- 원인: `FileViewer`의 PDF 렌더러에는 창 인스턴스별 배율 상태와 확대 UI가 없었고, 브라우저 기본 `Ctrl+휠`·`Ctrl++/-` 동작을 취소하는 경계도 없었다. 따라서 입력이 PDF canvas가 아니라 최상위 웹페이지 확대에 전달됐다.
+- 구현: 각 PDF `FileViewer` 인스턴스에 독립적인 50~300% 배율 상태를 추가했다. PDF 창에 포커스가 있을 때 `Ctrl/Cmd++`, `Ctrl/Cmd+-`, `Ctrl/Cmd+0`을 가로채고, PDF scroll container의 `Ctrl/Cmd+휠`은 non-passive listener에서 기본 페이지 확대와 상위 전파를 막은 뒤 해당 PDF만 15% 단위로 조절한다. 상단에는 축소, 현재 백분율, 확대, 원래 크기 버튼을 제공한다. 100% 초과 canvas는 컨테이너를 넓혀 창 내부 스크롤로 탐색하고, 파일이나 창이 바뀌면 100%로 초기화한다.
+- 회귀 경계: 일반 휠 스크롤, PDF 이외 파일의 기존 저장 단축키, 공유 링크 미리보기, 브라우저 전역 배율은 변경하지 않는다. 배율 계산·키 식별·상하한 단위 테스트 2/2를 통과했고 workbook의 Request/Patch/Feature/Office_Viewers/Do_Not_Break/Code_Map을 갱신해 formula error 0과 관련 범위 렌더를 확인했다. 다음 단계는 GitHub push, NAS production build·정적 배포, 실제 Chrome에서 버튼·키보드·Ctrl+휠과 페이지 배율 불변을 검증하는 것이다.
