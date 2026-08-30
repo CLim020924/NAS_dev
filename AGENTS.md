@@ -152,9 +152,11 @@ diagnosis, implementation, verification, deployment, and interrupted work:
    private keys, or other credentials into the relay, workbook, or Git history.
 4. For implementation/fix/config tasks, also update `Request_Archive`,
    `Patch_Log`, and any related workbook sheets before completion.
-5. When the user asks to save or upload the work, include the relay/workbook
-   updates in the same Git commit as the related code whenever practical.
-6. If a request is interrupted, record the exact completed boundary and mark
+5. At the end of every completed request, commit and push the sanitized relay
+   entry to the active project branch unless the user explicitly says not to.
+   If code or workbook changes exist, include them in the same commit; if not,
+   create a relay-only commit so questions and diagnoses remain traceable.
+6. If a request is interrupted, record and push the exact completed boundary and mark
    remaining work as pending instead of claiming completion.
 
 ## Verification Rules

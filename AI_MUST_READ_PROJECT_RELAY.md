@@ -391,4 +391,4 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 실제 검증: 서버에만 임시 파일을 생성해 Windows placeholder 생성, 열기 hydration, pin, 공간 확보 dehydration, 재열기, 서버 삭제의 로컬 반영을 순서대로 확인했다. 테스트 자료는 사용자 루트에서 제거됐고 Agent health는 `up-to-date`로 복귀했다. 현재 PC 계정 설정 해시는 업데이트 전후 동일하며 HKCU 시작 프로그램과 launcher/Agent/Provider가 유지된다.
 - NAS 검증: Agent/Setup/Provider self-test, backend tests 8/8, node/diff check, PM2 restart/save, 내부 3030·공개 HTTPS 200, 필수 systemd 6개 enabled+active를 확인했다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
 - 프로젝트 메모리: `Patch_Log`, `Request_Archive`, `Do_Not_Break`, `Feature_Index`, `Relation_Map`, `Code_Map`에 1.10.11 작업과 재발 방지 규칙을 기록했고 수식 오류 0 및 한글 렌더를 재검수했다.
-- 앞으로의 규칙: 매 요청마다 이 문서에 날짜, 요청 요지, 진행 내용, 검증, 미완료 항목, 다음 안전 조치를 누적한다. 구현·수정·설정 작업은 Excel 관련 시트도 함께 갱신한다. 사용자가 저장/업로드를 지시하면 관련 코드와 릴레이/워크북을 같은 Git 커밋에 포함한다. 중단된 작업은 완료로 과장하지 않고 정확한 중단 경계를 남긴다.
+- 앞으로의 규칙: 매 요청마다 이 문서에 날짜, 요청 요지, 진행 내용, 검증, 미완료 항목, 다음 안전 조치를 누적한다. 구현·수정·설정 작업은 Excel 관련 시트도 함께 갱신한다. 매 요청 종료 시 사용자가 명시적으로 금지하지 않는 한 활성 브랜치에 커밋·푸시하며, 코드 변경이 없으면 릴레이 전용 커밋을 만든다. 코드/워크북 변경이 있으면 관련 기록을 같은 커밋에 포함한다. 중단된 작업도 완료로 과장하지 않고 정확한 중단 경계를 기록·푸시한다.
