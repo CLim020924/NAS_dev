@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.21.0")]
-[assembly: AssemblyFileVersion("1.10.21.0")]
+[assembly: AssemblyVersion("1.10.22.0")]
+[assembly: AssemblyFileVersion("1.10.22.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.21";
+        internal const string ProductVersion = "1.10.22";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
@@ -820,7 +820,7 @@ namespace NasDriveSetup
             cards.BackColor = Color.White;
             Controls.Add(cards);
 
-            backButton.Text = "←  브라우저";
+            backButton.Text = "BACK";
             backButton.AccessibleName = "브라우저 선택으로 돌아가기";
             backButton.Location = new Point(30, 25);
             backButton.Size = new Size(126, 36);

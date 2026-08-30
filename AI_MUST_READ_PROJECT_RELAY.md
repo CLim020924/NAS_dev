@@ -633,3 +633,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030과 공개 HTTPS는 HTTP 200이다.
 - NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `478C5CFD89F8DF38D1925E3C7DF8A67138888FC44E20DA011F661A5C0A3FCA1C`, Setup/launcher SHA-256은 `2C412B82F7C268A1965E45FA7ACF6C9C16D48DF0816A5E1E8314F47D55ECB491`이다.
 - 최종 현재 PC 상태는 picker 실화면 왕복 검증 완료, 1.10.21 open-web 진단 `opened/chrome`, health `up-to-date`, `needsRelink=false`다. 사용자 파일·활성 DPAPI credential은 보존됐다.
+
+## 2026-08-30 NAS Drive 1.10.22 picker 뒤로가기 `BACK` 단순화
+
+- 사용자 교정: 프로필 선택 화면의 `← 브라우저`가 여전히 마음에 들지 않으므로 화살표를 제거하고 `BACK`이라고만 심플하게 표시한다.
+- 구현: `WebPickerActionButton`의 표시 문자열만 `BACK`으로 교체했다. 기존 라운드 외형, hover/pressed/focus, Click의 `ShowBrowserPage`, 한국어 접근성 이름 `브라우저 선택으로 돌아가기`는 그대로 유지한다. Agent/Setup과 서버 공개 version을 1.10.22로 올렸다.
+- 현재 PC 실화면 E2E: 최종 Agent/launcher를 보존 업데이트하고 실제 `NAS 웹에서 열기`의 Chrome 프로필 선택 화면에서 좌측 상단에 화살표 없는 `BACK`이 표시되는 것을 확인했다. 프로필 카드·취소 버튼과 3열 layout은 유지됐고 접근성 tree에서는 뒤로가기 단추가 한국어 AccessibleName으로 노출된다. 검증용 picker만 닫고 background launcher·Agent·Provider와 사용자 계정 자료는 유지했다.
+- 기록: workbook `Request_Archive`, `Patch_Log`, `Feature_Index`, `Do_Not_Break`, `Code_Map`을 1.10.22 기준으로 갱신하고 관련 범위 렌더와 formula error 0을 확인했다. 다음 단계는 자동 테스트, GitHub push, NAS 전체 테스트와 live 배포 검증이다.
