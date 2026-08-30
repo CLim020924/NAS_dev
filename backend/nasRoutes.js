@@ -112,7 +112,8 @@ const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.10.14';
+const WINDOWS_AGENT_VERSION = '1.10.15';
+const DEVICE_OFFLINE_AFTER_MS = 9 * 1000;
 let windowsAgentBuildCache = null;
 const agentMutationWindows = new Map();
 const agentLoginAttempts = new Map();
@@ -134,13 +135,12 @@ const assertAgentMutationAllowed = (device, operation) => {
   const writes = previous.filter(event => event.operation === 'write').length;
   const deletes = previous.filter(event => event.operation === 'delete').length;
   if (writes <= 500 && deletes <= 50) return;
-  const updated = {
-    ...device,
+  const updated = advanceDeviceState(device, {
     syncPaused: true,
     syncState: 'error',
     lastError: '비정상적으로 많은 파일 변경을 감지해 데이터 보호를 위해 자동으로 중지했습니다.',
     pausedAt: new Date().toISOString()
-  };
+  });
   updateLinkedDeviceRecord(updated);
   const err = new Error(updated.lastError);
   err.status = 423;
@@ -355,32 +355,68 @@ const getDeviceConnectionState = (device = {}) => {
   if (device.status === 'revoked' || device.revokedAt) return 'revoked';
   const lastSeenMs = new Date(device.lastSeenAt || 0).getTime();
   if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return 'offline';
-  return Date.now() - lastSeenMs <= 9 * 1000 ? 'online' : 'offline';
+  return Date.now() - lastSeenMs <= DEVICE_OFFLINE_AFTER_MS ? 'online' : 'offline';
 };
 
-const sanitizeDeviceForResponse = (device = {}) => ({
-  deviceId: device.deviceId,
-  deviceName: device.deviceName || device.name || '',
-  osType: device.osType || 'unknown',
-  status: device.status || 'unknown',
-  connectionState: getDeviceConnectionState(device),
-  syncState: device.syncPaused ? 'paused' : (device.syncState || 'unknown'),
-  syncPaused: !!device.syncPaused,
-  lastError: device.lastError || '',
-  syncMode: device.syncMode || 'safe-bidirectional',
-  createdAt: device.createdAt || null,
-  lastSeenAt: device.lastSeenAt || null,
-  revokedAt: device.revokedAt || null,
-  syncRoots: normalizeDeviceSyncRoots(device).map(root => ({
-    syncRootId: root.syncRootId,
-    name: root.name,
-    kind: root.kind || 'folder-sync',
-    localPath: root.localPath || '',
-    linkedNasPath: root.linkedNasPath || '',
-    createdAt: root.createdAt || null,
-    lastSeenAt: root.lastSeenAt || null
-  }))
-});
+const getDeviceReason = (device = {}) => {
+  const connectionState = getDeviceConnectionState(device);
+  if (connectionState === 'revoked') return { code: 'relationship-revoked', label: '이 계정과 PC의 연결이 해제되었습니다.' };
+  if (connectionState === 'offline') return { code: 'pc-heartbeat-timeout', label: 'PC 상태 신호가 끊겼습니다. PC 전원·인터넷·NAS Drive 실행 상태를 확인하세요.' };
+  if (device.syncPaused || device.syncState === 'paused') return { code: 'sync-paused', label: '파일 동기화가 일시 중지되었습니다.' };
+  if (device.syncState === 'error') return { code: 'sync-error', label: device.lastError || '파일 동기화 오류가 발생했습니다.' };
+  if (device.syncState === 'connecting') return { code: 'connecting', label: 'PC와 계정 연결을 확인하고 있습니다.' };
+  if (device.syncState === 'syncing') return { code: 'syncing', label: '파일 변경 사항을 동기화하고 있습니다.' };
+  return { code: 'online', label: 'PC가 온라인이며 계정 연결이 유효합니다.' };
+};
+
+const advanceDeviceState = (device = {}, patch = {}, now = new Date().toISOString()) => {
+  const previousSignature = JSON.stringify([
+    device.status || '', device.syncState || '', !!device.syncPaused, device.lastError || '', device.revokedAt || ''
+  ]);
+  const updated = { ...device, ...patch };
+  const nextSignature = JSON.stringify([
+    updated.status || '', updated.syncState || '', !!updated.syncPaused, updated.lastError || '', updated.revokedAt || ''
+  ]);
+  return {
+    ...updated,
+    stateRevision: Math.max(0, Number(device.stateRevision || 0)) + 1,
+    stateChangedAt: previousSignature === nextSignature ? (device.stateChangedAt || now) : now
+  };
+};
+
+const sanitizeDeviceForResponse = (device = {}) => {
+  const reason = getDeviceReason(device);
+  return {
+    deviceId: device.deviceId,
+    deviceName: device.deviceName || device.name || '',
+    osType: device.osType || 'unknown',
+    status: device.status || 'unknown',
+    relationshipState: device.status === 'revoked' || device.revokedAt ? 'revoked' : 'linked',
+    connectionState: getDeviceConnectionState(device),
+    syncState: device.syncPaused ? 'paused' : (device.syncState || 'unknown'),
+    syncPaused: !!device.syncPaused,
+    lastError: device.lastError || '',
+    reasonCode: reason.code,
+    reasonLabel: reason.label,
+    stateRevision: Math.max(0, Number(device.stateRevision || 0)),
+    stateChangedAt: device.stateChangedAt || device.lastSeenAt || device.createdAt || null,
+    lastConfirmedAt: device.lastSeenAt || null,
+    offlineAfterMs: DEVICE_OFFLINE_AFTER_MS,
+    syncMode: device.syncMode || 'safe-bidirectional',
+    createdAt: device.createdAt || null,
+    lastSeenAt: device.lastSeenAt || null,
+    revokedAt: device.revokedAt || null,
+    syncRoots: normalizeDeviceSyncRoots(device).map(root => ({
+      syncRootId: root.syncRootId,
+      name: root.name,
+      kind: root.kind || 'folder-sync',
+      localPath: root.localPath || '',
+      linkedNasPath: root.linkedNasPath || '',
+      createdAt: root.createdAt || null,
+      lastSeenAt: root.lastSeenAt || null
+    }))
+  };
+};
 
 const emitDeviceStatus = (req, device) => {
   const io = req?.app?.get?.('io');
@@ -2392,7 +2428,7 @@ router.get('/devices', verifyToken, (req, res) => {
     const devices = readJsonArrayFile(LINKED_DEVICES_FILE)
       .filter(device => device.ownerKey === ownerKey)
       .map(sanitizeDeviceForResponse);
-    return res.json({ success: true, devices });
+    return res.json({ success: true, devices, serverTime: new Date().toISOString(), offlineAfterMs: DEVICE_OFFLINE_AFTER_MS });
   } catch (err) {
     return res.status(500).json({ error: err.message || '등록 장치 조회 실패' });
   }
@@ -2407,12 +2443,11 @@ router.delete('/devices/:deviceId', verifyToken, (req, res) => {
     if (idx < 0) return res.status(404).json({ error: '등록 장치를 찾을 수 없습니다.' });
 
     const revokedAt = new Date().toISOString();
-    devices[idx] = {
-      ...devices[idx],
+    devices[idx] = advanceDeviceState(devices[idx], {
       status: 'revoked',
       revokedAt,
       agentTokenHash: null
-    };
+    }, revokedAt);
     writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
     try { writeLinkedDeviceMeta(devices[idx]); } catch (err) {}
     emitDeviceStatus(req, devices[idx]);
@@ -2440,13 +2475,12 @@ router.patch('/devices/:deviceId/sync', verifyToken, express.json(), (req, res) 
     const idx = devices.findIndex(device => device.deviceId === deviceId && device.ownerKey === ownerKey && device.status !== 'revoked');
     if (idx < 0) return res.status(404).json({ error: '등록 장치를 찾을 수 없습니다.' });
     const now = new Date().toISOString();
-    devices[idx] = {
-      ...devices[idx],
+    devices[idx] = advanceDeviceState(devices[idx], {
       syncPaused: action === 'pause',
       syncState: action === 'pause' ? 'paused' : 'pending',
       pausedAt: action === 'pause' ? now : null,
       lastError: action === 'resume' ? '' : (devices[idx].lastError || '')
-    };
+    }, now);
     writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
     if (action === 'resume') agentMutationWindows.delete(deviceId);
     emitDeviceStatus(req, devices[idx]);
@@ -3380,14 +3414,13 @@ router.post('/devices/agent/logout', express.json({ limit: '8kb' }), (req, res) 
     if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
 
     const revokedAt = new Date().toISOString();
-    const revoked = {
-      ...device,
+    const revoked = advanceDeviceState(device, {
       status: 'revoked',
       revokedAt,
       agentTokenHash: null,
       syncState: 'signed-out',
       lastError: ''
-    };
+    }, revokedAt);
     updateLinkedDeviceRecord(revoked);
     try { writeLinkedDeviceMeta(revoked); } catch {}
     emitDeviceStatus(req, revoked);
@@ -3502,15 +3535,14 @@ router.post('/devices/agent/register', (req, res) => {
       fileCount: Number(req.body?.syncRootFileCount || 0),
       folderCount: Number(req.body?.syncRootFolderCount || 0)
       });
-    device = {
-      ...rootResult.device,
+    device = advanceDeviceState(rootResult.device, {
       agentTokenHash: device.agentTokenHash,
       lastSeenAt: now,
       status: 'connected',
       revokedAt: null,
       syncState: 'connecting',
       lastError: ''
-    };
+    }, now);
     const syncRoot = rootResult.syncRoot;
 
     // 폴더 안 meta 업데이트
@@ -3684,12 +3716,12 @@ router.post('/devices/agent/heartbeat', express.json(), (req, res) => {
     if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
     const requestedState = String(req.body?.syncState || 'idle');
     const allowedState = ['idle', 'connecting', 'syncing', 'up-to-date', 'paused', 'offline', 'error'].includes(requestedState) ? requestedState : 'idle';
-    const updated = {
-      ...device,
-      lastSeenAt: new Date().toISOString(),
+    const now = new Date().toISOString();
+    const updated = advanceDeviceState(device, {
+      lastSeenAt: now,
       syncState: device.syncPaused ? 'paused' : allowedState,
       lastError: String(req.body?.lastError || '').slice(0, 500)
-    };
+    }, now);
     updateLinkedDeviceRecord(updated);
     emitDeviceStatus(req, updated);
     return res.json({ success: true, commands: { paused: !!updated.syncPaused }, device: sanitizeDeviceForResponse(updated) });

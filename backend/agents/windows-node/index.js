@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.14';
+const AGENT_VERSION = '1.10.15';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -24,7 +24,7 @@ const CONFIG_FILE = path.join(STATE_DIR, 'agent-config.json');
 const LEGACY_TOKEN_FILE = path.join(STATE_DIR, 'agent-token.dpapi');
 const PROVIDER_ASSET = path.join(__dirname, 'assets', 'NAS-Drive-Provider.exe');
 const ICON_ASSET = path.join(__dirname, 'assets', 'nas-drive.ico');
-const PROVIDER_VERSION = '1.4.2';
+const PROVIDER_VERSION = '1.4.3';
 const PERSONAL_DRIVE_DESKTOP_INI_MARKER = '; NAS Drive managed icon v1';
 const PERSONAL_DRIVE_WEB_SHORTCUT_MARKER = '; NAS Drive managed web shortcut v1';
 const PERSONAL_DRIVE_WEB_SHORTCUT_NAME = 'NAS Drive 웹 파일관리.lnk';
@@ -226,6 +226,72 @@ function refreshInstalledBrandAssets() {
   if (fileSha256(INSTALLED_ICON) !== BRAND_ICON_SHA256) {
     throw new Error('NAS Drive icon asset verification failed.');
   }
+  ensureStatusIcons();
+}
+
+const EXPLORER_STATUS_COLORS = {
+  'up-to-date': [25, 118, 210],
+  connecting: [2, 136, 209],
+  syncing: [2, 136, 209],
+  offline: [237, 139, 0],
+  paused: [117, 117, 117],
+  'needs-relink': [211, 47, 47],
+  updating: [94, 53, 177],
+  error: [211, 47, 47]
+};
+
+function createStatusIconBuffer(rgb) {
+  const size = 32;
+  const rowBytes = size * 4;
+  const xor = Buffer.alloc(rowBytes * size);
+  const mask = Buffer.alloc(4 * size);
+  const setPixel = (x, y, r, g, b, a = 255) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    const row = size - 1 - y;
+    const offset = row * rowBytes + x * 4;
+    xor[offset] = b; xor[offset + 1] = g; xor[offset + 2] = r; xor[offset + 3] = a;
+  };
+  for (let y = 7; y <= 24; y += 1) {
+    for (let x = 3; x <= 27; x += 1) {
+      const cloud = ((x - 12) ** 2 + (y - 15) ** 2 <= 75)
+        || ((x - 20) ** 2 + (y - 13) ** 2 <= 48)
+        || (x >= 6 && x <= 25 && y >= 14 && y <= 24);
+      if (cloud) setPixel(x, y, 42, 99, 184, 255);
+    }
+  }
+  for (let y = 19; y <= 31; y += 1) {
+    for (let x = 19; x <= 31; x += 1) {
+      const distance = (x - 25) ** 2 + (y - 25) ** 2;
+      if (distance <= 46) setPixel(x, y, 255, 255, 255, 255);
+      if (distance <= 34) setPixel(x, y, rgb[0], rgb[1], rgb[2], 255);
+    }
+  }
+  const header = Buffer.alloc(40);
+  header.writeUInt32LE(40, 0);
+  header.writeInt32LE(size, 4);
+  header.writeInt32LE(size * 2, 8);
+  header.writeUInt16LE(1, 12);
+  header.writeUInt16LE(32, 14);
+  header.writeUInt32LE(xor.length + mask.length, 20);
+  const image = Buffer.concat([header, xor, mask]);
+  const icon = Buffer.alloc(22);
+  icon.writeUInt16LE(0, 0);
+  icon.writeUInt16LE(1, 2);
+  icon.writeUInt16LE(1, 4);
+  icon[6] = size; icon[7] = size;
+  icon.writeUInt16LE(1, 10);
+  icon.writeUInt16LE(32, 12);
+  icon.writeUInt32LE(image.length, 14);
+  icon.writeUInt32LE(icon.length, 18);
+  return Buffer.concat([icon, image]);
+}
+
+function ensureStatusIcons() {
+  for (const [state, color] of Object.entries(EXPLORER_STATUS_COLORS)) {
+    const target = path.join(path.dirname(INSTALLED_ICON), `nas-drive-status-${state}.ico`);
+    const content = createStatusIconBuffer(color);
+    if (!fs.existsSync(target) || !fs.readFileSync(target).equals(content)) fs.writeFileSync(target, content);
+  }
 }
 
 async function ensureProviderInstalled(profile) {
@@ -338,12 +404,30 @@ function isPersonalDriveShellMetadataRelPath(root, relativePath) {
     || normalized === LEGACY_PERSONAL_DRIVE_WEB_SHORTCUT_NAME.toLowerCase();
 }
 
-function setPersonalDriveFolderIcon(rootPath, enabled) {
+function explorerStatusLabel(state) {
+  return ({
+    'up-to-date': '온라인 · NAS와 동기화됨',
+    connecting: '계정 연결 중',
+    syncing: '온라인 · 파일 동기화 중',
+    offline: '오프라인 · NAS 또는 연결 경로 확인 필요',
+    paused: '온라인 · 동기화 일시 중지',
+    'needs-relink': '오프라인 · 계정 다시 연결 필요',
+    updating: 'NAS Drive 업데이트 중',
+    error: '오류 · NAS Drive 확인 필요'
+  }[state] || 'NAS Drive 상태 확인 필요');
+}
+
+function setPersonalDriveFolderIcon(rootPath, enabled, state = 'up-to-date', message = '') {
   if (!rootPath) return;
   const desktopIni = personalDriveDesktopIniPath(rootPath);
   try {
     if (enabled) {
       if (!fs.existsSync(INSTALLED_ICON)) return;
+      const statusIcon = path.join(path.dirname(INSTALLED_ICON), `nas-drive-status-${state}.ico`);
+      const iconPath = fs.existsSync(statusIcon) ? statusIcon : INSTALLED_ICON;
+      const statusText = explorerStatusLabel(state);
+      const detail = String(message || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 180);
+      const infoTip = detail && !statusText.includes(detail) ? `${statusText} · ${detail}` : statusText;
       if (fs.existsSync(desktopIni)) {
         const existing = fs.readFileSync(desktopIni, 'utf16le').replace(/^\uFEFF/, '');
         if (!existing.includes(PERSONAL_DRIVE_DESKTOP_INI_MARKER)) return;
@@ -352,9 +436,9 @@ function setPersonalDriveFolderIcon(rootPath, enabled) {
       const content = [
         PERSONAL_DRIVE_DESKTOP_INI_MARKER,
         '[.ShellClassInfo]',
-        `IconResource=${INSTALLED_ICON},0`,
+        `IconResource=${iconPath},0`,
         'ConfirmFileOp=0',
-        'InfoTip=NAS Drive cloud storage',
+        `InfoTip=${infoTip}`,
         '',
         '[ViewState]',
         'Mode=',
@@ -825,7 +909,7 @@ function setAgentHealth(state, message = '', extra = {}) {
   });
 }
 
-function setExplorerStatus(profile, state) {
+function setExplorerStatus(profile, state, message = '') {
   if (process.platform !== 'win32' || !profile?.accountKey || !fs.existsSync(INSTALLED_PROVIDER_EXE)) return;
   const displayName = String(profile.displayName || profile.loginId || '개인').startsWith('NAS Drive')
     ? String(profile.displayName || profile.loginId || '개인')
@@ -841,11 +925,13 @@ function setExplorerStatus(profile, state) {
         '--root', root.localPath,
         '--account', profile.accountKey,
         '--display-name', displayName,
-        '--state', state
+        '--state', state,
+        '--message', String(message || '').replace(/[\r\n]+/g, ' ').slice(0, 180)
       ], { encoding: 'utf8', windowsHide: true });
       if (result.status === 0) explorerStatusCache.set(cacheKey, state);
       else log('[explorer status failed]', state, result.stderr || result.stdout || result.status);
     }
+    setPersonalDriveFolderIcon(root.localPath, true, state, message);
     if (shouldRefreshView) {
       explorerViewRefreshAt.set(cacheKey, now);
       ensurePersonalDriveProvider(profile, root)
@@ -857,13 +943,15 @@ function setExplorerStatus(profile, state) {
 
 function setProfileHealth(profile, state, message = '') {
   if (profile) profile._runtimeState = state;
-  const friendlyMessage = state === 'offline' && !message
-    ? 'NAS 서버가 꺼져 있거나 인터넷에 연결할 수 없습니다.'
-    : message;
+  const friendlyMessage = state === 'needs-relink'
+    ? '이 계정 연결이 더 이상 유효하지 않습니다. 로그아웃하거나 다시 연결하세요.'
+    : (state === 'offline' && !message
+      ? 'NAS 서버가 꺼져 있거나 인터넷에 연결할 수 없습니다.'
+      : message);
   if (!profile || profile._isActive !== false) {
     setAgentHealth(state, friendlyMessage, { accountKey: profile?.accountKey || '' });
   }
-  setExplorerStatus(profile, state);
+  setExplorerStatus(profile, state, friendlyMessage);
 }
 
 function showMessage(title, message) {
@@ -1763,8 +1851,13 @@ function sendHeartbeat(profile, syncState = 'idle', lastError = '') {
   return requestJson('POST', '/api/devices/agent/heartbeat', {
     deviceId: profile.deviceId,
     syncState,
-    lastError
-  }, profile.agentToken);
+    lastError,
+    clientStateRevision: Number(profile._serverStateRevision || 0)
+  }, profile.agentToken).then((result) => {
+    const revision = Number(result?.device?.stateRevision || 0);
+    if (Number.isFinite(revision) && revision > 0) profile._serverStateRevision = revision;
+    return result;
+  });
 }
 
 function downloadFile(urlPath, outPath, agentToken) {
@@ -3167,6 +3260,9 @@ function runSelfTest() {
   if (safeAccountKey('a/b') !== 'a_b') throw new Error('Account key sanitization test failed.');
   if (classifyAgentError(new Error('HTTP 503: tunnel unavailable')) !== 'offline') throw new Error('NAS offline classification test failed.');
   if (classifyAgentError(new Error('HTTP 403: Agent 인증 실패')) !== 'needs-relink') throw new Error('Agent relink classification test failed.');
+  const iconProbe = createStatusIconBuffer(EXPLORER_STATUS_COLORS.offline);
+  if (iconProbe.readUInt16LE(2) !== 1 || iconProbe.readUInt16LE(4) !== 1 || iconProbe.length < 1000) throw new Error('Explorer status icon generation test failed.');
+  if (!explorerStatusLabel('needs-relink').includes('다시 연결')) throw new Error('Explorer relink status label test failed.');
   if (!isLogoutAlreadyRevokedError(new Error('HTTP 403: Agent 인증 실패'))) throw new Error('Already-revoked logout test failed.');
   if (isLogoutAlreadyRevokedError(new Error('HTTP 503: tunnel unavailable'))) throw new Error('Offline logout preservation test failed.');
   if (!isNewerVersion('1.9.0', '1.8.4') || isNewerVersion('1.7.0', '1.8.4') || isNewerVersion('1.8.4', '1.8.4')) {

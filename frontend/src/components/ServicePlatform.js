@@ -16,11 +16,30 @@ const appOpenMode = () => localStorage.getItem('platform_app_open_mode') || 'win
 const DEVICE_OFFLINE_AFTER_MS = 9000;
 
 const getDeviceLiveState = (device, now = Date.now()) => {
-  if (!device || device.status === 'revoked') return 'revoked';
-  if (device.syncPaused || device.syncState === 'paused') return 'paused';
+  if (!device || device.status === 'revoked' || device.relationshipState === 'revoked' || device.connectionState === 'revoked') return 'revoked';
+  if (device.connectionState === 'offline') return 'offline';
   const lastSeen = Date.parse(device.lastSeenAt || 0) || 0;
-  if (!lastSeen || now - lastSeen > DEVICE_OFFLINE_AFTER_MS) return 'offline';
+  const offlineAfterMs = Math.max(1000, Number(device.offlineAfterMs || DEVICE_OFFLINE_AFTER_MS));
+  if (!lastSeen || now - lastSeen > offlineAfterMs) return 'offline';
+  if (device.syncPaused || device.syncState === 'paused') return 'paused';
   return ['connecting', 'syncing', 'up-to-date', 'error'].includes(device.syncState) ? device.syncState : 'connecting';
+};
+
+const preferNewerDevice = (current, incoming) => {
+  if (!current) return incoming;
+  const currentRevision = Number(current.stateRevision || 0);
+  const incomingRevision = Number(incoming.stateRevision || 0);
+  if (incomingRevision < currentRevision) return current;
+  if (incomingRevision > currentRevision) return incoming;
+  const currentTime = Date.parse(current.lastSeenAt || current.stateChangedAt || 0) || 0;
+  const incomingTime = Date.parse(incoming.lastSeenAt || incoming.stateChangedAt || 0) || 0;
+  return incomingTime >= currentTime ? incoming : current;
+};
+
+const mergeDeviceSnapshots = (current, incoming) => {
+  const next = new Map(current.map((device) => [device.deviceId, device]));
+  for (const device of incoming) next.set(device.deviceId, preferNewerDevice(next.get(device.deviceId), device));
+  return Array.from(next.values());
 };
 
 const getDeviceStatusUi = (state) => ({
@@ -38,6 +57,12 @@ const getDeviceConnectionUi = (device, now = Date.now()) => {
   if (state === 'revoked') return { label: '연결 해제됨', color: 'default' };
   if (state === 'offline') return { label: '현재 연결 끊김', color: 'warning' };
   return { label: '현재 PC 연결됨', color: 'success' };
+};
+
+const getDeviceReasonLabel = (device, state) => {
+  if (state === 'revoked') return '이 계정과 PC의 연결이 해제되었습니다.';
+  if (state === 'offline') return 'PC 상태 신호가 끊겼습니다. PC 전원·인터넷·NAS Drive 실행 상태를 확인하세요.';
+  return device?.reasonLabel || '';
 };
 
 const getPairingStatusUi = (state) => ({
@@ -66,6 +91,7 @@ function ServicePlatform() {
   const pcSyncPollRef = useRef(null);
   const pcPairingTokenRef = useRef('');
   const pcAutoConnectStartedRef = useRef(false);
+  const pcDevicesRef = useRef([]);
   const {
     openAppWindow
   } = useWindows();
@@ -81,8 +107,10 @@ function ServicePlatform() {
       const saved = JSON.parse(localStorage.getItem(localLinkKey) || 'null');
       const response = await axios.get('/api/devices', { withCredentials: true });
       const devices = Array.isArray(response.data?.devices) ? response.data.devices : [];
-      setPcDevices(devices);
-      const localDevice = saved?.deviceId ? devices.find((device) => device.deviceId === saved.deviceId) : null;
+      const mergedDevices = mergeDeviceSnapshots(pcDevicesRef.current, devices);
+      pcDevicesRef.current = mergedDevices;
+      setPcDevices(mergedDevices);
+      const localDevice = saved?.deviceId ? mergedDevices.find((device) => device.deviceId === saved.deviceId) : null;
       if (localDevice && localDevice.status !== 'revoked') {
         const liveState = getDeviceLiveState(localDevice);
         setPcLinkedHere(true);
@@ -116,17 +144,18 @@ function ServicePlatform() {
   useEffect(() => {
     const handleDeviceStatus = ({ device } = {}) => {
       if (!device?.deviceId) return;
-      setPcDevices((current) => {
-        const exists = current.some((item) => item.deviceId === device.deviceId);
-        return exists ? current.map((item) => item.deviceId === device.deviceId ? device : item) : [...current, device];
-      });
+      const mergedDevices = mergeDeviceSnapshots(pcDevicesRef.current, [device]);
+      pcDevicesRef.current = mergedDevices;
+      setPcDevices(mergedDevices);
       try {
         const saved = JSON.parse(localStorage.getItem(localLinkKey) || 'null');
         if (saved?.deviceId === device.deviceId) {
-          const liveState = getDeviceLiveState(device);
-          setPcLinkedHere(device.status !== 'revoked');
+          const acceptedDevice = mergedDevices.find((item) => item.deviceId === device.deviceId) || device;
+          const liveState = getDeviceLiveState(acceptedDevice);
+          setPcLinkedHere(acceptedDevice.status !== 'revoked');
           setPcLiveState(liveState);
           setPcConnectionState(liveState === 'offline' || liveState === 'revoked' ? 'offline' : 'online');
+          if (liveState === 'revoked') localStorage.removeItem(localLinkKey);
         }
       } catch {}
     };
@@ -339,7 +368,6 @@ function ServicePlatform() {
     pcLiveState,
     pcPairingActive,
     pairingStatus,
-    theme.palette.info.main,
     theme.palette.text.disabled,
     theme.palette.text.secondary
   ]);
@@ -429,6 +457,7 @@ function ServicePlatform() {
                   const deviceState = getDeviceLiveState(device, statusNow);
                   const deviceStatus = getDeviceStatusUi(deviceState);
                   const connectionStatus = getDeviceConnectionUi(device, statusNow);
+                  const reasonLabel = getDeviceReasonLabel(device, deviceState);
                   return (
                   <Box key={device.deviceId} sx={{ display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 1, p: 1.25, border: `1px solid ${theme.palette.divider}`, borderRadius: 2 }}>
                     <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -438,6 +467,8 @@ function ServicePlatform() {
                         {deviceState !== 'offline' && deviceState !== 'revoked' && <Chip size="small" variant="outlined" color={deviceStatus.color} label={deviceStatus.label} />}
                       </Stack>
                       <Typography variant="caption" color="text.secondary">마지막 상태 수신: {device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : '접속 기록 없음'}</Typography>
+                      {!!reasonLabel && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>{reasonLabel}</Typography>}
+                      <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>상태 순번: {Number(device.stateRevision || 0)}</Typography>
                       {!!device.lastError && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.25 }}>{device.lastError}</Typography>}
                     </Box>
                     {device.status !== 'revoked' && (

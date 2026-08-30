@@ -170,7 +170,7 @@ internal static class Program
                            StorageProviderInSyncPolicy.FileLastWriteTime |
                            StorageProviderInSyncPolicy.DirectoryCreationTime |
                            StorageProviderInSyncPolicy.DirectoryLastWriteTime,
-            Version = "1.4.1",
+            Version = "1.4.3",
             ShowSiblingsAsGroup = false,
             HardlinkPolicy = StorageProviderHardlinkPolicy.None,
             AllowPinning = true,
@@ -190,6 +190,8 @@ internal static class Program
             throw new InvalidOperationException("Windows Storage Provider sync root registration is unavailable.");
         if (!SyncRootRegistrationId("account").Contains($"!{WindowsIdentity.GetCurrent().User?.Value}!", StringComparison.Ordinal))
             throw new InvalidOperationException("Sync-root registration ID must remain bound to the current Windows user SID.");
+        if (StatusIconFileName("offline") != "nas-drive-status-offline.ico")
+            throw new InvalidOperationException("Explorer state icon path test failed.");
         var testRoot = Path.Combine(Path.GetTempPath(), "NAS Drive State Test");
         if (!IsSameOrDescendant(testRoot, Path.Combine(testRoot, "하위 폴더")) ||
             IsSameOrDescendant(testRoot, testRoot + "-other"))
@@ -790,19 +792,12 @@ internal static class Program
     {
         var root = Path.GetFullPath(Required(options, "root"));
         var account = Required(options, "account");
-        var baseDisplayName = options.GetValueOrDefault("display-name", $"NAS Drive - {account}");
         var state = options.GetValueOrDefault("state", "up-to-date").ToLowerInvariant();
-        var suffix = state switch
+        var allowedStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "connecting" => "연결 중",
-            "syncing" => "동기화 중",
-            "up-to-date" => "NAS와 동기화됨",
-            "offline" => "NAS 오프라인",
-            "paused" => "일시 중지",
-            "needs-relink" => "재연결 필요",
-            "updating" => "업데이트 중",
-            _ => "오류"
+            "connecting", "syncing", "up-to-date", "offline", "paused", "needs-relink", "updating", "error"
         };
+        if (!allowedStates.Contains(state)) state = "error";
         try
         {
             using var handle = File.OpenHandle(root, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -816,10 +811,41 @@ internal static class Program
             // The namespace label and tray still provide a reliable status on older Windows builds.
         }
 
+        UpdateSyncRootNamespaceIcon(account, state);
+
         SHChangeNotify(ShcneUpdateDir, ShcnfPathW, root, IntPtr.Zero);
         SHChangeNotify(ShcneAssocChanged, ShcnfIdList, null, IntPtr.Zero);
         try { ConfigureExplorerViewCore(root); } catch { }
         return 0;
+    }
+
+    private static string StatusIconPath(string state)
+    {
+        var installDir = Path.GetDirectoryName(Environment.ProcessPath) ?? string.Empty;
+        var stateIcon = Path.Combine(installDir, StatusIconFileName(state));
+        var baseIcon = Path.Combine(installDir, "nas-drive.ico");
+        return File.Exists(stateIcon) ? stateIcon : baseIcon;
+    }
+
+    private static string StatusIconFileName(string state) => $"nas-drive-status-{state}.ico";
+
+    private static void UpdateSyncRootNamespaceIcon(string account, string state)
+    {
+        try
+        {
+            var syncRootId = SyncRootRegistrationId(account);
+            using var syncRootKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                $@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\{syncRootId}");
+            var namespaceClsid = Convert.ToString(syncRootKey?.GetValue("NamespaceCLSID"));
+            if (string.IsNullOrWhiteSpace(namespaceClsid)) return;
+            using var iconKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(
+                $@"Software\Classes\CLSID\{namespaceClsid}\DefaultIcon");
+            iconKey.SetValue(null, $"{StatusIconPath(state)},0", Microsoft.Win32.RegistryValueKind.ExpandString);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Explorer namespace icon update skipped: {ex.Message}");
+        }
     }
 
     private static string SyncRootRegistrationId(string account)

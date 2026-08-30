@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.14.0")]
-[assembly: AssemblyFileVersion("1.10.14.0")]
+[assembly: AssemblyVersion("1.10.15.0")]
+[assembly: AssemblyFileVersion("1.10.15.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.14";
+        internal const string ProductVersion = "1.10.15";
 
         [STAThread]
         private static void Main(string[] args)
