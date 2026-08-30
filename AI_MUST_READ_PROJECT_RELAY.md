@@ -656,3 +656,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 재발 방지 구현: `frontend/package.json`에서 `react-pdf`를 9.2.1, `pdfjs-dist`를 4.8.69 exact dependency로 고정하고 lock root도 동일하게 맞췄다. 새 `frontend/scripts/verify-pdfjs-compat.mjs`는 package/lock의 직접 버전, react-pdf가 요구하는 pdfjs-dist, 실제 production `pdf.worker*.mjs` 내부 버전을 모두 대조한다. `npm run build` 마지막에 이 검사를 강제해 API와 Worker가 다르면 build가 실패한다.
 - 범위: NAS 작업공간 `FileViewer`와 공유 링크 `FilePreviewSurface`가 같은 react-pdf global Worker 설정을 사용하므로 같은 exact pin과 build gate로 함께 보호한다. OnlyOffice Docker/proxy, HWP, 사용자 PDF 원본은 변경하지 않았다.
 - 기록/사전 검증: dependency 검사 단독 실행은 react-pdf 9.2.1 / PDF.js 4.8.69 일치를 통과했다. workbook의 Request/Patch/Feature/Office_Viewers/Do_Not_Break/Code_Map을 갱신하고 formula error 0과 관련 렌더를 확인했다. 다음 단계는 GitHub push, NAS clean `npm ci`·production build gate, live index-last 배포, 공개 Worker와 실제 PDF 렌더 E2E다.
+
+### PDF.js 호환성 GitHub·NAS 배포 및 실화면 검증
+
+- 기능·검사기·workbook·relay commit `5b38298`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS에서 `npm ci`로 1,585 packages를 lock 그대로 재구성했다. production build는 기존 eslint warning만 남기고 성공했고 새 배포 gate가 `react-pdf 9.2.1 / PDF.js API+Worker 4.8.69`를 확인했다. build는 `main.18c5b581.js`와 `pdf.worker.min.48ec784a5edb8e2894b8.mjs`를 만들었다.
+- live `/var/www/html`에는 hashed asset을 먼저 복사하고 `index.html`을 마지막에 원자 교체했다. 내부·공개 index는 모두 `main.18c5b581.js`를 가리키며 공개 Worker 응답은 4.8.69를 포함하고 5.6.205를 포함하지 않는다. index는 no-store/no-cache이고 Worker는 max-age=0이라 오래된 혼합 cache를 지속시키지 않는다.
+- 실제 로그인 Chrome을 새로고침한 뒤 같은 `합친 PDF.pdf`를 다시 열었다. API/Worker 오류와 PDF 로드 실패 문구는 0건이고 PDF page canvas 11개와 text layer 내용이 렌더됐다. PDF 원본은 변경하지 않았다.
+- NAS backend tests 10/10을 통과했다. `msp-backend`는 변경이 없어 불필요한 재시작을 하지 않았고 계속 online이다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, 내부 3030·공개 HTTPS는 HTTP 200이며 NAS worktree는 clean이다.
