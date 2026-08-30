@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.13';
+const AGENT_VERSION = '1.10.14';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -746,7 +746,10 @@ function isExpectedProcessAlive(pid, expectedExe) {
 
 function acquireForegroundLock() {
   const existingPid = Number(fs.existsSync(FOREGROUND_LOCK_FILE) ? fs.readFileSync(FOREGROUND_LOCK_FILE, 'utf8') : 0);
-  if (isProcessAlive(existingPid)) return false;
+  // A PID can be reused by an unrelated Windows process after an interrupted
+  // foreground flow. Only a live copy of this exact Agent executable owns the
+  // lock; otherwise replace the stale file and allow recovery without reboot.
+  if (isExpectedProcessAlive(existingPid, process.execPath)) return false;
   try { fs.writeFileSync(FOREGROUND_LOCK_FILE, String(process.pid), { encoding: 'utf8', flag: 'wx' }); }
   catch {
     try { fs.unlinkSync(FOREGROUND_LOCK_FILE); } catch {}

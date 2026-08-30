@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.13.0")]
-[assembly: AssemblyFileVersion("1.10.13.0")]
+[assembly: AssemblyVersion("1.10.14.0")]
+[assembly: AssemblyFileVersion("1.10.14.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.13";
+        internal const string ProductVersion = "1.10.14";
 
         [STAThread]
         private static void Main(string[] args)
@@ -109,6 +109,7 @@ namespace NasDriveSetup
             bool open = false;
             bool openWeb = false;
             bool login = false;
+            bool shutdownBackground = false;
             string notificationPayload = "";
             for (int index = 0; index < args.Length; index++)
             {
@@ -118,6 +119,7 @@ namespace NasDriveSetup
                 if (string.Equals(arg, "--open", StringComparison.OrdinalIgnoreCase)) open = true;
                 if (string.Equals(arg, "--open-web", StringComparison.OrdinalIgnoreCase)) openWeb = true;
                 if (string.Equals(arg, "--login", StringComparison.OrdinalIgnoreCase)) login = true;
+                if (string.Equals(arg, "--shutdown-background", StringComparison.OrdinalIgnoreCase)) shutdownBackground = true;
                 if (string.Equals(arg, "--notify-base64", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) notificationPayload = args[++index];
             }
             if (!string.IsNullOrWhiteSpace(notificationPayload))
@@ -125,12 +127,18 @@ namespace NasDriveSetup
                 ShowNativeNotification(notificationPayload);
                 return true;
             }
-            if (string.IsNullOrWhiteSpace(protocolUrl) && !background && !open && !openWeb && !login) return false;
+            if (string.IsNullOrWhiteSpace(protocolUrl) && !background && !open && !openWeb && !login && !shutdownBackground) return false;
 
             string installedExe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "NAS Drive", "NAS-Sync-Agent.exe");
             if (!File.Exists(installedExe))
             {
                 if (!background) MessageBox.Show("NAS Drive Agent가 설치되어 있지 않습니다. 설치 프로그램을 다시 실행해주세요.", "NAS Drive", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return true;
+            }
+
+            if (shutdownBackground)
+            {
+                StopInstalledBackgroundProcesses(installedExe);
                 return true;
             }
 
@@ -183,6 +191,53 @@ namespace NasDriveSetup
                 WorkingDirectory = Path.GetDirectoryName(installedExe)
             });
             return true;
+        }
+
+        internal static void StopInstalledBackgroundProcesses(string installedAgentExe)
+        {
+            string stateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent");
+            try { Directory.CreateDirectory(stateDir); File.WriteAllText(Path.Combine(stateDir, "agent.exit"), DateTime.UtcNow.Ticks.ToString()); } catch { }
+
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                bool agentRunning = false;
+                foreach (Process process in Process.GetProcessesByName("NAS-Sync-Agent"))
+                {
+                    try
+                    {
+                        if (!process.HasExited && IsInstalledAgentProcessPath(process.MainModule.FileName, installedAgentExe)) agentRunning = true;
+                    }
+                    catch { }
+                    finally { process.Dispose(); }
+                }
+                if (!agentRunning) break;
+                Thread.Sleep(250);
+            }
+
+            StopExactProcesses("NAS-Sync-Agent", installedAgentExe);
+            StopExactProcesses("NAS-Drive-Provider", Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive-Provider.exe"));
+            StopExactProcesses("NAS-Drive", Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive.exe"));
+            try { File.Delete(Path.Combine(stateDir, "agent.pid")); } catch { }
+            try { File.Delete(Path.Combine(stateDir, "agent.exit")); } catch { }
+        }
+
+        private static void StopExactProcesses(string processName, string expectedPath)
+        {
+            int currentProcessId;
+            using (Process current = Process.GetCurrentProcess()) currentProcessId = current.Id;
+            foreach (Process process in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    if (process.Id == currentProcessId) continue;
+                    if (!IsInstalledAgentProcessPath(process.MainModule.FileName, expectedPath)) continue;
+                    process.Kill();
+                    process.WaitForExit(3000);
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
         }
 
         private static void ShowNativeNotification(string encodedPayload)
@@ -925,11 +980,11 @@ namespace NasDriveSetup
 
         private void ExitNasDrive()
         {
-            try { Directory.CreateDirectory(StateDir); File.WriteAllText(Path.Combine(StateDir, "agent.exit"), DateTime.UtcNow.Ticks.ToString()); } catch { }
             refreshTimer.Stop();
             notifyIcon.Visible = false;
             notifyIcon.Dispose();
             if (currentIcon != null) currentIcon.Dispose();
+            Program.StopInstalledBackgroundProcesses(agentExe);
             ExitThread();
         }
 

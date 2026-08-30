@@ -489,3 +489,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 확인 결과: 기능 커밋 `0d319dd`의 실제 text 변경은 91 insertions, 35 deletions이며 삭제된 프로젝트 파일은 없다. binary 2개와 workbook 1개는 교체된 산출물이라 Git numstat가 줄 수를 표시하지 않는다.
 - 표시 원인: 로컬 검증 중 pnpm이 새로 만든 미추적 `pnpm-lock.yaml`/workspace 보조 파일과 artifact-tool이 만든 약 2MB의 미추적 inspect 결과를 저장소에 남기지 않기 위해 제거했다. 기존 Git 추적 파일을 삭제한 것이 아니며 해당 임시 파일은 커밋·push되지 않았다.
 - 안전 경계: 사용자 우려를 확인하는 동안 현재 Windows PC의 1.10.13 보존 업데이트는 시작하지 않고 중단했다. NAS source/backend/frontend 배포와 HTTP 200 검증까지 완료된 상태이며, 로컬 PC 설치본 교체·로그아웃 E2E는 사용자 확인 후 이어간다.
+
+## 2026-08-30 구현 계속: 트레이 완전 종료·stale foreground 잠금 복구·현재 PC 1.10.14
+
+- 사용자 요청: 대규모 삭제가 아니라는 확인 후 중단했던 NAS Drive 수명주기 작업을 계속한다. 트레이에서 종료했는데도 Agent/Provider가 남거나 다음 실행이 `이미 실행 중`으로 막히는 경우까지 재부팅 없이 처리한다.
+- 종료 보강: native tray의 `NAS Drive 종료`와 새 숨김 `--shutdown-background` 명령이 같은 종료 루틴을 사용한다. `agent.exit`을 보낸 뒤 최대 5초 기다리고, 남은 정식 설치 경로의 launcher·Agent·Provider만 종료한다. `agent.pid`와 exit marker는 정리하지만 account config, 계정별 CurrentUser DPAPI credential, 개인 Drive 및 사용자 파일은 삭제하지 않는다. 다른 경로의 동명 프로세스도 건드리지 않는다.
+- 잠금 보강: Agent `foreground.pid`는 PID 생존만 보지 않고 해당 PID의 실행 파일이 현재 Agent 실행 파일과 정확히 같은지도 확인한다. Windows PID가 다른 프로그램에 재사용됐거나 stale 파일만 남은 경우 잠금을 회수해 설정·로그인 흐름을 다시 열 수 있다.
+- 버전·현재 PC: Agent/Setup/launcher와 공개 update metadata를 1.10.14로 올렸다. 현재 PC는 설정 SHA-256 `A9EF3F15406401F377D4B1FEF310E067184808B3263F14288E0CA8A0B5B9A4B3`을 전후 동일하게 보존한 채 업데이트했다. Agent hash는 `6243338F3E11D816E247DB02725F9F7B4DCAF32899DCF7D98D36C77141FD1B18`, Setup/launcher hash는 `92BD9326F7B3B99A1C5908DBF8BBB283DDC409CE0DF6249C6DA399618D0BE5D5`다.
+- 실제 종료/재시작 검증: 설치 launcher의 `--shutdown-background`가 exit code 0으로 끝난 뒤 정식 설치 launcher·Agent·Provider 잔여가 0이고 `agent.exit`·`agent.pid`가 제거됐으며 설정 hash가 유지됨을 확인했다. 이어 `--background`를 실행해 launcher·Agent·Provider 3개가 다시 시작됐다. 현재 profile은 서버에서 이미 revoked되어 health가 정상적으로 `needs-relink`로 수렴한다.
+- 자동 검증: Agent source/packaged self-test, Node syntax, C# compile, Setup self-test를 통과했다. Windows 로컬 backend suite는 symlink 생성 권한이 필요한 `deviceSyncSecurity` 1개만 EPERM이고 나머지 7개가 통과했으며 NAS에서 다시 검증한다. workbook의 관련 6개 시트를 갱신하고 formula error 0, 렌더 확인, 의도된 과거 `??` 사고 기록 외 한글 손상 없음도 확인했다.
+- 남은 단계: 이 1.10.14 변경을 GitHub에 push하고 NAS에서 pull한 뒤 backend 테스트, PM2 restart/save, 내부·공개 HTTP, 필수 서비스를 검증한다. 실제 profile 로그아웃은 로컬 연결과 DPAPI credential을 제거하는 사용자 의도 확인이 필요한 동작이므로 별도 확인 전에는 실행하지 않는다.
