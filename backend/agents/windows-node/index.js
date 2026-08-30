@@ -230,7 +230,7 @@ function refreshInstalledBrandAssets() {
 }
 
 const EXPLORER_STATUS_COLORS = {
-  'up-to-date': [25, 118, 210],
+  'up-to-date': [22, 163, 74],
   connecting: [2, 136, 209],
   syncing: [2, 136, 209],
   offline: [237, 139, 0],
@@ -240,7 +240,7 @@ const EXPLORER_STATUS_COLORS = {
   error: [211, 47, 47]
 };
 
-function createStatusIconBuffer(rgb) {
+function createStatusIconBuffer(state, rgb) {
   const size = 32;
   const rowBytes = size * 4;
   const xor = Buffer.alloc(rowBytes * size);
@@ -269,6 +269,20 @@ function createStatusIconBuffer(rgb) {
       if (distance <= 42) setPixel(x, y, rgb[0], rgb[1], rgb[2], 255);
     }
   }
+  const white = (x, y) => setPixel(x, y, 255, 255, 255, 255);
+  const thickPixel = (x, y) => { white(x, y); white(x + 1, y); white(x, y + 1); };
+  if (state === 'up-to-date') {
+    [[20, 24], [22, 26], [24, 24], [26, 22], [28, 20]].forEach(([x, y]) => thickPixel(x, y));
+  } else if (state === 'offline') {
+    for (let y = 20; y <= 25; y += 1) thickPixel(24, y);
+    thickPixel(24, 28);
+  } else if (state === 'paused') {
+    for (let y = 21; y <= 27; y += 1) { thickPixel(21, y); thickPixel(26, y); }
+  } else if (state === 'needs-relink' || state === 'error') {
+    for (let i = 0; i <= 6; i += 1) { thickPixel(21 + i, 21 + i); thickPixel(27 - i, 21 + i); }
+  } else {
+    for (let x = 20; x <= 27; x += 1) thickPixel(x, 24);
+  }
   const header = Buffer.alloc(40);
   header.writeUInt32LE(40, 0);
   header.writeInt32LE(size, 4);
@@ -292,7 +306,7 @@ function createStatusIconBuffer(rgb) {
 function ensureStatusIcons() {
   for (const [state, color] of Object.entries(EXPLORER_STATUS_COLORS)) {
     const target = path.join(path.dirname(INSTALLED_ICON), `nas-drive-status-${state}.ico`);
-    const content = createStatusIconBuffer(color);
+    const content = createStatusIconBuffer(state, color);
     if (!fs.existsSync(target) || !fs.readFileSync(target).equals(content)) fs.writeFileSync(target, content);
   }
 }
@@ -3343,7 +3357,7 @@ function runSelfTest() {
   if (safeAccountKey('a/b') !== 'a_b') throw new Error('Account key sanitization test failed.');
   if (classifyAgentError(new Error('HTTP 503: tunnel unavailable')) !== 'offline') throw new Error('NAS offline classification test failed.');
   if (classifyAgentError(new Error('HTTP 403: Agent 인증 실패')) !== 'needs-relink') throw new Error('Agent relink classification test failed.');
-  const iconProbe = createStatusIconBuffer(EXPLORER_STATUS_COLORS.offline);
+  const iconProbe = createStatusIconBuffer('offline', EXPLORER_STATUS_COLORS.offline);
   if (iconProbe.readUInt16LE(2) !== 1 || iconProbe.readUInt16LE(4) !== 1 || iconProbe.length < 1000) throw new Error('Explorer status icon generation test failed.');
   if (!explorerStatusLabel('needs-relink').includes('다시 연결')) throw new Error('Explorer relink status label test failed.');
   if (!isLogoutAlreadyRevokedError(new Error('HTTP 403: Agent 인증 실패'))) throw new Error('Already-revoked logout test failed.');
