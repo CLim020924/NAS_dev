@@ -71,7 +71,9 @@ export const makeUniqueStudioNames = (files = []) => {
 
 export const validateDocumentStudioSelection = (mode, items = [], { sourceFormat = 'auto', outputFormat = 'pdf', matrix = DOCUMENT_STUDIO_FORMAT_MATRIX } = {}) => {
   if (items.length === 0) return '작업할 파일을 선택하세요.';
-  if (mode !== 'convert-pdf' && items.length < 2) return '합치기에는 파일이 두 개 이상 필요합니다.';
+  if (['merge-pdf', 'merge-mixed-pdf', 'merge-pptx'].includes(mode) && items.length < 2) return '합치기에는 파일이 두 개 이상 필요합니다.';
+  if (mode === 'merge-pptx' && items.some((item) => getStudioExtension(item.name) !== 'pptx')) return 'PPTX 합치기에는 PPTX 파일만 사용할 수 있습니다.';
+  if (mode === 'template-pptx' && (items.length !== 1 || getStudioExtension(items[0].name) !== 'pptx')) return '템플릿 일괄 만들기에는 PPTX 파일 한 개를 선택하세요.';
   if (mode === 'merge-pdf' && items.some((item) => getStudioExtension(item.name) !== 'pdf')) {
     return 'PDF 합치기에는 PDF 파일만 사용할 수 있습니다.';
   }

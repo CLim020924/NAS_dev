@@ -1227,6 +1227,152 @@ const publishDocumentStudioResult = (sourcePath, targetPath) => {
   }
 };
 
+const documentStudioJobs = new Map();
+const DOCUMENT_STUDIO_JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const DOCUMENT_STUDIO_JOB_STORE = path.join(WEB_INCOMING_ROOT, 'document-studio-jobs.json');
+let documentStudioPersistTimer = null;
+
+const persistDocumentStudioJobs = () => {
+  try {
+    fs.mkdirSync(path.dirname(DOCUMENT_STUDIO_JOB_STORE), { recursive: true });
+    const rows = [...documentStudioJobs.values()].map(({ controller, ...job }) => job);
+    const tempPath = `${DOCUMENT_STUDIO_JOB_STORE}.${process.pid}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify({ version: 1, jobs: rows }), { mode: 0o600 });
+    fs.renameSync(tempPath, DOCUMENT_STUDIO_JOB_STORE);
+  } catch (error) {
+    console.error('[document-studio] 작업 상태 저장 실패:', error.message);
+  }
+};
+
+const scheduleDocumentStudioPersist = () => {
+  if (documentStudioPersistTimer) return;
+  documentStudioPersistTimer = setTimeout(() => {
+    documentStudioPersistTimer = null;
+    persistDocumentStudioJobs();
+  }, 150);
+  documentStudioPersistTimer.unref();
+};
+
+try {
+  const stored = JSON.parse(fs.readFileSync(DOCUMENT_STUDIO_JOB_STORE, 'utf8'));
+  for (const row of Array.isArray(stored?.jobs) ? stored.jobs : []) {
+    if (!row?.id || !row?.ownerKey || !row?.request) continue;
+    const interrupted = ['queued', 'running'].includes(row.status);
+    documentStudioJobs.set(row.id, {
+      ...row,
+      status: interrupted ? 'failed' : row.status,
+      stage: interrupted ? 'failed' : row.stage,
+      error: interrupted ? 'NAS 서비스가 다시 시작되어 작업이 중단되었습니다. 같은 입력으로 재시도할 수 있습니다.' : row.error,
+      updatedAt: interrupted ? new Date().toISOString() : row.updatedAt,
+      controller: new AbortController(),
+    });
+  }
+} catch (error) {
+  if (error.code !== 'ENOENT') console.error('[document-studio] 이전 작업 상태 복구 실패:', error.message);
+}
+
+const getDocumentStudioOwnerKey = (user) => String(getLoginId(user) || user?.id || user?.username || '');
+
+const serializeDocumentStudioJob = (job) => ({
+  id: job.id,
+  status: job.status,
+  progress: job.progress,
+  stage: job.stage,
+  createdAt: job.createdAt,
+  updatedAt: job.updatedAt,
+  error: job.error || null,
+  outputPath: job.outputPath || null,
+  results: job.results || [],
+  canRetry: ['failed', 'cancelled'].includes(job.status),
+});
+
+const resolveDocumentStudioRequest = (user, body) => {
+  const sourceRows = Array.isArray(body?.sources) ? body.sources : [];
+  const { basePath } = getValidatedPath(user, '/');
+  const sources = sourceRows.map((source) => {
+    const { targetPath } = getValidatedPath(user, source?.fullPath || '');
+    assertRealPathInside(basePath, targetPath);
+    if (!fs.existsSync(targetPath)) throw Object.assign(new Error(`${source?.name || '파일'}을 찾을 수 없습니다.`), { status: 404 });
+    return { path: targetPath, name: source?.name || path.basename(targetPath) };
+  });
+  const requestedOutputPath = body?.outputPath || '/문서 스튜디오/완료 파일';
+  const { targetPath: outputDir } = getValidatedPath(user, requestedOutputPath);
+  assertRealPathInside(basePath, outputDir);
+  fs.mkdirSync(outputDir, { recursive: true });
+  return { basePath, sources, outputDir, requestedOutputPath };
+};
+
+const executeDocumentStudioJob = async (job, user) => {
+  let workspaceDir = '';
+  try {
+    job.status = 'running';
+    job.stage = 'preparing';
+    job.updatedAt = new Date().toISOString();
+    scheduleDocumentStudioPersist();
+    const resolved = resolveDocumentStudioRequest(user, job.request);
+    const studioTmpRoot = path.join(WEB_INCOMING_ROOT, 'document-studio');
+    fs.mkdirSync(studioTmpRoot, { recursive: true });
+    workspaceDir = fs.mkdtempSync(path.join(studioTmpRoot, `job-${job.id}-`));
+    const processed = await processDocumentStudioJob({
+      mode: job.request.mode,
+      sources: resolved.sources,
+      workspaceDir,
+      outputName: job.request.outputName,
+      sourceFormat: job.request.sourceFormat,
+      outputFormat: job.request.outputFormat,
+      templateRows: job.request.templateRows,
+      fileNameTemplate: job.request.fileNameTemplate,
+      signal: job.controller.signal,
+      onProgress: ({ completed, total, stage }) => {
+        job.progress = Math.max(1, Math.min(95, Math.round((completed / Math.max(1, total)) * 90)));
+        job.stage = stage;
+        job.updatedAt = new Date().toISOString();
+        scheduleDocumentStudioPersist();
+      },
+    });
+    if (job.controller.signal.aborted) throw Object.assign(new Error('사용자가 문서 작업을 취소했습니다.'), { status: 409 });
+    const totalOutputBytes = processed.reduce((sum, item) => sum + fs.statSync(item.path).size, 0);
+    await assertQuotaAvailable(user, totalOutputBytes, resolved.outputDir);
+    const targets = processed.map((item) => ({ ...item, targetPath: getUniqueDocumentStudioTarget(resolved.outputDir, item.name) }));
+    for (const item of targets) {
+      publishDocumentStudioResult(item.path, item.targetPath);
+      invalidateUsageCache(item.targetPath);
+      appendActivity(resolved.basePath, { type: 'file-created', path: toNasRelativePath(resolved.basePath, item.targetPath), actor: getActivityActor(user), source: 'document-studio' });
+    }
+    job.results = targets.map((item) => ({
+      name: path.basename(item.targetPath),
+      fullPath: toNasRelativePath(resolved.basePath, item.targetPath),
+      size: fs.statSync(item.targetPath).size,
+      compatibility: item.compatibility,
+      sourceName: item.sourceName || null,
+      sourceFormat: item.sourceFormat || null,
+      outputFormat: item.outputFormat || path.extname(item.targetPath).slice(1).toLowerCase(),
+      replacementsApplied: item.replacementsApplied ?? null,
+      fontReport: item.fontReport || null,
+    }));
+    job.outputPath = toNasRelativePath(resolved.basePath, resolved.outputDir);
+    job.progress = 100;
+    job.stage = 'completed';
+    job.status = 'completed';
+  } catch (error) {
+    job.status = job.controller.signal.aborted ? 'cancelled' : 'failed';
+    job.stage = job.status;
+    job.error = error.message || '문서 작업에 실패했습니다.';
+  } finally {
+    job.updatedAt = new Date().toISOString();
+    scheduleDocumentStudioPersist();
+    if (workspaceDir) safeRmSync(workspaceDir);
+  }
+};
+
+setInterval(() => {
+  const cutoff = Date.now() - DOCUMENT_STUDIO_JOB_TTL_MS;
+  for (const [id, job] of documentStudioJobs) {
+    if (new Date(job.updatedAt).getTime() < cutoff && !['queued', 'running'].includes(job.status)) documentStudioJobs.delete(id);
+  }
+  scheduleDocumentStudioPersist();
+}, 30 * 60 * 1000).unref();
+
 const searchFilesRecursive = (basePath, query) => {
   const needle = String(query || '').trim().toLowerCase();
   if (!needle) return [];
@@ -1337,6 +1483,66 @@ router.get('/storage/path', verifyToken, async (req, res) => {
 
 router.get('/document-studio/capabilities', verifyToken, (req, res) => {
   res.json(getDocumentStudioCapabilities());
+});
+
+router.post('/document-studio/jobs', verifyToken, (req, res) => {
+  try {
+    resolveDocumentStudioRequest(req.user, req.body || {});
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const job = {
+      id,
+      ownerKey: getDocumentStudioOwnerKey(req.user),
+      request: JSON.parse(JSON.stringify(req.body || {})),
+      status: 'queued',
+      progress: 0,
+      stage: 'queued',
+      createdAt: now,
+      updatedAt: now,
+      results: [],
+      error: null,
+      controller: new AbortController(),
+    };
+    documentStudioJobs.set(id, job);
+    scheduleDocumentStudioPersist();
+    setImmediate(() => executeDocumentStudioJob(job, req.user));
+    return res.status(202).json(serializeDocumentStudioJob(job));
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || '문서 작업을 시작하지 못했습니다.' });
+  }
+});
+
+router.get('/document-studio/jobs/:jobId', verifyToken, (req, res) => {
+  const job = documentStudioJobs.get(req.params.jobId);
+  if (!job || job.ownerKey !== getDocumentStudioOwnerKey(req.user)) return res.status(404).json({ error: '문서 작업을 찾을 수 없습니다.' });
+  return res.json(serializeDocumentStudioJob(job));
+});
+
+router.post('/document-studio/jobs/:jobId/cancel', verifyToken, (req, res) => {
+  const job = documentStudioJobs.get(req.params.jobId);
+  if (!job || job.ownerKey !== getDocumentStudioOwnerKey(req.user)) return res.status(404).json({ error: '문서 작업을 찾을 수 없습니다.' });
+  if (['queued', 'running'].includes(job.status)) {
+    job.controller.abort();
+    job.status = 'cancelled';
+    job.stage = 'cancelled';
+    job.error = '사용자가 문서 작업을 취소했습니다.';
+    job.updatedAt = new Date().toISOString();
+    scheduleDocumentStudioPersist();
+  }
+  return res.json(serializeDocumentStudioJob(job));
+});
+
+router.post('/document-studio/jobs/:jobId/retry', verifyToken, (req, res) => {
+  const previous = documentStudioJobs.get(req.params.jobId);
+  if (!previous || previous.ownerKey !== getDocumentStudioOwnerKey(req.user)) return res.status(404).json({ error: '문서 작업을 찾을 수 없습니다.' });
+  if (!['failed', 'cancelled'].includes(previous.status)) return res.status(409).json({ error: '실패하거나 취소된 작업만 재시도할 수 있습니다.' });
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const job = { ...previous, id, status: 'queued', progress: 0, stage: 'queued', createdAt: now, updatedAt: now, results: [], error: null, controller: new AbortController() };
+  documentStudioJobs.set(id, job);
+  scheduleDocumentStudioPersist();
+  setImmediate(() => executeDocumentStudioJob(job, req.user));
+  return res.status(202).json(serializeDocumentStudioJob(job));
 });
 
 router.post('/document-studio/run', verifyToken, async (req, res) => {

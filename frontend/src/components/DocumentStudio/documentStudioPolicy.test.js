@@ -23,6 +23,9 @@ describe('document studio file policy', () => {
     expect(validateDocumentStudioSelection('merge-pdf', [{ name: 'a.pdf' }])).toContain('두 개');
     expect(validateDocumentStudioSelection('merge-pdf', [{ name: 'a.pdf' }, { name: 'b.docx' }])).toContain('PDF 파일만');
     expect(validateDocumentStudioSelection('merge-mixed-pdf', [{ name: 'a.pdf' }, { name: 'b.docx' }])).toBe('');
+    expect(validateDocumentStudioSelection('merge-pptx', [{ name: 'a.pptx' }, { name: 'b.pptx' }])).toBe('');
+    expect(validateDocumentStudioSelection('merge-pptx', [{ name: 'a.pptx' }, { name: 'b.pdf' }])).toContain('PPTX');
+    expect(validateDocumentStudioSelection('template-pptx', [{ name: 'a.pptx' }])).toBe('');
   });
 
   test('derives only real output formats from the selected source format or files', () => {

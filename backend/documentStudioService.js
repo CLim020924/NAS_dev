@@ -3,6 +3,8 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
+const JSZip = require('jszip');
+const { mergePptxFiles, replacePptxTemplate } = require('./pptxPackageService');
 
 const MAX_SOURCES = 40;
 const MAX_TOTAL_SOURCE_BYTES = 4 * 1024 * 1024 * 1024;
@@ -14,7 +16,7 @@ const CONVERTIBLE_EXTENSIONS = new Set([
   '.xls', '.xlsx', '.xlsm', '.xlsb', '.ods', '.csv', '.cell', '.nxl',
 ]);
 const ACCEPTED_EXTENSIONS = new Set(['.pdf', ...CONVERTIBLE_EXTENSIONS]);
-const MODES = new Set(['convert-pdf', 'merge-pdf', 'merge-mixed-pdf']);
+const MODES = new Set(['convert-pdf', 'merge-pdf', 'merge-mixed-pdf', 'merge-pptx', 'template-pptx']);
 const FORMAT_MATRIX = Object.freeze({
   pdf: ['pdf'],
   ppt: ['pdf', 'pptx', 'odp'],
@@ -44,6 +46,13 @@ const OUTPUT_FORMATS = new Set([...new Set(Object.values(FORMAT_MATRIX).flat())]
 const commandCandidates = {
   libreoffice: ['/usr/bin/libreoffice', '/usr/bin/soffice'],
   pdfunite: ['/usr/bin/pdfunite'],
+  fcList: ['/usr/bin/fc-list'],
+};
+
+const getNativeConverter = () => {
+  const configured = String(process.env.DOCUMENT_STUDIO_NATIVE_CONVERTER || '').trim();
+  if (!configured || !path.isAbsolute(configured)) return '';
+  return firstExecutable([configured]);
 };
 
 const firstExecutable = (candidates = []) => candidates.find((candidate) => {
@@ -55,14 +64,29 @@ const firstExecutable = (candidates = []) => candidates.find((candidate) => {
   }
 }) || '';
 
+const getEffectiveFormatMatrix = () => {
+  if (!getNativeConverter()) return FORMAT_MATRIX;
+  return Object.freeze({
+    ...FORMAT_MATRIX,
+    hwp: ['pdf', 'docx', 'odt'],
+    hwpx: ['pdf', 'docx', 'odt'],
+    cell: ['pdf', 'xlsx', 'ods'],
+    nxl: ['pdf', 'xlsx', 'ods'],
+  });
+};
+
 const getDocumentStudioCapabilities = () => ({
   libreoffice: !!firstExecutable(commandCandidates.libreoffice),
   pdfMerge: !!firstExecutable(commandCandidates.pdfunite),
+  pptxMerge: true,
+  pptxTemplate: true,
+  nativeConverter: !!getNativeConverter(),
+  fontInspection: !!firstExecutable(commandCandidates.fcList),
   modes: [...MODES],
   acceptedExtensions: [...ACCEPTED_EXTENSIONS].map((extension) => extension.slice(1)),
-  formatMatrix: FORMAT_MATRIX,
-  outputFormats: [...OUTPUT_FORMATS],
-  unavailableSourceFormats: Object.entries(FORMAT_MATRIX).filter(([, outputs]) => outputs.length === 0).map(([format]) => format),
+  formatMatrix: getEffectiveFormatMatrix(),
+  outputFormats: [...new Set(Object.values(getEffectiveFormatMatrix()).flat())],
+  unavailableSourceFormats: Object.entries(getEffectiveFormatMatrix()).filter(([, outputs]) => outputs.length === 0).map(([format]) => format),
   maxSources: MAX_SOURCES,
 });
 
@@ -92,7 +116,7 @@ const getSharedOutputFormats = (formats) => {
   const normalized = [...new Set(formats.map((format) => String(format || '').toLowerCase().replace(/^\./, '')))];
   if (normalized.length === 0) return [];
   return normalized.reduce((shared, format, index) => {
-    const outputs = FORMAT_MATRIX[format] || [];
+    const outputs = getEffectiveFormatMatrix()[format] || [];
     return index === 0 ? [...outputs] : shared.filter((output) => outputs.includes(output));
   }, []);
 };
@@ -135,7 +159,7 @@ const inspectSources = (sources) => {
   return inspected;
 };
 
-const runCommand = (command, args, { cwd, env = {}, timeoutMs = COMMAND_TIMEOUT_MS } = {}) => new Promise((resolve, reject) => {
+const runCommand = (command, args, { cwd, env = {}, timeoutMs = COMMAND_TIMEOUT_MS, signal } = {}) => new Promise((resolve, reject) => {
   const child = spawn(command, args, {
     cwd,
     env: { ...process.env, ...env },
@@ -150,6 +174,12 @@ const runCommand = (command, args, { cwd, env = {}, timeoutMs = COMMAND_TIMEOUT_
     child.kill('SIGKILL');
     reject(createHttpError('문서 처리 시간이 5분을 초과했습니다.', 504));
   }, timeoutMs);
+  const abort = () => {
+    child.kill('SIGKILL');
+    reject(createHttpError('사용자가 문서 작업을 취소했습니다.', 409));
+  };
+  if (signal?.aborted) return abort();
+  signal?.addEventListener('abort', abort, { once: true });
 
   child.stdout.on('data', (chunk) => { stdout = trimOutput(stdout + chunk); });
   child.stderr.on('data', (chunk) => { stderr = trimOutput(stderr + chunk); });
@@ -159,6 +189,7 @@ const runCommand = (command, args, { cwd, env = {}, timeoutMs = COMMAND_TIMEOUT_
   });
   child.on('close', (code) => {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
     if (code === 0) return resolve({ stdout, stderr });
     reject(createHttpError(`문서 처리 도구가 실패했습니다. (${code}) ${stderr || stdout}`.trim(), 422));
   });
@@ -174,14 +205,53 @@ const uniqueResultName = (name, outputFormat, usedNames) => {
   return candidate;
 };
 
-const convertSourceToFormat = async (source, outputFormat, workspaceDir, usedNames) => {
+const inspectSourceFonts = async (source, { signal } = {}) => {
+  const zipExtensions = new Set(['.pptx', '.pptm', '.docx', '.docm', '.xlsx', '.xlsm', '.hwpx']);
+  if (!zipExtensions.has(source.extension) || !firstExecutable(commandCandidates.fcList)) return { requested: [], missing: [], checked: false };
+  let zip;
+  try {
+    zip = await JSZip.loadAsync(await fsp.readFile(source.path));
+  } catch {
+    return { requested: [], missing: [], checked: false };
+  }
+  const fonts = new Set();
+  const xmlNames = Object.keys(zip.files).filter((name) => name.endsWith('.xml'));
+  for (const name of xmlNames) {
+    if (signal?.aborted) throw createHttpError('사용자가 문서 작업을 취소했습니다.', 409);
+    const xml = await zip.file(name).async('string');
+    for (const match of xml.matchAll(/(?:typeface|w:name\s+w:val|rFont\s+val)="([^"]+)"/g)) {
+      const font = String(match[1] || '').trim();
+      if (font && !font.startsWith('+')) fonts.add(font);
+    }
+  }
+  const requested = [...fonts].slice(0, 100);
+  const missing = [];
+  const fcList = firstExecutable(commandCandidates.fcList);
+  for (const font of requested) {
+    const { stdout } = await runCommand(fcList, ['--format=%{family}', font], { signal, timeoutMs: 5000 });
+    const families = stdout.split(',').map((family) => family.trim().toLowerCase());
+    if (!families.includes(font.toLowerCase())) missing.push(font);
+  }
+  return { requested, missing, checked: true };
+};
+
+const convertSourceToFormat = async (source, outputFormat, workspaceDir, usedNames, { signal } = {}) => {
+  const fontReport = await inspectSourceFonts(source, { signal });
   const resultName = uniqueResultName(source.name, outputFormat, usedNames);
   const resultPath = path.join(workspaceDir, 'results', resultName);
   await fsp.mkdir(path.dirname(resultPath), { recursive: true });
 
   if (source.extension === `.${outputFormat}`) {
     await fsp.copyFile(source.path, resultPath);
-    return { path: resultPath, name: resultName, sourceName: source.name, sourceFormat: source.extension.slice(1), outputFormat, compatibility: outputFormat === 'pdf' ? 'original-pdf' : 'original-format-copy' };
+    return { path: resultPath, name: resultName, sourceName: source.name, sourceFormat: source.extension.slice(1), outputFormat, compatibility: outputFormat === 'pdf' ? 'original-pdf' : 'original-format-copy', fontReport };
+  }
+
+  if (['.hwp', '.hwpx', '.cell', '.nxl'].includes(source.extension)) {
+    const nativeConverter = getNativeConverter();
+    if (!nativeConverter) throw createHttpError(`${source.extension.slice(1).toUpperCase()} 변환에는 한컴 호환 변환 엔진 연결이 필요합니다. 서버에 엔진이 연결되지 않아 원본을 변경하지 않았습니다.`, 503);
+    await runCommand(nativeConverter, ['convert', '--input', source.path, '--output', resultPath, '--format', outputFormat], { cwd: workspaceDir, signal });
+    if (!fs.existsSync(resultPath) || !fs.statSync(resultPath).isFile()) throw createHttpError('한컴 호환 변환 엔진이 결과 파일을 만들지 못했습니다.', 422);
+    return { path: resultPath, name: resultName, sourceName: source.name, sourceFormat: source.extension.slice(1), outputFormat, compatibility: 'native-office', fontReport };
   }
 
   const libreoffice = firstExecutable(commandCandidates.libreoffice);
@@ -200,6 +270,7 @@ const convertSourceToFormat = async (source, outputFormat, workspaceDir, usedNam
   ], {
     cwd: workspaceDir,
     env: { HOME: workspaceDir, SAL_DISABLE_OPENCL: '1' },
+    signal,
   });
 
   const convertedPath = path.join(convertDir, `${path.parse(stagedInput).name}.${outputFormat}`);
@@ -207,22 +278,22 @@ const convertSourceToFormat = async (source, outputFormat, workspaceDir, usedNam
     throw createHttpError(`${source.name}을 ${outputFormat.toUpperCase()} 형식으로 변환하지 못했습니다.`, 422);
   }
   await fsp.rename(convertedPath, resultPath);
-  return { path: resultPath, name: resultName, sourceName: source.name, sourceFormat: source.extension.slice(1), outputFormat, compatibility: 'libreoffice-compatible' };
+  return { path: resultPath, name: resultName, sourceName: source.name, sourceFormat: source.extension.slice(1), outputFormat, compatibility: 'libreoffice-compatible', fontReport };
 };
 
-const mergePdfResults = async (pdfResults, workspaceDir, outputName) => {
+const mergePdfResults = async (pdfResults, workspaceDir, outputName, { signal } = {}) => {
   if (pdfResults.length < 2) throw createHttpError('합치기에는 파일이 두 개 이상 필요합니다.');
   const pdfunite = firstExecutable(commandCandidates.pdfunite);
   if (!pdfunite) throw createHttpError('PDF 합치기 도구가 준비되지 않았습니다.', 503);
   const name = sanitizeFileName(outputName, '합친 문서.pdf').replace(/\.pdf$/i, '') + '.pdf';
   const resultPath = path.join(workspaceDir, 'merged', name);
   await fsp.mkdir(path.dirname(resultPath), { recursive: true });
-  await runCommand(pdfunite, [...pdfResults.map((item) => item.path), resultPath], { cwd: workspaceDir });
+  await runCommand(pdfunite, [...pdfResults.map((item) => item.path), resultPath], { cwd: workspaceDir, signal });
   if (!fs.existsSync(resultPath) || !fs.statSync(resultPath).isFile()) throw createHttpError('PDF 결과 파일을 만들지 못했습니다.', 422);
   return { path: resultPath, name, compatibility: pdfResults.some((item) => item.compatibility !== 'original-pdf') ? 'mixed-compatible' : 'original-pdf-merge' };
 };
 
-const processDocumentStudioJob = async ({ mode, sources, workspaceDir, outputName, sourceFormat = 'auto', outputFormat = 'pdf' }) => {
+const processDocumentStudioJob = async ({ mode, sources, workspaceDir, outputName, sourceFormat = 'auto', outputFormat = 'pdf', templateRows = [], fileNameTemplate = '{이름}', signal, onProgress = () => {} }) => {
   const normalizedMode = normalizeMode(mode);
   const inspected = inspectSources(sources);
   const normalizedSourceFormat = normalizeSourceFormat(sourceFormat);
@@ -233,15 +304,51 @@ const processDocumentStudioJob = async ({ mode, sources, workspaceDir, outputNam
     throw createHttpError('PDF 합치기에는 PDF 파일만 사용할 수 있습니다. 다른 문서는 혼합 문서 합치기를 선택하세요.');
   }
 
+  if (normalizedMode === 'merge-pptx') {
+    if (inspected.length < 2 || inspected.some((source) => source.extension !== '.pptx')) throw createHttpError('PPTX 합치기에는 PPTX 파일을 두 개 이상 선택하세요.');
+    const name = sanitizeFileName(outputName, '합친 프레젠테이션.pptx').replace(/\.pptx$/i, '') + '.pptx';
+    const resultPath = path.join(workspaceDir, 'merged', name);
+    await mergePptxFiles(inspected.map((source) => source.path), resultPath, onProgress);
+    return [{ path: resultPath, name, outputFormat: 'pptx', compatibility: 'pptx-package-merge' }];
+  }
+  if (normalizedMode === 'template-pptx') {
+    if (inspected.length !== 1 || inspected[0].extension !== '.pptx') throw createHttpError('템플릿 일괄 만들기에는 PPTX 템플릿 한 개를 선택하세요.');
+    if (!Array.isArray(templateRows) || templateRows.length === 0 || templateRows.length > 200) throw createHttpError('템플릿 데이터는 1~200행이어야 합니다.');
+    const requestedTemplateOutput = ['pptx', 'pdf'].includes(String(outputFormat).toLowerCase()) ? String(outputFormat).toLowerCase() : 'pptx';
+    const results = [];
+    const usedNames = new Set();
+    const templateFontReport = await inspectSourceFonts(inspected[0], { signal });
+    for (let index = 0; index < templateRows.length; index += 1) {
+      if (signal?.aborted) throw createHttpError('사용자가 문서 작업을 취소했습니다.', 409);
+      const row = templateRows[index] || {};
+      const rawName = String(fileNameTemplate || '{이름}').replace(/\{([^{}]+)\}/g, (_, key) => String(row[key] ?? '')) || `문서-${index + 1}`;
+      const pptxName = uniqueResultName(rawName, 'pptx', usedNames);
+      const pptxPath = path.join(workspaceDir, 'results', pptxName);
+      const applied = await replacePptxTemplate(inspected[0].path, pptxPath, row);
+      if (requestedTemplateOutput === 'pptx') {
+        results.push({ path: pptxPath, name: pptxName, sourceName: inspected[0].name, sourceFormat: 'pptx', outputFormat: 'pptx', compatibility: 'pptx-template', replacementsApplied: applied.replacementsApplied, fontReport: templateFontReport });
+      } else {
+        const converted = await convertSourceToFormat({ ...inspected[0], path: pptxPath, name: pptxName, extension: '.pptx', index }, 'pdf', workspaceDir, usedNames, { signal });
+        results.push({ ...converted, compatibility: 'pptx-template-pdf', replacementsApplied: applied.replacementsApplied });
+      }
+      onProgress({ completed: index + 1, total: templateRows.length, stage: 'template' });
+    }
+    return results;
+  }
+
   const requestedOutputFormat = normalizedMode === 'convert-pdf'
     ? normalizeOutputFormat(outputFormat, inspected.map((source) => source.extension.slice(1)))
     : 'pdf';
   const usedNames = new Set();
   const convertedResults = [];
-  for (const source of inspected) convertedResults.push(await convertSourceToFormat(source, requestedOutputFormat, workspaceDir, usedNames));
+  for (const source of inspected) {
+    if (signal?.aborted) throw createHttpError('사용자가 문서 작업을 취소했습니다.', 409);
+    convertedResults.push(await convertSourceToFormat(source, requestedOutputFormat, workspaceDir, usedNames, { signal }));
+    onProgress({ completed: convertedResults.length, total: inspected.length, stage: 'convert' });
+  }
   if (normalizedMode === 'convert-pdf') return convertedResults;
   const pdfResults = convertedResults;
-  return [await mergePdfResults(pdfResults, workspaceDir, outputName)];
+  return [await mergePdfResults(pdfResults, workspaceDir, outputName, { signal })];
 };
 
 module.exports = {

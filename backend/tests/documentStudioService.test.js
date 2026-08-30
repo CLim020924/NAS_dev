@@ -16,6 +16,8 @@ const {
 
 test('document studio constrains modes and output file names', () => {
   assert.equal(normalizeMode('merge-pdf'), 'merge-pdf');
+  assert.equal(normalizeMode('merge-pptx'), 'merge-pptx');
+  assert.equal(normalizeMode('template-pptx'), 'template-pptx');
   assert.throws(() => normalizeMode('run-shell'));
   assert.equal(sanitizeFileName('../bad:name.pdf'), 'bad_name.pdf');
   const used = new Set();
@@ -53,6 +55,8 @@ test('document studio reports conversion capabilities without exposing command p
   assert.equal(capabilities.acceptedExtensions.includes('pdf'), true);
   assert.deepEqual(capabilities.formatMatrix.pptx, ['pdf', 'pptx', 'odp']);
   assert.deepEqual(capabilities.formatMatrix.hwp, []);
+  assert.equal(capabilities.pptxMerge, true);
+  assert.equal(capabilities.pptxTemplate, true);
   assert.equal(capabilities.unavailableSourceFormats.includes('cell'), true);
   assert.equal(Object.values(capabilities).some((value) => typeof value === 'string' && value.includes('/usr/bin')), false);
 });
