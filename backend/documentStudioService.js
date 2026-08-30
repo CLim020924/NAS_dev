@@ -11,10 +11,35 @@ const CONVERTIBLE_EXTENSIONS = new Set([
   '.ppt', '.pptx', '.pptm', '.odp',
   '.doc', '.docx', '.docm', '.odt', '.rtf',
   '.hwp', '.hwpx',
-  '.xls', '.xlsx', '.xlsm', '.xlsb', '.ods', '.csv',
+  '.xls', '.xlsx', '.xlsm', '.xlsb', '.ods', '.csv', '.cell', '.nxl',
 ]);
 const ACCEPTED_EXTENSIONS = new Set(['.pdf', ...CONVERTIBLE_EXTENSIONS]);
 const MODES = new Set(['convert-pdf', 'merge-pdf', 'merge-mixed-pdf']);
+const FORMAT_MATRIX = Object.freeze({
+  pdf: ['pdf'],
+  ppt: ['pdf', 'pptx', 'odp'],
+  pptx: ['pdf', 'pptx', 'odp'],
+  pptm: ['pdf', 'pptx', 'odp'],
+  odp: ['pdf', 'pptx', 'odp'],
+  doc: ['pdf', 'docx', 'odt', 'rtf'],
+  docx: ['pdf', 'docx', 'odt', 'rtf'],
+  docm: ['pdf', 'docx', 'odt', 'rtf'],
+  odt: ['pdf', 'docx', 'odt', 'rtf'],
+  rtf: ['pdf', 'docx', 'odt', 'rtf'],
+  xls: ['pdf', 'xlsx', 'ods', 'csv'],
+  xlsx: ['pdf', 'xlsx', 'ods', 'csv'],
+  xlsm: ['pdf', 'xlsx', 'ods', 'csv'],
+  xlsb: ['pdf', 'xlsx', 'ods', 'csv'],
+  ods: ['pdf', 'xlsx', 'ods', 'csv'],
+  csv: ['pdf', 'xlsx', 'ods', 'csv'],
+  // 현재 NAS의 LibreOffice에는 HWP/HWPX·한셀 입력 filter가 없다. UI가
+  // 가능하다고 거짓 표시하지 않도록 감지는 하되 출력 선택은 열지 않는다.
+  hwp: [],
+  hwpx: [],
+  cell: [],
+  nxl: [],
+});
+const OUTPUT_FORMATS = new Set([...new Set(Object.values(FORMAT_MATRIX).flat())]);
 
 const commandCandidates = {
   libreoffice: ['/usr/bin/libreoffice', '/usr/bin/soffice'],
@@ -35,6 +60,9 @@ const getDocumentStudioCapabilities = () => ({
   pdfMerge: !!firstExecutable(commandCandidates.pdfunite),
   modes: [...MODES],
   acceptedExtensions: [...ACCEPTED_EXTENSIONS].map((extension) => extension.slice(1)),
+  formatMatrix: FORMAT_MATRIX,
+  outputFormats: [...OUTPUT_FORMATS],
+  unavailableSourceFormats: Object.entries(FORMAT_MATRIX).filter(([, outputs]) => outputs.length === 0).map(([format]) => format),
   maxSources: MAX_SOURCES,
 });
 
@@ -51,6 +79,32 @@ const sanitizeFileName = (value, fallback = '완료.pdf') => {
 const normalizeMode = (mode) => {
   const normalized = String(mode || '');
   if (!MODES.has(normalized)) throw createHttpError('지원하지 않는 문서 작업입니다.');
+  return normalized;
+};
+
+const normalizeSourceFormat = (sourceFormat = 'auto') => {
+  const normalized = String(sourceFormat || 'auto').toLowerCase().replace(/^\./, '');
+  if (normalized !== 'auto' && !Object.hasOwn(FORMAT_MATRIX, normalized)) throw createHttpError('지원하지 않는 원본 형식입니다.');
+  return normalized;
+};
+
+const getSharedOutputFormats = (formats) => {
+  const normalized = [...new Set(formats.map((format) => String(format || '').toLowerCase().replace(/^\./, '')))];
+  if (normalized.length === 0) return [];
+  return normalized.reduce((shared, format, index) => {
+    const outputs = FORMAT_MATRIX[format] || [];
+    return index === 0 ? [...outputs] : shared.filter((output) => outputs.includes(output));
+  }, []);
+};
+
+const normalizeOutputFormat = (outputFormat, sourceFormats) => {
+  const normalized = String(outputFormat || 'pdf').toLowerCase().replace(/^\./, '');
+  if (!OUTPUT_FORMATS.has(normalized)) throw createHttpError('지원하지 않는 결과 형식입니다.');
+  const allowed = getSharedOutputFormats(sourceFormats);
+  if (!allowed.includes(normalized)) {
+    const sourceLabel = [...new Set(sourceFormats)].map((format) => format.toUpperCase()).join(', ');
+    throw createHttpError(`${sourceLabel || '선택한 원본'}에서 ${normalized.toUpperCase()} 형식으로 변환할 수 없습니다.`);
+  }
   return normalized;
 };
 
@@ -110,23 +164,24 @@ const runCommand = (command, args, { cwd, env = {}, timeoutMs = COMMAND_TIMEOUT_
   });
 });
 
-const uniquePdfName = (name, usedNames) => {
-  const base = sanitizeFileName(name, '문서.pdf').replace(/\.[^.]+$/, '') || '문서';
-  let candidate = `${base}.pdf`;
+const uniqueResultName = (name, outputFormat, usedNames) => {
+  const extension = `.${outputFormat}`;
+  const base = sanitizeFileName(name, `문서${extension}`).replace(/\.[^.]+$/, '') || '문서';
+  let candidate = `${base}${extension}`;
   let index = 2;
-  while (usedNames.has(candidate.toLowerCase())) candidate = `${base} (${index++}).pdf`;
+  while (usedNames.has(candidate.toLowerCase())) candidate = `${base} (${index++})${extension}`;
   usedNames.add(candidate.toLowerCase());
   return candidate;
 };
 
-const convertSourceToPdf = async (source, workspaceDir, usedNames) => {
-  const resultName = uniquePdfName(source.name, usedNames);
+const convertSourceToFormat = async (source, outputFormat, workspaceDir, usedNames) => {
+  const resultName = uniqueResultName(source.name, outputFormat, usedNames);
   const resultPath = path.join(workspaceDir, 'results', resultName);
   await fsp.mkdir(path.dirname(resultPath), { recursive: true });
 
-  if (source.extension === '.pdf') {
+  if (source.extension === `.${outputFormat}`) {
     await fsp.copyFile(source.path, resultPath);
-    return { path: resultPath, name: resultName, sourceName: source.name, compatibility: 'original-pdf' };
+    return { path: resultPath, name: resultName, sourceName: source.name, sourceFormat: source.extension.slice(1), outputFormat, compatibility: outputFormat === 'pdf' ? 'original-pdf' : 'original-format-copy' };
   }
 
   const libreoffice = firstExecutable(commandCandidates.libreoffice);
@@ -141,18 +196,18 @@ const convertSourceToPdf = async (source, workspaceDir, usedNames) => {
   await runCommand(libreoffice, [
     '--headless', '--nologo', '--nodefault', '--nolockcheck', '--nofirststartwizard',
     `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
-    '--convert-to', 'pdf', '--outdir', convertDir, stagedInput,
+    '--convert-to', outputFormat, '--outdir', convertDir, stagedInput,
   ], {
     cwd: workspaceDir,
     env: { HOME: workspaceDir, SAL_DISABLE_OPENCL: '1' },
   });
 
-  const convertedPath = path.join(convertDir, `${path.parse(stagedInput).name}.pdf`);
+  const convertedPath = path.join(convertDir, `${path.parse(stagedInput).name}.${outputFormat}`);
   if (!fs.existsSync(convertedPath) || !fs.statSync(convertedPath).isFile()) {
-    throw createHttpError(`${source.name}을 PDF로 변환하지 못했습니다.`, 422);
+    throw createHttpError(`${source.name}을 ${outputFormat.toUpperCase()} 형식으로 변환하지 못했습니다.`, 422);
   }
   await fsp.rename(convertedPath, resultPath);
-  return { path: resultPath, name: resultName, sourceName: source.name, compatibility: 'libreoffice-compatible' };
+  return { path: resultPath, name: resultName, sourceName: source.name, sourceFormat: source.extension.slice(1), outputFormat, compatibility: 'libreoffice-compatible' };
 };
 
 const mergePdfResults = async (pdfResults, workspaceDir, outputName) => {
@@ -167,17 +222,25 @@ const mergePdfResults = async (pdfResults, workspaceDir, outputName) => {
   return { path: resultPath, name, compatibility: pdfResults.some((item) => item.compatibility !== 'original-pdf') ? 'mixed-compatible' : 'original-pdf-merge' };
 };
 
-const processDocumentStudioJob = async ({ mode, sources, workspaceDir, outputName }) => {
+const processDocumentStudioJob = async ({ mode, sources, workspaceDir, outputName, sourceFormat = 'auto', outputFormat = 'pdf' }) => {
   const normalizedMode = normalizeMode(mode);
   const inspected = inspectSources(sources);
+  const normalizedSourceFormat = normalizeSourceFormat(sourceFormat);
+  if (normalizedSourceFormat !== 'auto' && inspected.some((source) => source.extension !== `.${normalizedSourceFormat}`)) {
+    throw createHttpError(`원본 형식을 ${normalizedSourceFormat.toUpperCase()}로 선택했습니다. 같은 형식의 파일만 추가하세요.`);
+  }
   if (normalizedMode === 'merge-pdf' && inspected.some((source) => source.extension !== '.pdf')) {
     throw createHttpError('PDF 합치기에는 PDF 파일만 사용할 수 있습니다. 다른 문서는 혼합 문서 합치기를 선택하세요.');
   }
 
+  const requestedOutputFormat = normalizedMode === 'convert-pdf'
+    ? normalizeOutputFormat(outputFormat, inspected.map((source) => source.extension.slice(1)))
+    : 'pdf';
   const usedNames = new Set();
-  const pdfResults = [];
-  for (const source of inspected) pdfResults.push(await convertSourceToPdf(source, workspaceDir, usedNames));
-  if (normalizedMode === 'convert-pdf') return pdfResults;
+  const convertedResults = [];
+  for (const source of inspected) convertedResults.push(await convertSourceToFormat(source, requestedOutputFormat, workspaceDir, usedNames));
+  if (normalizedMode === 'convert-pdf') return convertedResults;
+  const pdfResults = convertedResults;
   return [await mergePdfResults(pdfResults, workspaceDir, outputName)];
 };
 
@@ -185,10 +248,14 @@ module.exports = {
   ACCEPTED_EXTENSIONS,
   CONVERTIBLE_EXTENSIONS,
   MAX_SOURCES,
+  FORMAT_MATRIX,
   getDocumentStudioCapabilities,
+  getSharedOutputFormats,
   normalizeMode,
+  normalizeSourceFormat,
+  normalizeOutputFormat,
   sanitizeFileName,
   inspectSources,
   processDocumentStudioJob,
-  _test: { uniquePdfName, firstExecutable },
+  _test: { uniqueResultName, firstExecutable },
 };

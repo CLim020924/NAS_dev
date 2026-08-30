@@ -10,6 +10,7 @@ import { Rnd } from 'react-rnd';
 import { useWindows } from '../contexts/WindowContext';
 import MeetingApp from './MeetingApp';
 import DocumentStudio from './DocumentStudio/DocumentStudio';
+import { getAppWindowLayerZIndex } from './windowLayerPolicy';
 
 class AppWindowErrorBoundary extends React.Component {
   constructor(props) {
@@ -86,7 +87,7 @@ const GlobalAppWindowLayer = () => {
   if (appWindows.length === 0) return null;
 
   return (
-    <Box sx={{ position: 'absolute', inset: 0, zIndex: 80, pointerEvents: 'none' }}>
+    <Box sx={{ position: 'absolute', inset: 0, zIndex: getAppWindowLayerZIndex(openWindows, focusedContext), pointerEvents: 'none' }}>
       <AnimatePresence>
         {appWindows.map((win) => {
           const isActive = focusedContext === win.id;

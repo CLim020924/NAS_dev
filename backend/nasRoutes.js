@@ -1363,6 +1363,8 @@ router.post('/document-studio/run', verifyToken, async (req, res) => {
       sources,
       workspaceDir,
       outputName: req.body?.outputName,
+      sourceFormat: req.body?.sourceFormat,
+      outputFormat: req.body?.outputFormat,
     });
 
     const totalOutputBytes = processed.reduce((sum, item) => sum + fs.statSync(item.path).size, 0);
@@ -1388,6 +1390,8 @@ router.post('/document-studio/run', verifyToken, async (req, res) => {
         size: fs.statSync(item.targetPath).size,
         compatibility: item.compatibility,
         sourceName: item.sourceName || null,
+        sourceFormat: item.sourceFormat || null,
+        outputFormat: item.outputFormat || path.extname(item.targetPath).slice(1).toLowerCase(),
       })),
     });
   } catch (error) {

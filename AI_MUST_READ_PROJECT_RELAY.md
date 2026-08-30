@@ -708,3 +708,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 실제 로그인 Chrome의 공개 `ServicePlatform`에서 `문서 스튜디오` 아이콘과 독립 창, 세 가지 mode, `NAS에서 불러오기`, `이 기기에서 불러오기`, 순서 편집, 완료 경로 UI를 확인했다. NAS picker로 `제인 진 대화.docx`, `제인 진 코칭대화(영문).docx`를 선택해 혼합 결합을 실행했고 `/문서 스튜디오/완료 파일/문서 스튜디오 실화면 검증.pdf`가 생성됐다. 결과 열기에서 PDF canvas 20개와 본문 text layer가 정상 렌더됐다. 현재 기기 버튼은 Chrome native file chooser를 실제 호출하며 기존 `TransferContext.startUpload` 경로에 연결된다.
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 HTTP 200이다. 원본 DOCX와 Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
 - workbook의 `Request_Archive`, `Patch_Log`, `Feature_Index`, `Relation_Map`, `Do_Not_Break`, `Code_Map`, `Office_Viewers`, `API_Routes`를 갱신했다. formula error 0, 관련 범위 렌더와 API route 열 구조를 확인했다. 1차 범위 밖인 PPTX 원본 합치기, 템플릿 일괄 만들기, Microsoft Office·한컴 네이티브 고정밀 변환은 후속 기능으로 명시했다.
+
+## 2026-08-31 문서 스튜디오 결과 창 전면 활성화·원본→결과 형식 선택 확장
+
+- 사용자 요청: 문서 스튜디오에서 결과 `열기`를 눌렀을 때 새 파일 창이 작업 창 뒤에 숨지 않고 즉시 가장 앞으로 와야 한다. 변환 모드는 파일보다 먼저 `원본 형식 → 결과 형식`을 명시적으로 고르고, 자동 감지·원본 직접 선택·실제 가능한 결과만 표시·선택 형식별 파일 필터·`PPTX 12개를 PDF로 변환` 형태의 실행 문구를 제공한다. 1차 미구현 범위와 겹치는 다중 결과 형식도 함께 구현한다.
+- 원인: 각 결과 파일 창은 새 z-index와 focus를 받았지만 `GlobalAppWindowLayer` 부모가 z-index 80 stacking context로 고정돼 NAS 파일 창 부모 z-index 30보다 항상 위였다. 변환 서비스도 출력 형식을 PDF로 하드코딩해 UI만으로는 DOCX·PPTX·XLSX 등 결과를 만들 수 없었다.
+- 구현: 포커스가 앱 창이면 앱 layer 80, 파일·폴더 창이면 앱 layer 20으로 전환해 기존 단일 WindowContext의 focus/z-index를 실제 화면 순서에 반영한다. 변환 화면에 원본/결과 selector를 파일 선택보다 앞에 두고, 원본 직접 선택 시 NAS picker와 native file input accept를 같은 확장자로 제한한다. 자동 감지는 선택 파일들의 output 교집합만 표시하고 실행 버튼에 원본·수량·결과를 명시한다.
+- 서버 확장: presentation은 PDF/PPTX/ODP, text document는 PDF/DOCX/ODT/RTF, spreadsheet는 PDF/XLSX/ODS/CSV를 지원한다. 동일 형식은 원본을 변경하지 않고 결과 폴더에 복사하며 다른 형식은 작업별 격리 LibreOffice profile에서 변환한다. PDF 합치기 흐름은 유지한다. 현재 NAS에 입력 filter가 없는 HWP/HWPX/CELL/NXL은 거짓 성공 옵션을 표시하지 않고 `변환 도구 준비 필요`로 비활성화한다.
+- 사전 검증: backend 정책 3/3, frontend 형식·layer 정책 4/4가 통과했다. Linux LibreOffice 실변환 통합 테스트, production build, 공개 UI의 형식 필터·버튼 문구·결과 창 전면 활성화는 NAS 배포 후 확인한다.

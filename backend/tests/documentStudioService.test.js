@@ -5,8 +5,11 @@ const os = require('os');
 const path = require('path');
 const {
   getDocumentStudioCapabilities,
+  getSharedOutputFormats,
   inspectSources,
   normalizeMode,
+  normalizeOutputFormat,
+  normalizeSourceFormat,
   sanitizeFileName,
   _test,
 } = require('../documentStudioService');
@@ -16,8 +19,13 @@ test('document studio constrains modes and output file names', () => {
   assert.throws(() => normalizeMode('run-shell'));
   assert.equal(sanitizeFileName('../bad:name.pdf'), 'bad_name.pdf');
   const used = new Set();
-  assert.equal(_test.uniquePdfName('보고서.docx', used), '보고서.pdf');
-  assert.equal(_test.uniquePdfName('보고서.xlsx', used), '보고서 (2).pdf');
+  assert.equal(_test.uniqueResultName('보고서.docx', 'pdf', used), '보고서.pdf');
+  assert.equal(_test.uniqueResultName('보고서.xlsx', 'pdf', used), '보고서 (2).pdf');
+  assert.equal(normalizeSourceFormat('.PPTX'), 'pptx');
+  assert.deepEqual(getSharedOutputFormats(['pptx', 'odp']), ['pdf', 'pptx', 'odp']);
+  assert.deepEqual(getSharedOutputFormats(['pptx', 'docx']), ['pdf']);
+  assert.throws(() => normalizeOutputFormat('docx', ['hwp']));
+  assert.throws(() => normalizeOutputFormat('xlsx', ['docx']));
 });
 
 test('document studio accepts regular supported files and rejects links or unknown formats', () => {
@@ -43,5 +51,8 @@ test('document studio reports conversion capabilities without exposing command p
   const capabilities = getDocumentStudioCapabilities();
   assert.equal(Array.isArray(capabilities.acceptedExtensions), true);
   assert.equal(capabilities.acceptedExtensions.includes('pdf'), true);
+  assert.deepEqual(capabilities.formatMatrix.pptx, ['pdf', 'pptx', 'odp']);
+  assert.deepEqual(capabilities.formatMatrix.hwp, []);
+  assert.equal(capabilities.unavailableSourceFormats.includes('cell'), true);
   assert.equal(Object.values(capabilities).some((value) => typeof value === 'string' && value.includes('/usr/bin')), false);
 });

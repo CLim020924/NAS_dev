@@ -49,3 +49,46 @@ test('document studio converts two documents and produces one merged PDF', {
     await fsp.rm(root, { recursive: true, force: true });
   }
 });
+
+test('document studio converts an ODT document to DOCX and preserves same-format copies', {
+  skip: !capabilities.libreoffice,
+  timeout: 60000,
+}, async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'document-studio-format-integration-'));
+  try {
+    const sourceDir = path.join(root, 'sources');
+    const profileDir = path.join(root, 'source-profile');
+    await Promise.all([fsp.mkdir(sourceDir, { recursive: true }), fsp.mkdir(profileDir, { recursive: true })]);
+    const textPath = path.join(sourceDir, 'format-source.txt');
+    await fsp.writeFile(textPath, 'format conversion test', 'utf8');
+    await execFileAsync('/usr/bin/libreoffice', [
+      '--headless', '--nologo', '--nodefault', '--nolockcheck', '--nofirststartwizard',
+      `-env:UserInstallation=${new URL(`file://${profileDir}`).href}`,
+      '--convert-to', 'odt', '--outdir', sourceDir, textPath,
+    ], { timeout: 30000, env: { ...process.env, HOME: root } });
+
+    const sourcePath = path.join(sourceDir, 'format-source.odt');
+    const converted = await processDocumentStudioJob({
+      mode: 'convert-pdf',
+      sourceFormat: 'odt',
+      outputFormat: 'docx',
+      sources: [{ path: sourcePath, name: 'format-source.odt' }],
+      workspaceDir: path.join(root, 'docx-workspace'),
+    });
+    assert.equal(converted[0].name, 'format-source.docx');
+    assert.equal(converted[0].outputFormat, 'docx');
+    assert.ok(fs.statSync(converted[0].path).size > 1000);
+
+    const copied = await processDocumentStudioJob({
+      mode: 'convert-pdf',
+      sourceFormat: 'odt',
+      outputFormat: 'odt',
+      sources: [{ path: sourcePath, name: 'format-source.odt' }],
+      workspaceDir: path.join(root, 'copy-workspace'),
+    });
+    assert.equal(copied[0].compatibility, 'original-format-copy');
+    assert.deepEqual(await fsp.readFile(copied[0].path), await fsp.readFile(sourcePath));
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
