@@ -625,3 +625,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 추가 회귀 수정: 프로필 목록에서 세로 scrollbar가 생긴 뒤 첫 화면으로 돌아오면 남아 있던 layout 폭 때문에 기본 브라우저 카드가 다음 줄로 밀리는 문제를 실제 왕복 중 발견했다. 카드 폭·간격을 scrollbar가 있어도 3열이 유지되도록 조정하고 페이지 전환 시 scroll 위치 초기화와 즉시 layout을 수행한다.
 - 현재 PC 실화면 E2E: 실제 picker 첫 화면에서 Chrome·Edge·Windows 기본 브라우저 3개가 한 줄의 둥근 카드로 보이는 것을 확인했다. Chrome 프로필 화면에서 3열 카드, 좌측 상단 뒤로가기, 우측 하단 취소 버튼을 확인했고, 뒤로가기를 실제 클릭한 뒤 첫 화면도 다시 3열을 유지했다. 최근 Chrome 프로필 직접 열기는 1.10.21 진단에서 `opened/chrome`, health는 `up-to-date`, `needsRelink=false`다.
 - 기록: workbook의 `Request_Archive`, `Patch_Log`, `Feature_Index`, `Do_Not_Break`, `Code_Map`을 1.10.21 기준으로 갱신했고 formula error 0과 관련 범위 렌더를 확인했다. 사용자 파일·활성 credential·브라우저 인증 자료는 변경하지 않았다. 다음 단계는 최종 자동 테스트, GitHub push, NAS Linux 전체 테스트와 live 배포 검증이다.
+
+### 1.10.21 GitHub·NAS 최종 배포 검증
+
+- 기능·binary·workbook·relay commit `af9c7a5`를 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- 로컬에서 desktop handoff/browser tests 4/4와 packaged Agent·Setup self-test를 통과했다. NAS에서는 Agent source self-test와 symlink 경계 보안을 포함한 backend tests 10/10을 통과했다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030과 공개 HTTPS는 HTTP 200이다.
+- NAS 배포 binary와 현재 PC 설치본 hash가 일치한다. Agent SHA-256은 `478C5CFD89F8DF38D1925E3C7DF8A67138888FC44E20DA011F661A5C0A3FCA1C`, Setup/launcher SHA-256은 `2C412B82F7C268A1965E45FA7ACF6C9C16D48DF0816A5E1E8314F47D55ECB491`이다.
+- 최종 현재 PC 상태는 picker 실화면 왕복 검증 완료, 1.10.21 open-web 진단 `opened/chrome`, health `up-to-date`, `needsRelink=false`다. 사용자 파일·활성 DPAPI credential은 보존됐다.
