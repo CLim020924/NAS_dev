@@ -418,3 +418,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: source/packaged Agent self-test, Setup self-test, backend tests 8/8, node/diff check 통과. NAS PM2 restart/save 후 online, 내부 3030·공개 HTTPS 200. 현재 PC launcher/Agent/Provider 3개, 시작 프로그램, 계정/동기화 루트 보존, health `up-to-date`를 확인했다.
 
 절대 회귀 규칙: Agent supervisor는 프로세스 이름만으로 정상 설치본을 판단하지 않는다. 정식 설치 경로의 실행 파일만 정상 Agent로 인정한다. 다른 경로의 동명 프로세스를 자동 종료하거나 사용자 파일로 오인하지 말고, 정식 Agent를 독립적으로 복구한다. health 파일이 `up-to-date`여도 updatedAt이 오래됐으면 실제 Agent/Provider 프로세스와 heartbeat를 함께 확인한다.
+
+## 2026-08-30 새 PC 자동 구성용 ChatGPT/Codex 시작 프롬프트
+
+- 사용자 요청: 다른 ChatGPT/Codex에 붙여 넣으면 Tailscale 설치부터 SSH와 프로젝트 메모리 확인까지 최대한 스스로 처리하는 프롬프트를 제공한다.
+- 문서 갱신: `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md` 9절에 winget 설치 확인, Tailscale 공식 설치·로그인, NAS ping, OpenSSH/Git 설치, 장치별 ed25519 키, 안전한 SSH config 병합, host fingerprint, NAS 프로젝트/메모리/서비스 검증, 릴레이·Git 기록 순서를 포함한 복사용 프롬프트를 추가했다.
+- 사용자 개입 경계: Windows UAC, Tailscale 웹 로그인, 새 SSH 공개키 최초 등록, host fingerprint 승인은 보안상 사용자가 확인한다. 프롬프트는 이를 우회하거나 비밀값을 요구하지 않고 필요한 순간 한 번만 명확히 요청한 뒤 계속 진행한다.
+- 회귀 금지: Tailscale auth key나 SSH 개인키를 프롬프트·Git·릴레이에 넣어 무인 설치를 가장하지 않는다. 공개 사이트 200을 Tailscale/SSH 성공으로 간주하지 않고 각각 실제 명령으로 확인한다.
