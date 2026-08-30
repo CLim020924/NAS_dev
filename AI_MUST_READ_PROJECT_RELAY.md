@@ -678,3 +678,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - hashed asset을 먼저 복사하고 index를 마지막에 원자 교체했다. live와 build index는 모두 `main.d79b1b60.js`를 가리킨다. backend 변경은 없어 `msp-backend`를 불필요하게 재시작하지 않았다.
 - 로그인된 실제 Chrome에서 `합친 PDF.pdf` 11개 canvas를 다시 열어 검증했다. 상단 확대 버튼은 100→115%, `Ctrl++`는 115→130%, PDF canvas 위 실제 `Ctrl+휠`은 100→115%로 해당 PDF만 변경했다. 기준 canvas 폭 755.80px은 각 880.99px·995.99px으로 커졌지만 브라우저 `devicePixelRatio=0.9`, `visualViewport.scale=1`, 문서 clientWidth=2133px은 모든 입력 전후 동일했다. 즉 웹페이지 전체 확대는 발생하지 않았다.
 - NAS backend tests 10/10을 통과했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, `msp-backend`는 online, 내부 3030·공개 HTTPS는 HTTP 200이다. PDF 원본과 사용자 파일, Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+
+## 2026-08-31 신규 `문서 스튜디오` 기획 검토
+
+- 사용자 요청: NAS 플랫폼 화면에 여러 문서 변환, PDF/PPTX/혼합 문서 합치기, PPTX 템플릿 대량 생성, 결과 미리보기, 글꼴·형식 보호를 제공하는 새 프로그램을 기획하고 입력 파일을 NAS 내부 또는 현재 기기 저장소에서 불러오고 싶다.
+- 검토 결론: 현재 `ServicePlatform`의 앱 목록, `WindowContext.openAppWindow`, `GlobalAppWindowLayer`에 독립 앱 `문서 스튜디오`를 추가하는 구조가 적합하다. 기존 파일관리자 화면에 기능을 직접 섞지 않고 변환/합치기/일괄 만들기 3개 모드를 가진 별도 작업공간으로 둔다.
+- 입력 구조: 첫 단계에서 `NAS에서 선택`과 `이 기기에서 선택`을 함께 제공한다. NAS 파일은 로그인 계정의 상대경로·stable file reference로 서버 작업에 직접 연결해 불필요한 재업로드를 피한다. 기기 파일은 브라우저의 사용자 승인 파일/폴더 선택으로 가져와 기존 resumable upload를 통해 계정별 임시 작업공간에 올린다. NAS Drive가 설치된 PC에서는 동기화 루트도 일반 파일 선택기로 선택할 수 있다. 웹페이지가 사용자 승인 없이 PC 임의 경로를 읽게 하지 않는다.
+- 처리 구조 제안: 서버 job queue와 격리 worker에서 LibreOffice/PDF 도구 기반 호환 처리를 수행하고, Microsoft Office·한컴·유료 글꼴이 필요한 고정밀 변환은 향후 장치 Agent의 명시적 로컬 작업 capability로 분리한다. 매크로 실행 금지, 입력 크기·페이지·시간 제한, temp TTL 정리, quota, realpath 계정 경계, 결과 원자 저장, 작업 취소·재시도를 기본 규칙으로 둔다.
+- 출력 구조: 기본은 사용자가 고른 NAS 폴더에 결과를 저장하고 파일관리자에서 즉시 열며, 필요하면 이 기기로 다운로드한다. 로컬 네이티브 작업을 추가할 때만 사용자가 고른 PC 폴더 저장을 지원한다. 원본은 수정하지 않고 결과와 작업 manifest를 별도로 만든다.
+- 현재 상태: 기획 검토만 완료했으며 코드·서비스·네트워크·Office/HWP 설정은 변경하지 않았다. 다음 안전한 단계는 1차 범위를 `PDF 합치기 + Office/PPTX→PDF 변환 + NAS/기기 이중 선택 + NAS 결과 저장`으로 정하고 UI·job API·worker·보안 테스트를 구현하는 것이다.
