@@ -752,3 +752,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 새 문서 API: `POST /api/document-workspace/documents`는 로그인 계정 root 안의 폴더만 사용하고 지원 형식 allowlist, 정리된 파일명, realpath, quota, 기존 이름 충돌 시 고유 이름, 권한 600 임시파일과 원자 rename을 적용한다. DOCX/XLSX/PPTX는 필수 OOXML package를 만들고 HWP/HWPX는 RHWP `HwpDocument.createEmpty()`의 실제 export를 사용한다. 기존 파일을 덮어쓰지 않는다.
 - 사전 검증: backend 문법 검사와 blank OOXML package 단위 테스트를 통과했다. RHWP WASM에서 빈 문서를 실제 생성해 HWP OLE signature와 HWPX ZIP signature를 확인했다. 로컬 frontend production build는 이번 변경과 무관한 기존 eslint warning만 남기고 성공했다. Windows 로컬 전체 Jest는 기존 `canvas.node` native binding 부재 때문에 시작 전 실패해 NAS Linux에서 다시 실행한다.
 - 다음 안전한 단계: 기능·워크북·릴레이를 활성 브랜치에 push하고 NAS에서 backend/frontend tests, 실제 DOCX/XLSX/PPTX/HWP/HWPX 생성·편집기 열기, 공개 플랫폼의 두 앱 이름과 최근 문서 화면을 확인한 뒤 최종 검증 내용을 같은 기록에 추가한다.
+
+### GitHub·NAS 배포 및 검증 경계
+
+- 기능·워크북·릴레이 commit `d1482ff`를 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다. NAS frontend `npm ci`와 production/PDF.js gate가 통과했으며 live `/var/www/html`은 hashed asset을 먼저 복사하고 index를 마지막에 원자 교체해 `main.dd0a4a9b.js`를 제공한다.
+- NAS backend 전체 test file은 모두 통과했다. 문서 스튜디오 관련 Linux 통합 테스트는 ODT→PDF/DOCX·PDF 결합을 포함한다. 새 빈 DOCX/XLSX/PPTX는 NAS LibreOffice에서 각각 1페이지 PDF로 실제 열기·변환되어 package 유효성을 확인했다. RHWP `createEmpty`는 HWP OLE·HWPX ZIP 파일을 실제 export했다.
+- frontend 기능·정책 테스트 18개는 통과했다. 기본 `App.test.js` 하나는 이번 기능이 아니라 기존 Node 18/Jest resolver가 설치된 React Router 7 package를 찾지 못해 suite 시작 전에 실패했다. production build는 기존 unrelated eslint warning만 남기고 성공했고 PDF.js API/Worker 4.8.69 일치를 확인했다.
+- `msp-backend`는 restart/save 후 online이고 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active다. 내부 3030과 공개 HTTPS는 HTTP 200, 새 문서 API의 비로그인 요청은 401로 차단된다.
+- NAS Drive는 일회용 웹 세션을 정상 발급해 Chrome을 열었지만, 열린 프로필 창이 기존 Browser 연결 밖에 있었고 Windows 화면 제어는 현재 Chrome URL을 충분히 확정하지 못해 안전상 자동 중단됐다. 따라서 공개 화면의 두 앱 이름·생성 버튼·OnlyOffice/RHWP 전면 창은 이번 배포에서 `확인 필요`로 남긴다. 다음 안전한 단계는 사용자가 로그인된 Chrome 탭을 열어 둔 상태에서 해당 세 항목만 실화면 회귀 확인하는 것이다.
