@@ -12,6 +12,7 @@ import initRhwp, { HwpDocument } from '@rhwp/core';
 import rhwpWasmUrl from '@rhwp/core/rhwp_bg.wasm';
 import { createEditor } from '@rhwp/editor';
 import NasItemPickerDialog from '../NasItemPickerDialog';
+import { exportRhwpWithRecovery, getNasRhwpShortcutAction, replaceRhwpExtension } from './rhwpSavePolicy';
 
 let rhwpReadyPromise = null;
 
@@ -292,21 +293,26 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
 
   const exportFromEditor = async (format) => {
     if (!editorRef.current) return;
-    const bytes = format === 'hwpx'
-      ? await editorRef.current.exportHwpx()
-      : await editorRef.current.exportHwp();
-    const blob = new Blob([bytes], {
-      type: format === 'hwpx' ? 'application/vnd.hancom.hwpx' : 'application/x-hwp'
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const baseName = String(name || 'document').replace(/\.(hwp|hwpx)$/i, '');
-    a.href = url;
-    a.download = `${baseName}.${format}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setError('');
+    try {
+      const result = await exportRhwpWithRecovery(editorRef.current, format);
+      const { bytes } = result;
+      const blob = new Blob([bytes], {
+        type: result.format === 'hwpx' ? 'application/vnd.hancom.hwpx' : 'application/x-hwp'
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const baseName = String(name || 'document').replace(/\.(hwp|hwpx)$/i, '');
+      a.href = url;
+      a.download = `${baseName}.${result.format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      if (result.recovered) setNotice('이 HWPX의 스타일 참조 오류를 복구해 안전한 HWP 파일로 내보냈습니다.');
+    } catch (err) {
+      setError(err.message || '한글 문서를 내보내지 못했습니다.');
+    }
   };
 
   const getPreferredFormat = useCallback(() => String(name || '').toLowerCase().endsWith('.hwpx') ? 'hwpx' : 'hwp', [name]);
@@ -318,20 +324,22 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
     setNotice('');
     try {
       const finalName = String(fileName || name || '').trim() || `document.${getPreferredFormat()}`;
-      const format = finalName.toLowerCase().endsWith('.hwpx') ? 'hwpx' : 'hwp';
-      const bytes = format === 'hwpx'
-        ? await editorRef.current.exportHwpx()
-        : await editorRef.current.exportHwp();
+      const requestedFormat = finalName.toLowerCase().endsWith('.hwpx') ? 'hwpx' : 'hwp';
+      const exported = await exportRhwpWithRecovery(editorRef.current, requestedFormat);
+      const { bytes } = exported;
+      const savedName = replaceRhwpExtension(finalName, exported.format);
       await onSave({
         bytes,
-        format,
-        fileName: finalName,
+        format: exported.format,
+        fileName: savedName,
         targetPath: targetPath ? normalizeNasPath(targetPath) : undefined
       });
       const nextBuffer = bytes instanceof Uint8Array ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
       setBuffer(nextBuffer);
       markDirty(false);
-      setNotice(targetPath ? `NAS에 ${finalName} 파일로 저장되었습니다.` : 'NAS에 저장되었습니다.');
+      setNotice(exported.recovered
+        ? `기존 HWPX의 스타일 참조 오류를 복구해 NAS에 ${savedName} 파일로 저장했습니다.`
+        : (targetPath ? `NAS에 ${savedName} 파일로 저장되었습니다.` : 'NAS에 저장되었습니다.'));
       return true;
     } catch (err) {
       setError(err.message || 'NAS 저장에 실패했습니다.');
@@ -367,11 +375,11 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
 
   useEffect(() => {
     const handleKeyDown = (event) => {
-      const key = String(event.key || '').toLowerCase();
-      if (mode !== 'editor' || key !== 's' || (!event.ctrlKey && !event.metaKey)) return;
+      const action = mode === 'editor' ? getNasRhwpShortcutAction(event) : null;
+      if (!action) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.shiftKey) openSaveAsDialog();
+      if (action === 'save-as') openSaveAsDialog();
       else saveToNas();
     };
     window.addEventListener('keydown', handleKeyDown, true);
@@ -385,10 +393,11 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
     const handleEditorKeyDown = (event) => {
       const key = String(event.key || '').toLowerCase();
       if (!event.ctrlKey && !event.metaKey && key.length === 1) markDirty(true);
-      if (key !== 's' || (!event.ctrlKey && !event.metaKey)) return;
+      const action = getNasRhwpShortcutAction(event);
+      if (!action) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.shiftKey) openSaveAsDialog();
+      if (action === 'save-as') openSaveAsDialog();
       else saveToNas();
     };
     const handleEditorMenuCommand = (event) => {
@@ -408,6 +417,9 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
     const attach = () => {
       try {
         const doc = iframe.contentDocument;
+        iframe.focus();
+        iframe.contentWindow?.focus();
+        doc?.querySelector('#scroll-container')?.focus({ preventScroll: true });
         iframe.contentWindow?.addEventListener('keydown', handleEditorKeyDown, true);
         doc?.addEventListener('keydown', handleEditorKeyDown, true);
         ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach((eventName) => {

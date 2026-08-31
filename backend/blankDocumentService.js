@@ -1,6 +1,9 @@
 const JSZip = require('jszip');
+const fs = require('fs');
+const path = require('path');
 
 const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+const BLANK_HWPX_TEMPLATE = path.join(__dirname, 'assets', 'templates', 'blank.hwpx');
 
 const addRootRelationships = (zip, target) => {
   zip.file('_rels/.rels', `${XML}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="${target}"/></Relationships>`);
@@ -54,9 +57,28 @@ const createBlankOfficeDocument = async (format) => {
   throw error;
 };
 
+const createBlankRhwpDocument = (format, HwpDocument) => {
+  if (format === 'hwpx') {
+    // @rhwp/core createEmpty().exportHwpx() produces an empty refList while
+    // section0.xml references charPrIDRef=0. The document opens, but the next
+    // Ctrl+S/export rejects it as an unregistered ID. Use a round-trip-safe,
+    // genuinely blank HWPX template instead.
+    return fs.readFileSync(BLANK_HWPX_TEMPLATE);
+  }
+  if (format === 'hwp') {
+    if (!HwpDocument?.createEmpty) throw new TypeError('HwpDocument.createEmpty is required.');
+    return Buffer.from(HwpDocument.createEmpty().exportHwp());
+  }
+  const error = new Error('지원하지 않는 한글 문서 형식입니다.');
+  error.status = 400;
+  throw error;
+};
+
 module.exports = {
   createBlankOfficeDocument,
   createBlankDocx,
   createBlankXlsx,
-  createBlankPptx
+  createBlankPptx,
+  createBlankRhwpDocument,
+  BLANK_HWPX_TEMPLATE
 };

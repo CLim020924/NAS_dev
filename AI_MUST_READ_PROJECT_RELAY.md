@@ -768,3 +768,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 서버 경계: 응답 전에 messages/conversations/notifications JSON 전체를 동기식으로 읽고 다시 저장한 뒤 socket을 전파한다. 그러나 현재 live 데이터는 messages 15건 약 9.5KB, conversations 15건 약 9.9KB, notifications 186건 약 113KB이고 NAS load average는 0.01/0.05/0.13, 디스크 사용률은 9%였다. 500회 읽기·parse·stringify 벤치마크도 1ms 안팎이어서 현재 체감 지연의 단독 주원인은 서버 과부하나 JSON 크기가 아니라 HTTP 완료를 기다리는 UI 계약이다. 동기식 전체 재작성은 데이터 증가 시 별도 확장 위험이다.
 - 미수정·검증 경계: 사용자 계정으로 새 테스트 메시지를 전송하지 않았고 코드·서비스는 변경하지 않았다. 다음 안전한 수정은 clientMessageId 기반 낙관 표시와 즉시 draft 비우기, 전송 중 중복 방지, 실패 시 복원·재시도, 서버 idempotency를 한 묶음으로 적용하고 클릭→POST→저장→socket→상대 표시 타임라인을 계측하는 것이다.
 - 기록: workbook의 `Request_Archive`, `Patch_Log`, `Feature_Index`, `Relation_Map`, `Code_Map`, `Do_Not_Break`에 진단·미수정 상태와 회귀 방지 규칙을 기록했다.
+
+## 2026-08-31 문서 스튜디오 RHWP 커서·저장·단축키 안정화
+
+- 사용자 요청: 새 문서 스튜디오의 한글 편집 화면에서 글자 입력 커서가 깜빡이지 않고, `Ctrl+S` 저장 시 `charPrIDRef` 계열 오류가 발생한다. 저장뿐 아니라 인쇄 등 일반 문서 작업 단축키가 문서 내부에서 정상 동작하는지도 실제 화면으로 검증한다.
+- 실제 재현: 공개 로그인 Chrome에서 `/문서 스튜디오/새 한글 문서.hwpx`를 RHWP 에디터로 열었다. 편집기의 `.caret`는 `height: 0px`, `opacity: 0`이었고 `Ctrl+S` 직후 상위 창에 `렌더링 오류: XML 쓰기 실패: 미등록 ID 참조 발견: charPrIDRef: [0]`가 표시됐다.
+- 근본 원인: 새 HWPX API가 `HwpDocument.createEmpty().exportHwpx()`를 그대로 저장했다. 이 결과의 `Contents/section0.xml`은 `charPrIDRef="0"`을 참조하지만 `Contents/header.xml`의 `refList`는 비어 있다. 처음 열기는 가능해도 다음 HWPX 직렬화에서 참조 무결성 검사가 실패하며, 유효한 문자 스타일과 줄 형상이 없어 빈 문서 캐럿 높이도 0으로 남았다. 같은 과정을 최신 `@rhwp/core 0.8.4`에서도 메모리 왕복으로 재현해 단순 SDK 버전 충돌이 아님을 확인했다.
+- 구현: `@rhwp/core`·`@rhwp/editor`와 self-hosted rhwp-studio를 0.8.4로 맞추고 최신 편집기 캐럿·인쇄·저장 왕복 개선을 반영했다. 새 HWPX는 upstream의 실제 빈 HWPX template을 사용해 등록된 char/para/style 참조를 보장한다. 이미 생성된 불량 HWPX는 `exportHwpx()`의 미등록 스타일 참조 오류만 식별해 `exportHwp()`로 자동 복구하고 원본 HWPX를 덮어쓰지 않은 `.hwp` 파일로 NAS 저장/다운로드한다.
+- 단축키 경계: 상위 NAS wrapper는 `Ctrl+S`와 `Ctrl+Shift+S`만 각각 NAS 저장·다른 이름 저장으로 가로챈다. `Ctrl+P`, 실행 취소/다시 실행, 복사/붙여넣기, 선택, 찾기, 글자 서식 등은 iframe의 rhwp-studio에 그대로 전달한다. 에디터 load 뒤 iframe과 `#scroll-container`를 focus해 키보드 입력과 캐럿 활성화가 안정적으로 시작되게 했다.
+- 사전 검증: 새 blank HWPX가 등록된 `charProperties`와 `charPrIDRef=0`을 함께 가지며 RHWP parse→exportHwpx→reopen에서 1페이지로 왕복되는 backend test가 통과했다. 기존 불량 오류의 HWP fallback, 확장자 교체, `Ctrl+S`/`Ctrl+Shift+S`만 intercept하고 `Ctrl+P`/`Ctrl+Z`는 통과시키는 frontend tests 4/4가 통과했다. production build와 PDF.js API/Worker 4.8.69 gate도 성공했다. 다음 단계는 commit/push, NAS 배포, 새 문서와 기존 불량 문서에서 커서·저장·인쇄 실화면 검증이다.

@@ -59,7 +59,7 @@ const {
   processDocumentStudioJob,
   sanitizeFileName: sanitizeDocumentStudioFileName
 } = require('./documentStudioService');
-const { createBlankOfficeDocument } = require('./blankDocumentService');
+const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankDocumentService');
 
 const router = express.Router();
 
@@ -1758,8 +1758,7 @@ router.post('/document-workspace/documents', verifyToken, express.json(), async 
     let bytes;
     if (format === 'hwp' || format === 'hwpx') {
       const { HwpDocument } = await ensureServerRhwp();
-      const document = HwpDocument.createEmpty();
-      bytes = Buffer.from(format === 'hwpx' ? document.exportHwpx() : document.exportHwp());
+      bytes = createBlankRhwpDocument(format, HwpDocument);
     } else {
       bytes = await createBlankOfficeDocument(format);
     }
