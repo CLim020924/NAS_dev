@@ -796,3 +796,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 자동 검증: 설치 상태 self-test에 `구버전 표식+동일 SHA→Upgrade`, `버전 표식 누락+동일 SHA→Repair`, `Agent 최신+런처 구버전→Upgrade`, `런처 누락/손상→Repair`를 추가했다. Agent 소스/패키지 self-test와 Setup self-test가 모두 통과했다. 관련 commit은 `f9397e1`이고 branch `cleanup/git-tracking-2026-06-08`에 push했다.
 - NAS 배포: NAS live worktree가 `f9397e1`로 clean fast-forward됐고 backend test files 12/12가 통과했다. `msp-backend`는 online, 내부 3030과 공개 HTTPS는 HTTP 200이다. 최종 배포 SHA256은 Agent `f504b7e4f10df2ee2042cc7ef372abaf6af3a56301af1b49c5417e596eb45ef8`, Setup `01085048759efe8ca35c679fa625d49ed3da39fffd615a539f87f42fd0d3946b`다.
 - 남은 실기 검증: 현재 PC에서 새 1.10.23 Setup을 실행하는 것은 Windows의 새 소프트웨어 실행·설치 단계이므로 행동 시점 사용자 확인 후 진행한다. 그 뒤 `업데이트` 버튼 표시, 설치 완료, 런처/Agent/`agent-version.txt` 1.10.23, 기존 로그인과 연결 상태 보존을 실제 화면과 파일 상태로 최종 확인한다.
+
+## 2026-08-31 NAS Drive 1.10.23 UI 과도 축소 실화면 진단
+
+- 사용자 요청: NAS Driver UI가 갑자기 너무 작아졌는데 실제로 확인 가능한지 점검한다. 이번 요청은 우선 재현과 원인 진단이며 코드는 아직 바꾸지 않는다.
+- 현재 PC 상태: 설치된 `NAS-Drive.exe`와 `agent-version.txt`는 1.10.23이다. Windows `AppliedDPI`는 288로 배율 300%다. 설치된 launcher를 직접 열어 Setup과 상태 창을 모두 캡처했다.
+- 실제 재현: 소스 설계 크기가 `ClientSize 660×470`인 Setup은 화면 캡처에서 약 222×181, `ClientSize 620×620`인 상태 창은 약 209×231로 보였다. 접근성 tree에는 모든 문구와 버튼이 존재했으므로 콘텐츠가 빠진 것이 아니라 전체 폼과 글자가 함께 축소된 현상이다. 진단을 위해 연 창은 확인 뒤 닫았고 tray/background는 유지했다.
+- 원인 확정: launcher manifest는 `PerMonitorV2`인데 `InstallerForm`, `LoginForm`, `ControlCenterForm`, 브라우저 picker가 모두 `AutoScaleMode.None`과 고정 96-DPI 픽셀 `Point/Size/ClientSize`, 96-DPI 픽셀 `UiFont`를 사용한다. 300% 환경에서 이 좌표가 물리 픽셀로 고정되면서 논리 화면 크기가 정확히 약 1/3로 축소됐다. 과거 고DPI 잘림을 막으려 AutoScale 이중 적용을 제거한 조치가 반대 방향 축소 회귀를 만든 것이다.
+- 수정 경계: Windows 전역 배율을 100%로 바꾸는 우회는 사용하지 않는다. `PerMonitorV2`를 유지하면서 96-DPI 설계 좌표·폰트·owner-draw 카드를 현재 모니터 DPI로 정확히 한 번만 확대하는 공통 layout scale이 필요하다. 100%·150%·200%·300%와 서로 다른 배율 모니터 이동에서 폼 크기, 모든 버튼·문구, picker hover/focus를 실제 화면으로 확인해야 한다.
+- 기록: workbook에 `WIN-UI-DPI-SCALING`, 관련 Relation/Code map, 교정된 `WIN-UI-DPI-089`, 진단 Patch와 요청을 추가했다. formula error 0과 전체 시트 렌더·변경 범위 시각 검사를 통과했다.
+- 미완료/다음 조치: 1.10.24 수정, 빌드, NAS 배포, 현재 PC 설치는 아직 하지 않았다. 사용자가 수정을 요청하면 공통 단일 DPI scale을 구현하고 자동·실화면 검증까지 이어간다.
