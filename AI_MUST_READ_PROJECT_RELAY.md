@@ -887,3 +887,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - NAS Linux에서 전체 backend tests 22/22와 backend syntax가 통과했다. `msp-backend`를 restart/save한 뒤 online을 확인했고 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다.
 - 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다. NAS metadata는 1.10.27이고 배포 Agent SHA-256은 `faa230ba8235e78d4aeb387e6d91fc5b649b9faf6028952cce63be4863373547`, Setup SHA-256은 `d09ede9891e0302630dff432f0b13dadde16fae396651084e4b5c807f8e55545`로 로컬 build와 일치한다.
 - 실제 계정 비밀번호를 자동 입력하지 않았으므로 정상 로그인 완료 뒤 연결된 profile에서 사용자가 체감하는 logout 1회만 최종 확인 경계다. 인증 실패·무프로필·서버 오류·stale UI/foreground lock 경로는 현재 PC에서 재부팅 없이 복구되는 것을 확인했다.
+
+## 2026-08-31 HWP/HWPX 편집 커서·문자 입력 최종 안정화
+
+- 사용자 요청: HWP 등 편집기 모드에서 간헐적으로 마우스 커서가 보이지 않고 문자 입력도 되지 않는 문제를 마지막으로 수정한 뒤 AI 기능 작업으로 넘어간다.
+- 정확한 원인: rHWP Studio는 iframe 내부의 숨김 `[aria-label="문서 편집 입력"]` textarea에 실제 키 입력 포커스를 둔다. 기존 NAS wrapper는 attach 직후 iframe과 `#scroll-container`에 다시 포커스를 줘 Studio의 입력 포커스를 빼앗았다. 저장 성공 후에는 `setBuffer`가 `createEditor` effect를 다시 실행해 편집기 인스턴스를 destroy/recreate했으며, NAS 파일 창 활성화 상태도 rHWP wrapper에 전달되지 않았다.
+- 구현: scroll container 강제 포커스를 제거하고 실제 문서 textarea를 0/80/240ms 간격으로 복구한다. 활성 editor 파일 창, 저장 완료, 브라우저 focus·visibility 복귀, 외부 저장/폴더 선택 대화상자 종료를 복구 지점으로 연결했다. 비활성 NAS 창에서는 복구하지 않으며 rHWP 내부 찾기·이름·select·dialog 입력 중에는 포커스를 빼앗지 않는다. 저장 성공 뒤 buffer 재설정도 제거해 같은 editor 인스턴스를 유지한다.
+- 코드 검증: 새 `rhwpFocusPolicy.test.js`와 기존 `rhwpSavePolicy.test.js`를 NAS Linux에서 함께 실행해 7/7 통과했다. frontend production build와 react-pdf/PDF.js API·Worker 4.8.69 gate가 통과했고 live bundle은 `main.3ab2bb06.js`다. backend 전체 tests는 22/22 통과했다.
+- 운영 배포: 기능 commit `8da3d5c`를 GitHub branch `cleanup/git-tracking-2026-06-08`에 push하고 NAS live worktree가 clean fast-forward로 받았다. `msp-backend`를 restart/save한 뒤 online이며 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다. 내부 `127.0.0.1:3030`과 공개 HTTPS는 HTTP 200이다.
+- 프로젝트 메모리: `RHWP-FOCUS-112`, `OFFICE-RHWP-INPUT-FOCUS`, 관련 Relation/Code/Office_Viewers/Patch/Request 항목을 `docs/NAS_PROJECT_LOG.xlsx`에 추가했다. formula error 0과 변경 시트 렌더를 확인했다.
+- 남은 확인 경계: 자동 브라우저 세션은 공개 NAS의 `/login`으로 이동해 로그인된 실제 HWP 문서에서 캐럿·문자 입력을 육안 재확인하지 못했다. 코드 경로, NAS Linux 회귀, 운영 build·서비스·HTTP는 완료됐으며 다음 로그인 세션에서 편집기 클릭→입력, 저장→계속 입력, 다른 창 왕복→계속 입력을 한 번 체감 확인하면 된다.
