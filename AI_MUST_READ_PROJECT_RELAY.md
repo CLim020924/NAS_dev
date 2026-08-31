@@ -897,3 +897,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 운영 배포: 기능 commit `8da3d5c`를 GitHub branch `cleanup/git-tracking-2026-06-08`에 push하고 NAS live worktree가 clean fast-forward로 받았다. `msp-backend`를 restart/save한 뒤 online이며 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다. 내부 `127.0.0.1:3030`과 공개 HTTPS는 HTTP 200이다.
 - 프로젝트 메모리: `RHWP-FOCUS-112`, `OFFICE-RHWP-INPUT-FOCUS`, 관련 Relation/Code/Office_Viewers/Patch/Request 항목을 `docs/NAS_PROJECT_LOG.xlsx`에 추가했다. formula error 0과 변경 시트 렌더를 확인했다.
 - 남은 확인 경계: 자동 브라우저 세션은 공개 NAS의 `/login`으로 이동해 로그인된 실제 HWP 문서에서 캐럿·문자 입력을 육안 재확인하지 못했다. 코드 경로, NAS Linux 회귀, 운영 build·서비스·HTTP는 완료됐으며 다음 로그인 세션에서 편집기 클릭→입력, 저장→계속 입력, 다른 창 왕복→계속 입력을 한 번 체감 확인하면 된다.
+
+## 2026-08-31 NAS AI 에이전트 접목 방향 재정리
+
+- 사용자 요청: 기존 AI 조사에서 한 단계 더 생각해 NAS에 실제로 접목할 방향을 정하고 후속 작업을 이어간다.
+- 운영 기준선 재확인: 공개 `/api/ai/status`는 OpenAI `gpt-4.1-mini`, enabled/configured를 반환한다. 현재 `/api/ai/chat`은 사용자가 searchQuery/readPath를 미리 지정한 경우에만 일부 컨텍스트를 붙여 한 번의 Responses API 텍스트 응답을 받는다. 모델이 NAS 도구를 스스로 호출하는 loop는 없고, 작업 화면의 진행률도 서버 job이 아닌 시간 기반 표시다.
+- 제품 결정: 목표는 범용 대화형 AI나 NAS 구조를 매번 프롬프트에 넣는 방식이 아니라 계정 권한 안에서 파일 찾기·내용/메타데이터 읽기·복제·이동·날짜별 정리·공유 준비·사용자에게 요청 메시지 보내기를 수행하는 NAS 전용 도구형 에이전트다. 파인튜닝과 전면 벡터DB는 선행 조건이 아니다.
+- 권장 구조: OpenAI Responses API의 custom function calling과 structured output을 orchestration에 사용하고, 실제 파일 접근·ACL·quota·symlink/realpath·버전·감사·idempotency는 NAS 서버가 결정론적으로 강제한다. 읽기 도구는 즉시 실행할 수 있지만 복제·이동·정리·공유·메시지 발송은 변경 목록과 예상 결과를 먼저 보여주고 승인 뒤 실행한다. 삭제는 휴지통과 복구 기한을 사용한다.
+- 컨텍스트/비용: 정적 운영 정책과 도구 설명은 짧고 안정된 prefix로 두고, 사용자·현재 경로·검색 결과·필요한 문서 조각만 동적으로 붙인다. NAS 전체 구조나 대화 전체를 매번 보내지 않는다. 파일명·경로·mtime·size·소유자·ACL·revision의 로컬 metadata index와 activity log로 후보를 줄인 뒤 필요한 내용만 추출한다.
+- 모델 판단: `gpt-4.1-mini`는 공식 OpenAI 문서상 Responses API, function calling, structured outputs를 지원하므로 1차 파일 도구 선택·계획 생성에는 유지할 수 있다. 복잡한 다단계 정리에서 평가 실패가 측정될 때만 상위 모델 routing을 추가하며, 모델 교체보다 tool schema·승인 경계·eval을 먼저 만든다.
+- 첫 구현 단위: 공통 `agent tool registry`와 `safe action executor`를 만든다. 1차 도구는 `search_files`, `inspect_items`, `list_recent_activity`, `plan_copy`, `plan_move`, `plan_organize_by_date`, `create_share_plan`, `request_file_from_user`다. 계획에는 exact source/destination, 충돌 처리, 예상 증가 용량, 되돌리기 정보, 승인 필요 여부를 포함한다. 실행은 임시 경로+원자 rename, 기존 fileVersioning/trash/quota 재사용, 중복 요청 idempotency key와 audit event를 강제한다.
+- 다음 행동: 구현을 시작할 때 먼저 현재 `aiAgentRoutes.js`의 직접 `fs` 쓰기와 문자열 경로 검사 경계를 공통 executor로 교체하고 read-only 도구 loop를 붙인다. 그 뒤 copy/move/date-organize를 승인형으로 추가하며, 5개 대표 문장과 경계 사례를 자동 eval로 고정한다.
