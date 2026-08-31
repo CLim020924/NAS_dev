@@ -777,3 +777,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 구현: `@rhwp/core`·`@rhwp/editor`와 self-hosted rhwp-studio를 0.8.4로 맞추고 최신 편집기 캐럿·인쇄·저장 왕복 개선을 반영했다. 새 HWPX는 upstream의 실제 빈 HWPX template을 사용해 등록된 char/para/style 참조를 보장한다. 이미 생성된 불량 HWPX는 `exportHwpx()`의 미등록 스타일 참조 오류만 식별해 `exportHwp()`로 자동 복구하고 원본 HWPX를 덮어쓰지 않은 `.hwp` 파일로 NAS 저장/다운로드한다.
 - 단축키 경계: 상위 NAS wrapper는 `Ctrl+S`와 `Ctrl+Shift+S`만 각각 NAS 저장·다른 이름 저장으로 가로챈다. `Ctrl+P`, 실행 취소/다시 실행, 복사/붙여넣기, 선택, 찾기, 글자 서식 등은 iframe의 rhwp-studio에 그대로 전달한다. 에디터 load 뒤 iframe과 `#scroll-container`를 focus해 키보드 입력과 캐럿 활성화가 안정적으로 시작되게 했다.
 - 사전 검증: 새 blank HWPX가 등록된 `charProperties`와 `charPrIDRef=0`을 함께 가지며 RHWP parse→exportHwpx→reopen에서 1페이지로 왕복되는 backend test가 통과했다. 기존 불량 오류의 HWP fallback, 확장자 교체, `Ctrl+S`/`Ctrl+Shift+S`만 intercept하고 `Ctrl+P`/`Ctrl+Z`는 통과시키는 frontend tests 4/4가 통과했다. production build와 PDF.js API/Worker 4.8.69 gate도 성공했다. 다음 단계는 commit/push, NAS 배포, 새 문서와 기존 불량 문서에서 커서·저장·인쇄 실화면 검증이다.
+
+### RHWP GitHub·NAS 배포 및 공개 실화면 검증
+
+- 기능 commit `d31bf52`와 Studio 저장·인쇄 UI 정합성 commit `dbbee8a`를 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다. NAS backend 전체 test files 12/12, frontend 저장 정책 4/4, production build와 PDF.js API/Worker 4.8.69 gate가 통과했다. 최종 live bundle은 `main.fc61bdf2.js`다.
+- 공개 로그인 Chrome의 새 탭에서 최신 bundle을 확인하고 `/문서 스튜디오/RHWP 단축키 검증 20260831.hwpx`를 실제 생성·편집했다. 캐럿 높이는 13.0498px이고 220ms 간격 표본에서 opacity가 1과 0으로 반복되어 실제 깜빡임을 확인했다. 입력 뒤 `Ctrl+S`는 `NAS에 저장되었습니다.`로 완료됐고 charPrIDRef·렌더링 오류는 0건이었다.
+- `Ctrl+P`는 `RHWP 단축키 검증 20260831.hwpx — 1페이지` 인쇄 미리보기와 `인쇄/닫기` 버튼을 새 창에 만들었다. 실제 프린터 선택·출력은 사용자 OS 단계라 실행하지 않고 미리보기 생성 후 닫았다. `Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+F`, `Ctrl+B`는 NAS wrapper에 막히지 않고 rHWP Studio에 전달됐으며 찾기 창의 열기·Escape 닫기를 확인했다.
+- Studio 메뉴의 인쇄·PDF 저장 disabled 표시는 제거하고 HWPX 상태 문구를 `HWPX 원본 형식으로 NAS에 저장합니다`로 맞췄다. rHWP 자체의 오래된 HWPX→HWP 강제 변환 toast는 NAS 저장 계약과 달라 제거했다. `Ctrl+S`/`Ctrl+Shift+S`만 NAS 저장 wrapper가 계속 처리한다.
+- 과거 잘못 생성된 `/문서 스튜디오/새 한글 문서.hwpx`에서 `Ctrl+S`를 다시 실행했다. 기존 HWPX 원본은 그대로 보존됐고 `/문서 스튜디오/새 한글 문서.hwp`가 별도 복구 저장됐으며 화면에는 `기존 HWPX의 스타일 참조 오류를 복구해 NAS에 새 한글 문서.hwp 파일로 저장했습니다.`가 표시됐다. 검증용 새 HWPX와 복구 결과 HWP는 사용자 확인을 위해 삭제하지 않았다.
+- 최종 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 `msp-backend`는 online이다. 내부 3030과 공개 HTTPS는 HTTP 200이다. workbook의 Request/Patch/Feature/Relation/Code/Do_Not_Break/Office_Viewers를 실제 검증 결과로 갱신했고 formula error 0, 전체 시트 렌더와 변경 범위 시각 검사를 통과했다.
