@@ -880,3 +880,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 로그아웃 복구: 프로필이 없거나 깨졌거나 서버가 401/403·오프라인이어도 로컬 DPAPI 토큰, profile/provider/pin/icon/web shortcut, 활성 config를 멱등 정리하고 `needs-relink`로 전환한다. 따라서 로그인 오류 상태에서도 로그아웃 후 수동 재연결이 가능하다.
 - 현재 PC 검증: 설치본을 1.10.27로 교체하고 hidden open→login, login→open, 오류 상태→login, 연결 중→logout, 빈 profile logout, stale foreground owner, launcher protocol logout을 실제 프로세스로 검증했다. 각 최신 요청이 이전 UI를 교체했고 logout은 exit 0과 `needs-relink`를 남겼으며 토큰 파일은 0개였다. 마지막에는 로그인 창 하나와 background tray 하나만 유지했다.
 - 자동 검증: Agent verify/build, Setup compile/self-test, backend syntax가 통과했다. Windows 로컬 전체 backend tests는 22건 중 19건 통과·2건 환경 skip·기존 비관리자 symlink EPERM 1건이며 새 source regression 단언은 통과했다. NAS Linux 전체 테스트와 서비스·공개 배포 확인은 commit/push 뒤 수행한다.
+
+### 1.10.27 GitHub·NAS 배포 결과
+
+- 기능·배포 파일·워크북·릴레이 commit `a161c94`를 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS Linux에서 전체 backend tests 22/22와 backend syntax가 통과했다. `msp-backend`를 restart/save한 뒤 online을 확인했고 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다.
+- 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다. NAS metadata는 1.10.27이고 배포 Agent SHA-256은 `faa230ba8235e78d4aeb387e6d91fc5b649b9faf6028952cce63be4863373547`, Setup SHA-256은 `d09ede9891e0302630dff432f0b13dadde16fae396651084e4b5c807f8e55545`로 로컬 build와 일치한다.
+- 실제 계정 비밀번호를 자동 입력하지 않았으므로 정상 로그인 완료 뒤 연결된 profile에서 사용자가 체감하는 logout 1회만 최종 확인 경계다. 인증 실패·무프로필·서버 오류·stale UI/foreground lock 경로는 현재 PC에서 재부팅 없이 복구되는 것을 확인했다.
