@@ -17,6 +17,7 @@ import NotificationSidebar from './components/NotificationSidebar';
 import DedicatedChatWindowLayer from './components/DedicatedChatWindowLayer';
 import ChatWorkspaceWindowLayer from './components/ChatWorkspaceWindowLayer';
 import GlobalAppWindowLayer from './components/GlobalAppWindowLayer';
+import { getNasWorkspaceLayerSx } from './components/NAS/fullscreenLayout';
 import MeetingInvitePage from './components/MeetingInvitePage';
 import PublicSharePage from './components/PublicSharePage';
 import AiAgentPanel from './components/AiAgentPanel';
@@ -128,7 +129,11 @@ const buildChatPreviewText = (payload = {}) => {
 
 const PersistentMainRoutes = () => {
   const location = useLocation();
+  const { openWindows } = useWindows();
   const isNasRoute = location.pathname.startsWith('/nas');
+  const hasImmersiveNasWindow = openWindows.some((win) =>
+    (win.winType === 'folder' || win.winType === 'file') && win.isImmersive && !win.isMinimized
+  );
 
   return (
     <Box sx={{ position: 'relative', width: '100%', height: '100%', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -142,15 +147,7 @@ const PersistentMainRoutes = () => {
       )}
 
       <Box
-        sx={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          overflow: 'hidden',
-          zIndex: isNasRoute ? 0 : 30,
-          pointerEvents: isNasRoute ? 'auto' : 'none'
-        }}
+        sx={getNasWorkspaceLayerSx({ isNasRoute, hasImmersiveNasWindow })}
       >
         <NAS showWorkspace={isNasRoute} />
       </Box>

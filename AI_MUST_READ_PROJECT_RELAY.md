@@ -825,3 +825,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 공개 회원가입 페이지를 새 브라우저 세션에서 직접 열었다. 비동기 용량 조회 후 `승인된 계정에는 기본 개인 저장공간 50GB가 제공됩니다.` 안내가 표시됐고 현재 원장이 충분하므로 회원가입 요청 버튼이 활성 상태였다. 관리자 설정 화면은 별도 로그인 세션이 필요해 이번 새 세션에서는 로그인 화면까지 확인했으며, 운영 역할·용량 값을 임의로 저장하는 변경 검증은 하지 않았다. 관리자 표시 데이터는 인증된 NAS 내부 읽기 전용 점검으로 실원장과 대조했다.
 - 실제 공간이 기본 50GiB 미만인 경계, 가입 대기 예약, 비계정 사용, quota pool 초과 거부는 자동 회귀 테스트로 확인했다. 운영 NAS를 일부러 채우거나 가짜 가입 요청을 만들지 않았다. 서버가 가입 요청 시 다시 계산하므로 화면이 오래 열려 있어도 초과 가입은 507 `SIGNUP_STORAGE_FULL`로 거부된다.
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 HTTP 200이다. 전환 전 회원 데이터 백업은 저장소 밖 `/home/limchanyoung/runtime-backups/my-service-platform/storage-ledger-20260831`에 보존했으며 Git worktree는 clean이다.
+
+## 2026-08-31 NAS 파일 창 전체화면 상단 플랫폼 바 가림
+
+- 사용자 요청: 파일·폴더 창에서 전체화면 크기 보기를 사용하면 NAS 상단 플랫폼 바까지 가려지고 화면 전체를 사용해야 한다. 이 작업이 끝나면 NAS 서버에서 가능한 AI 기능도 전반적으로 조사한다.
+- 원인: 파일 창의 `isImmersive`는 창 크기만 부모 NAS workspace의 100%로 바꿨다. workspace 자체는 48px 전역 `TopBar` 아래의 main 영역과 낮은 stacking layer 안에 있어 브라우저 Fullscreen API가 거부되거나 지연되면 상단 바가 계속 남았다.
+- 구현: 표시 중인 file/folder 창 하나라도 `isImmersive`이면 NAS workspace layer를 `position: fixed`, `100vw × 100dvh`, z-index 1600으로 승격해 TopBar·채팅 창 layer까지 덮는다. 일반 최대화와 백그라운드 NAS route의 기존 pointer/z-index 규칙은 유지한다.
+- 사전 검증: 새 fullscreen layout policy tests 3/3과 frontend production build가 통과했다. 기존 unrelated ESLint warning만 남았고 이번 변경 파일에는 새 warning이 없다. 다음 단계는 기능·워크북·릴레이를 push하고 NAS에 배포한 뒤 공개 로그인 화면에서 전체화면 진입·상단 바 비표시·해제 복원을 직접 확인하는 것이다.
