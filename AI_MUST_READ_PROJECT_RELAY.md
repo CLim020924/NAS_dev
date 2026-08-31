@@ -786,3 +786,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - Studio 메뉴의 인쇄·PDF 저장 disabled 표시는 제거하고 HWPX 상태 문구를 `HWPX 원본 형식으로 NAS에 저장합니다`로 맞췄다. rHWP 자체의 오래된 HWPX→HWP 강제 변환 toast는 NAS 저장 계약과 달라 제거했다. `Ctrl+S`/`Ctrl+Shift+S`만 NAS 저장 wrapper가 계속 처리한다.
 - 과거 잘못 생성된 `/문서 스튜디오/새 한글 문서.hwpx`에서 `Ctrl+S`를 다시 실행했다. 기존 HWPX 원본은 그대로 보존됐고 `/문서 스튜디오/새 한글 문서.hwp`가 별도 복구 저장됐으며 화면에는 `기존 HWPX의 스타일 참조 오류를 복구해 NAS에 새 한글 문서.hwp 파일로 저장했습니다.`가 표시됐다. 검증용 새 HWPX와 복구 결과 HWP는 사용자 확인을 위해 삭제하지 않았다.
 - 최종 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 `msp-backend`는 online이다. 내부 3030과 공개 HTTPS는 HTTP 200이다. workbook의 Request/Patch/Feature/Relation/Code/Do_Not_Break/Office_Viewers를 실제 검증 결과로 갱신했고 formula error 0, 전체 시트 렌더와 변경 범위 시각 검사를 통과했다.
+
+## 2026-08-31 NAS Drive 재설치 업데이트 버튼 누락 수정
+
+- 사용자 보고: 이미 NAS Drive가 설치된 PC에서 더 새 버전의 설치 프로그램을 다시 내려받아 실행했지만, 화면의 설치 버전과 현재 버전이 분명히 다른데도 `이미 설치되어 있습니다`라고 나오고 `업데이트` 버튼이 표시되지 않았다.
+- 현재 PC 직접 확인: `%LOCALAPPDATA%\Programs\NAS Drive`의 `NAS-Drive.exe`는 FileVersion 1.10.22.0인데 `agent-version.txt`는 1.10.21로 남아 있었다. 설치된 Agent 실행 파일의 SHA는 당시 서버가 배포한 Agent와 같았다. 즉 자동 업데이트가 실행 파일만 바꾸고 표시용 버전 표식을 갱신하지 않은 상태였다.
+- 근본 원인: Agent 자동 업데이트는 `NAS-Sync-Agent.exe`만 교체하고 `agent-version.txt`를 갱신하지 않았다. Setup의 `ResolveInstallState`는 의미 버전 비교 전에 Agent SHA 일치를 검사해 설치 버전 표식이 오래됐더라도 같은 파일이면 `SameVersion`으로 끝냈다. 설치 상태 판정에도 `NAS-Drive.exe` 런처 버전·존재·건강 상태가 포함되지 않아 Agent만 최신이고 런처는 구버전인 부분 업데이트 상태를 놓쳤다.
+- 구현: 제품 버전을 1.10.23으로 올렸다. Setup은 의미 버전을 먼저 비교하고, 같은 버전에서만 SHA로 `SameVersion`과 `Repair`를 구분한다. Agent 상태에 런처 FileVersion·존재·건강 상태를 합성해 런처가 오래되면 `Upgrade`, 누락·손상이면 `Repair`로 표시한다. 자동 Agent 업데이트가 성공하면 서버 metadata.version을 UTF-8 BOM 없는 `agent-version.txt`에도 기록해 실행 파일과 표시 버전을 같은 릴리스로 수렴시킨다.
+- 자동 검증: 설치 상태 self-test에 `구버전 표식+동일 SHA→Upgrade`, `버전 표식 누락+동일 SHA→Repair`, `Agent 최신+런처 구버전→Upgrade`, `런처 누락/손상→Repair`를 추가했다. Agent 소스/패키지 self-test와 Setup self-test가 모두 통과했다. 관련 commit은 `f9397e1`이고 branch `cleanup/git-tracking-2026-06-08`에 push했다.
+- NAS 배포: NAS live worktree가 `f9397e1`로 clean fast-forward됐고 backend test files 12/12가 통과했다. `msp-backend`는 online, 내부 3030과 공개 HTTPS는 HTTP 200이다. 최종 배포 SHA256은 Agent `f504b7e4f10df2ee2042cc7ef372abaf6af3a56301af1b49c5417e596eb45ef8`, Setup `01085048759efe8ca35c679fa625d49ed3da39fffd615a539f87f42fd0d3946b`다.
+- 남은 실기 검증: 현재 PC에서 새 1.10.23 Setup을 실행하는 것은 Windows의 새 소프트웨어 실행·설치 단계이므로 행동 시점 사용자 확인 후 진행한다. 그 뒤 `업데이트` 버튼 표시, 설치 완료, 런처/Agent/`agent-version.txt` 1.10.23, 기존 로그인과 연결 상태 보존을 실제 화면과 파일 상태로 최종 확인한다.
