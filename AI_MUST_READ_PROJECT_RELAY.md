@@ -816,3 +816,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 권한·UI: MANAGER는 일반 사용자 quota만 관리하고 역할 변경은 MASTER만 가능하다. 기본 admin 역할·전체 접근과 마지막 MASTER는 보호한다. 설정 화면에는 전체 NAS·사용·여유, 사용자 할당, 가입 대기 예약, 개인 실사용, 추가 할당 가능, 안전 여유와 계정별 역할·개인 경로·할당/사용량이 표시된다. 가입 화면은 기본 50GB 제공 가능 여부를 안내하고 부족하면 버튼을 비활성화하되 최종 권한은 서버 재검증에 둔다.
 - 로컬 검증: backend syntax, 신규 capacity ledger 3건과 기존 hardlink quota 테스트를 통과했다. 전체 backend는 22건 중 19건 통과·2건 환경 skip이며 기존 Windows 비관리자 symlink 생성 EPERM 한 건만 실패해 NAS Linux 재검증 대상으로 남았다. frontend production build와 react-pdf/PDF.js 4.8.69 검사를 통과했고 이번 변경 파일의 새 ESLint 경고는 없다. workbook은 관련 Feature/Relation/Code/API/DNB/Patch/Request를 갱신하고 formula error 0, 인코딩 의심 0, 전체 시트 렌더를 확인했다.
 - 미완료/다음 조치: 이 시점에는 NAS live 배포 전이다. 같은 브랜치에 push한 뒤 NAS fast-forward, Linux 전체 테스트, PM2 재시작, 내부/공개 HTTP, 실제 계정 원장 값·개인 폴더·관리자 화면·가입 가능 API를 검증하고 결과를 다시 기록한다.
+
+### 계정별 용량 원장 NAS 배포·실데이터·공개 화면 최종 검증
+
+- 기능 commit `31914a6`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다. NAS Linux 전체 backend tests 22/22와 frontend production build, react-pdf/PDF.js 4.8.69 호환 gate가 통과했다. 최종 live bundle은 `main.27c89384.js`다.
+- 기존 계정 20개를 실데이터로 점검했다. 전 계정이 제한된 개인 quota와 personalRootPath를 가지며 개인 폴더가 준비됐고, MASTER의 개인 root는 NAS root와 분리됐다. 관리자/마스터의 NAS 전체 루트 탐색 권한은 그대로 유지된다.
+- live 원장은 전체 약 1.79TiB, 물리 사용 약 173.5GiB, 계정 개인 실사용 약 1.54GiB, 비계정 사용 약 172.0GiB, 승인 계정 할당 약 1.15TiB, 안전 여유 약 91.6GiB, 추가 할당 가능 약 419GiB로 계산됐다. 가입 대기자는 0명이며 공개 `GET /api/signup-capacity`는 기본 50GiB를 제공할 수 있어 `signupAvailable=true`를 반환했다.
+- 공개 회원가입 페이지를 새 브라우저 세션에서 직접 열었다. 비동기 용량 조회 후 `승인된 계정에는 기본 개인 저장공간 50GB가 제공됩니다.` 안내가 표시됐고 현재 원장이 충분하므로 회원가입 요청 버튼이 활성 상태였다. 관리자 설정 화면은 별도 로그인 세션이 필요해 이번 새 세션에서는 로그인 화면까지 확인했으며, 운영 역할·용량 값을 임의로 저장하는 변경 검증은 하지 않았다. 관리자 표시 데이터는 인증된 NAS 내부 읽기 전용 점검으로 실원장과 대조했다.
+- 실제 공간이 기본 50GiB 미만인 경계, 가입 대기 예약, 비계정 사용, quota pool 초과 거부는 자동 회귀 테스트로 확인했다. 운영 NAS를 일부러 채우거나 가짜 가입 요청을 만들지 않았다. 서버가 가입 요청 시 다시 계산하므로 화면이 오래 열려 있어도 초과 가입은 507 `SIGNUP_STORAGE_FULL`로 거부된다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 3030·공개 HTTPS는 HTTP 200이다. 전환 전 회원 데이터 백업은 저장소 밖 `/home/limchanyoung/runtime-backups/my-service-platform/storage-ledger-20260831`에 보존했으며 Git worktree는 clean이다.
