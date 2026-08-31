@@ -18,16 +18,17 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.26.0")]
-[assembly: AssemblyFileVersion("1.10.26.0")]
+[assembly: AssemblyVersion("1.10.27.0")]
+[assembly: AssemblyFileVersion("1.10.27.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.26";
+        internal const string ProductVersion = "1.10.27";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
+        private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
         [DllImport("user32.dll")]
@@ -177,20 +178,27 @@ namespace NasDriveSetup
 
             if (open || login)
             {
-                bool created;
-                using (var uiMutex = new Mutex(true, "Local\\NAS-Drive-Control-Center-SingleInstance", out created))
+                Mutex uiMutex = AcquireNativeUiMutexWithPriority();
+                if (uiMutex == null)
                 {
-                    if (!created)
+                    FocusExistingLauncherWindow("NAS Drive");
+                    return true;
+                }
+                using (uiMutex)
+                {
+                    RegisterNativeUiOwner();
+                    try
                     {
-                        FocusExistingLauncherWindow("NAS Drive");
-                        return true;
+                        Application.EnableVisualStyles();
+                        Application.SetCompatibleTextRenderingDefault(false);
+                        // A user-issued open/login command must also revive or
+                        // re-register the tray even when no account is configured.
+                        StartBackgroundLauncher();
+                        bool hasUsableProfile = NativeControlCenter.HasUsableProfile();
+                        if (login || !hasUsableProfile) Application.Run(new NativeLoginForm(installedExe));
+                        else Application.Run(new NativeControlCenter(installedExe));
                     }
-                    Application.EnableVisualStyles();
-                    Application.SetCompatibleTextRenderingDefault(false);
-                    bool hasConfiguredProfile = NativeControlCenter.HasConfiguredProfile();
-                    if (open && hasConfiguredProfile) StartBackgroundLauncher();
-                    if (login || !hasConfiguredProfile) Application.Run(new NativeLoginForm(installedExe));
-                    else Application.Run(new NativeControlCenter(installedExe));
+                    finally { ClearNativeUiOwner(); }
                 }
                 return true;
             }
@@ -216,6 +224,10 @@ namespace NasDriveSetup
                 return true;
             }
 
+            // Web protocol actions are explicit new user requests too. Close a
+            // currently registered native dialog so an old login/control flow
+            // cannot continue on top of the new pairing/open/logout request.
+            if (!string.IsNullOrWhiteSpace(protocolUrl)) SupersedeRegisteredNativeUi();
             string agentArgs = QuoteArgument(protocolUrl) + " --hidden-bootstrap";
             Process.Start(new ProcessStartInfo(installedExe, agentArgs)
             {
@@ -494,6 +506,97 @@ namespace NasDriveSetup
                 WindowStyle = ProcessWindowStyle.Hidden,
                 WorkingDirectory = Path.GetDirectoryName(launcher)
             });
+        }
+
+        private static Mutex AcquireNativeUiMutexWithPriority()
+        {
+            const string mutexName = "Local\\NAS-Drive-Control-Center-SingleInstance";
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                bool created;
+                var mutex = new Mutex(true, mutexName, out created);
+                if (created) return mutex;
+                mutex.Dispose();
+
+                // The newest explicit user request wins. A WinForms process
+                // launched with WindowStyle.Hidden can own the UI mutex while
+                // reporting MainWindowHandle=0, so visible-window detection is
+                // not reliable. Replace every older exact-path launcher role;
+                // the caller starts a fresh tray immediately after acquiring.
+                SupersedeExistingNativeUi();
+                Thread.Sleep(250 + (attempt * 250));
+            }
+            return null;
+        }
+
+        private static void SupersedeExistingNativeUi()
+        {
+            SupersedeRegisteredNativeUi();
+            int currentPid;
+            using (Process current = Process.GetCurrentProcess()) currentPid = current.Id;
+            string launcherPath = Application.ExecutablePath;
+            foreach (Process process in Process.GetProcessesByName("NAS-Drive"))
+            {
+                try
+                {
+                    if (process.Id == currentPid || process.HasExited) continue;
+                    if (!IsInstalledLauncherProcessPath(process.MainModule.FileName, launcherPath)) continue;
+                    if (process.MainWindowHandle != IntPtr.Zero) process.CloseMainWindow();
+                    if (process.MainWindowHandle == IntPtr.Zero || !process.WaitForExit(1200))
+                    {
+                        process.Kill();
+                        process.WaitForExit(1200);
+                    }
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
+        }
+
+        private static void RegisterNativeUiOwner()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(NativeUiPidFile));
+                File.WriteAllText(NativeUiPidFile, Process.GetCurrentProcess().Id.ToString(), Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        private static void ClearNativeUiOwner()
+        {
+            try
+            {
+                int owner;
+                if (File.Exists(NativeUiPidFile) && int.TryParse(File.ReadAllText(NativeUiPidFile).Trim(), out owner)
+                    && owner == Process.GetCurrentProcess().Id) File.Delete(NativeUiPidFile);
+            }
+            catch { }
+        }
+
+        private static void SupersedeRegisteredNativeUi()
+        {
+            try
+            {
+                int owner;
+                if (!File.Exists(NativeUiPidFile) || !int.TryParse(File.ReadAllText(NativeUiPidFile).Trim(), out owner)) return;
+                using (Process process = Process.GetProcessById(owner))
+                {
+                    if (process.Id == Process.GetCurrentProcess().Id || process.HasExited) return;
+                    if (!IsInstalledLauncherProcessPath(process.MainModule.FileName, Application.ExecutablePath)) return;
+                    if (process.MainWindowHandle != IntPtr.Zero) process.CloseMainWindow();
+                    if (process.MainWindowHandle == IntPtr.Zero || !process.WaitForExit(1200))
+                    {
+                        process.Kill();
+                        process.WaitForExit(1200);
+                    }
+                }
+            }
+            catch { }
+            finally
+            {
+                try { if (File.Exists(NativeUiPidFile)) File.Delete(NativeUiPidFile); } catch { }
+            }
         }
 
         private static void SignalNativeTrayRefresh()

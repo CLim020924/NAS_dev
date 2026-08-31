@@ -18,7 +18,7 @@ const {
 } = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.26';
+const AGENT_VERSION = '1.10.27';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -952,19 +952,34 @@ function isExpectedProcessAlive(pid, expectedExe) {
   return path.resolve(String(result.stdout || '').trim()).toLowerCase() === path.resolve(expectedExe).toLowerCase();
 }
 
-function acquireForegroundLock() {
-  const existingPid = Number(fs.existsSync(FOREGROUND_LOCK_FILE) ? fs.readFileSync(FOREGROUND_LOCK_FILE, 'utf8') : 0);
-  // A PID can be reused by an unrelated Windows process after an interrupted
-  // foreground flow. Only a live copy of this exact Agent executable owns the
-  // lock; otherwise replace the stale file and allow recovery without reboot.
-  if (isExpectedProcessAlive(existingPid, process.execPath)) return false;
-  try { fs.writeFileSync(FOREGROUND_LOCK_FILE, String(process.pid), { encoding: 'utf8', flag: 'wx' }); }
-  catch {
-    try { fs.unlinkSync(FOREGROUND_LOCK_FILE); } catch {}
-    try { fs.writeFileSync(FOREGROUND_LOCK_FILE, String(process.pid), { encoding: 'utf8', flag: 'wx' }); }
-    catch { return false; }
+function acquireForegroundLock({ supersedeExisting = false } = {}) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const existingPid = Number(fs.existsSync(FOREGROUND_LOCK_FILE) ? fs.readFileSync(FOREGROUND_LOCK_FILE, 'utf8') : 0);
+    // A PID can be reused by an unrelated Windows process after an interrupted
+    // foreground flow. Only a live copy of this exact Agent executable owns the
+    // lock. A newer explicit command may replace that older foreground flow.
+    if (isExpectedProcessAlive(existingPid, process.execPath)) {
+      if (!supersedeExisting) return false;
+      try { process.kill(existingPid); } catch {}
+      // The executable path was verified before termination. Avoid spawning a
+      // WMI/PowerShell probe every 50 ms while waiting for that PID to exit.
+      for (let wait = 0; wait < 20 && isProcessAlive(existingPid); wait += 1) sleepMs(50);
+      if (isProcessAlive(existingPid)) return false;
+    }
+    try {
+      if (fs.existsSync(FOREGROUND_LOCK_FILE)) {
+        const owner = Number(fs.readFileSync(FOREGROUND_LOCK_FILE, 'utf8'));
+        if (!owner || owner === existingPid || !isExpectedProcessAlive(owner, process.execPath)) fs.unlinkSync(FOREGROUND_LOCK_FILE);
+      }
+    } catch {}
+    try {
+      fs.writeFileSync(FOREGROUND_LOCK_FILE, String(process.pid), { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch {
+      sleepMs(80 + (attempt * 80));
+    }
   }
-  return true;
+  return false;
 }
 
 function releaseForegroundLock() {
@@ -2533,9 +2548,49 @@ if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Write-Output "yes" }
   return String(result.stdout || '').trim() === 'yes';
 }
 
+function clearLocalProfileResources(profile) {
+  if (!profile) return;
+  for (const root of getRoots(profile).filter(item => item.kind === 'personal-drive')) {
+    stopPersonalDriveProvider(profile, root);
+    setPersonalDriveHomePin(root.localPath, false);
+    if (root.localPath && fs.existsSync(INSTALLED_PROVIDER_EXE)) {
+      spawnSync(INSTALLED_PROVIDER_EXE, ['unregister', '--root', root.localPath, '--account', profile.accountKey], {
+        windowsHide: true,
+        stdio: 'ignore',
+        timeout: 10_000
+      });
+    }
+    setPersonalDriveFolderIcon(root.localPath, false);
+    setPersonalDriveWebShortcut(root.localPath, profile, false);
+  }
+  try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
+}
+
 async function logoutActiveProfile(config, { confirmed = false, reopenLogin = true } = {}) {
   const profile = getActiveProfile(config);
-  if (!profile?.deviceId) throw new Error('로그아웃할 NAS 계정 연결이 없습니다.');
+  if (!profile?.deviceId) {
+    // Logout is intentionally idempotent. It is also the recovery command for
+    // a connection attempt that failed before a complete profile was saved.
+    const incompleteProfiles = getProfiles(config);
+    for (const item of incompleteProfiles) clearLocalProfileResources(item);
+    if (incompleteProfiles.length === 0) {
+      try {
+        for (const file of fs.readdirSync(STATE_DIR)) {
+          if (/^agent-token-[a-zA-Z0-9_.-]+\.dpapi$/.test(file)) fs.unlinkSync(path.join(STATE_DIR, file));
+        }
+      } catch {}
+    }
+    saveConfig({ ...(config || {}), schemaVersion: 2, profiles: [], activeAccountKey: '', savedAt: new Date().toISOString() });
+    setAgentHealth('needs-relink', '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
+    restartBackground();
+    if (reopenLogin) {
+      const launcher = path.join(path.dirname(INSTALLED_EXE), 'NAS-Drive.exe');
+      const target = fs.existsSync(launcher) ? launcher : INSTALLED_EXE;
+      const args = fs.existsSync(launcher) ? ['--login'] : ['--login-after-delay', '--hidden-bootstrap'];
+      spawn(target, args, { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+    }
+    return true;
+  }
   if (!confirmed && !confirmProfileLogout(profile)) return false;
 
   if (profile.agentToken) {
@@ -2553,20 +2608,7 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
     log('[logout local only: token unavailable]', profile.deviceId);
   }
 
-  for (const root of getRoots(profile).filter(item => item.kind === 'personal-drive')) {
-    stopPersonalDriveProvider(profile, root);
-    setPersonalDriveHomePin(root.localPath, false);
-    if (root.localPath && fs.existsSync(INSTALLED_PROVIDER_EXE)) {
-      spawnSync(INSTALLED_PROVIDER_EXE, ['unregister', '--root', root.localPath, '--account', profile.accountKey], {
-        windowsHide: true,
-        stdio: 'ignore'
-      });
-    }
-    setPersonalDriveFolderIcon(root.localPath, false);
-    setPersonalDriveWebShortcut(root.localPath, profile, false);
-  }
-
-  try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
+  clearLocalProfileResources(profile);
   const remainingProfiles = getProfiles(config).filter(item => safeAccountKey(item.accountKey) !== safeAccountKey(profile.accountKey));
   const nextConfig = {
     ...(config || {}),
@@ -3723,8 +3765,8 @@ async function runForeground() {
       await runBackground();
       return;
     }
-    if (!acquireForegroundLock()) {
-      showMessage('NAS Drive', 'NAS Drive 설정 창이 이미 열려 있습니다. 기존 창에서 계속 진행해 주세요.');
+    if (!acquireForegroundLock({ supersedeExisting: true })) {
+      showMessage('NAS Drive', '이전 NAS Drive 요청을 정리하는 중입니다. 잠시 후 다시 실행해 주세요.');
       return;
     }
     try {

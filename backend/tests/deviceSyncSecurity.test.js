@@ -28,6 +28,8 @@ assert.strictEqual(verifyPassword('desktop-login-test-password', passwordHash), 
 assert.strictEqual(verifyPassword('wrong-password', passwordHash), false);
 
 const nasRoutesSource = fs.readFileSync(path.join(__dirname, '..', 'nasRoutes.js'), 'utf8');
+const windowsAgentSource = fs.readFileSync(path.join(__dirname, '..', 'agents', 'windows-node', 'index.js'), 'utf8');
+const windowsLauncherSource = fs.readFileSync(path.join(__dirname, '..', 'agents', 'windows-installer', 'Program.cs'), 'utf8');
 assert.match(nasRoutesSource, /router\.post\('\/devices\/agent\/login-register'/);
 assert.match(nasRoutesSource, /verifyPassword\(password, user\.password\)/);
 assert.match(nasRoutesSource, /AGENT_LOGIN_MAX_FAILURES/);
@@ -42,6 +44,12 @@ assert.match(nasRoutesSource, /Registration is not a heartbeat[\s\S]{0,220}lastS
 assert.match(nasRoutesSource, /const liveDevice = registeredDeviceId/);
 assert.match(nasRoutesSource, /device: liveDevice \? sanitizeDeviceForResponse\(liveDevice\)/);
 assert.doesNotMatch(nasRoutesSource, /WEB_PAIRING_REQUIRED/);
+assert.match(windowsAgentSource, /acquireForegroundLock\(\{ supersedeExisting = false \} = \{\}\)/);
+assert.match(windowsAgentSource, /acquireForegroundLock\(\{ supersedeExisting: true \}\)/);
+assert.match(windowsAgentSource, /if \(!profile\?\.deviceId\) \{[\s\S]{0,900}profiles: \[\][\s\S]{0,900}return true;/);
+assert.match(windowsLauncherSource, /AcquireNativeUiMutexWithPriority\(\)/);
+assert.match(windowsLauncherSource, /SupersedeExistingNativeUi\(\)/);
+assert.match(windowsLauncherSource, /StartBackgroundLauncher\(\);[\s\S]{0,180}HasUsableProfile\(\)/);
 
 assert.strictEqual(hasConcurrentFileChange(10_000, 10_000), false);
 assert.strictEqual(hasConcurrentFileChange(11_500, 10_000), false);

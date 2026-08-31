@@ -871,3 +871,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
 - NAS 공개 metadata 상수는 1.10.26이며 배포 Agent SHA-256은 `bab18d7f5b051461b1291dc5ae8498e8632d9227ecee1fdec180b943246e1f90`, Setup SHA-256은 `80d58bb3106390ccd6b23eebb0f7bbf48b517dc3fb7a4b27c4d2266ac5ab87bf`로 로컬 build와 일치한다.
 - 실제 tray 메뉴 클릭은 Windows 시스템 알림 영역을 현재 자동화가 안전하게 단일 대상으로 식별하지 못해 임의 아이콘을 누르지 않았다. 다만 동일 cleanup core의 0ms 경쟁 5/5와 background refresh event 중복 10회, 설치 후 실제 launcher/Agent/Provider 생존을 확인했다. 사용자가 tray `종료`→바탕화면 `NAS Drive` 바로가기를 한 번 실행하면 최종 육안 경계만 확인하면 된다.
+
+## 2026-08-31 NAS Drive 1.10.27 로그인·로그아웃·최신 요청 우선 처리
+
+- 사용자 요청: 로그인 오류 상태에서도 수동 로그인과 로그아웃이 항상 동작해야 하고, 기존 Drive 창이나 요청이 열려 있다는 이유로 거부하지 말고 가장 최근 사용자의 요청을 우선 처리한다.
+- 원인: launcher의 native UI mutex와 Agent의 foreground lock이 이전 숨은 창·중단된 인증 창·남은 PID를 정상 실행으로 간주해 새 요청을 거부했다. 프로필이 없거나 불완전하면 로그아웃이 조기 종료돼 로컬 토큰·상태·바로가기 정리가 보장되지 않는 경계도 있었다.
+- 1.10.27 구현: `--open`·`--login` 및 protocol 요청은 등록된 이전 native UI와 같은 설치 경로의 오래된 launcher 역할을 정리한 뒤 최신 요청을 실행한다. Agent foreground lock도 검증된 동일 설치본의 이전 owner만 교체하며, 다른 프로그램이나 경로는 종료하지 않는다.
+- 로그아웃 복구: 프로필이 없거나 깨졌거나 서버가 401/403·오프라인이어도 로컬 DPAPI 토큰, profile/provider/pin/icon/web shortcut, 활성 config를 멱등 정리하고 `needs-relink`로 전환한다. 따라서 로그인 오류 상태에서도 로그아웃 후 수동 재연결이 가능하다.
+- 현재 PC 검증: 설치본을 1.10.27로 교체하고 hidden open→login, login→open, 오류 상태→login, 연결 중→logout, 빈 profile logout, stale foreground owner, launcher protocol logout을 실제 프로세스로 검증했다. 각 최신 요청이 이전 UI를 교체했고 logout은 exit 0과 `needs-relink`를 남겼으며 토큰 파일은 0개였다. 마지막에는 로그인 창 하나와 background tray 하나만 유지했다.
+- 자동 검증: Agent verify/build, Setup compile/self-test, backend syntax가 통과했다. Windows 로컬 전체 backend tests는 22건 중 19건 통과·2건 환경 skip·기존 비관리자 symlink EPERM 1건이며 새 source regression 단언은 통과했다. NAS Linux 전체 테스트와 서비스·공개 배포 확인은 commit/push 뒤 수행한다.
