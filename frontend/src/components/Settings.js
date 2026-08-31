@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Paper, Button, Switch, FormControlLabel, Tabs, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Select, MenuItem, Chip, IconButton, TextField, InputAdornment, useMediaQuery, Grid, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
+import { Alert, Box, Typography, Paper, Button, Switch, FormControlLabel, Tabs, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Select, MenuItem, Chip, IconButton, TextField, InputAdornment, useMediaQuery, Grid, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, LinearProgress, Tooltip } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import axios from 'axios';
@@ -24,6 +24,9 @@ const Settings = () => {
   
   const [pendingUsers, setPendingUsers] = useState([]);
   const [users, setUsers] = useState([]);
+  const [storageCapacity, setStorageCapacity] = useState(null);
+  const [userManagementError, setUserManagementError] = useState('');
+  const [userManagementSaving, setUserManagementSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -58,21 +61,40 @@ const Settings = () => {
           if (res.data) {
             setUsers(res.data.users || []);
             setPendingUsers(res.data.pendingUsers || []);
+            setStorageCapacity(res.data.storageCapacity || null);
           }
         })
-        .catch(err => console.error("DB 로드 실패:", err));
+        .catch(err => setUserManagementError(err.response?.data?.error || '사용자 정보를 불러오지 못했습니다.'));
 
       interval = setInterval(() => {
         axios.get('/api/users/data', { withCredentials: true })
           .then(res => {
-            if (res.data) setPendingUsers(res.data.pendingUsers || []);
+            if (res.data) {
+              setPendingUsers(res.data.pendingUsers || []);
+              setStorageCapacity(res.data.storageCapacity || null);
+            }
           });
       }, 5000);
     }
     return () => clearInterval(interval);
   }, [activeTab, isManager]);
 
-  const handleApprove = (id) => axios.post('/api/users/approve', { id }, { withCredentials: true }).then(() => window.location.reload());
+  const refreshUserManagement = async () => {
+    const response = await axios.get('/api/users/data', { withCredentials: true });
+    setUsers(response.data?.users || []);
+    setPendingUsers(response.data?.pendingUsers || []);
+    setStorageCapacity(response.data?.storageCapacity || null);
+  };
+
+  const handleApprove = async (id) => {
+    setUserManagementError('');
+    try {
+      await axios.post('/api/users/approve', { id }, { withCredentials: true });
+      await refreshUserManagement();
+    } catch (err) {
+      setUserManagementError(err.response?.data?.error || '가입 요청을 승인하지 못했습니다.');
+    }
+  };
   const handleReject = (id) => axios.post('/api/users/reject', { id }, { withCredentials: true }).then(() => setPendingUsers(prev => prev.filter(p => (p.userUid || p.id) !== id)));
 
   const handleAppOpenModeChange = (nextMode) => {
@@ -114,27 +136,29 @@ const Settings = () => {
     }
   };
   
-  // 🔥 백엔드 융단폭격 저장 로직!
   const handleSaveChanges = async () => {
+    setUserManagementSaving(true);
+    setUserManagementError('');
     try {
-      // 백엔드가 어떤 변수명을 좋아하는지 모르니 다 넣어줍니다.
-      const shotgunUsers = users.map(u => ({
-        ...u,
-        rootPath: u.rootPath,      // 낙타 표기법
-        root_path: u.rootPath,     // 뱀 표기법
-        basePath: u.rootPath,      // 혹시 모를 basePath
-        global_access: u.globalAccess, // 스위치용 뱀 표기법
+      const managedUsers = users.map(u => ({
+        userUid: u.userUid,
+        id: u.id,
+        role: u.role,
+        globalAccess: !!u.globalAccess,
+        displayName: u.displayName,
+        nickname: u.nickname,
         storageQuotaMode: u.storageQuotaMode,
         storageQuotaGb: u.storageQuotaGb,
         storageQuotaBytes: u.storageQuotaBytes
       }));
-      
-      console.log("🚀 프론트에서 서버로 던지는 최종 데이터:", shotgunUsers);
-
-      await axios.put('/api/users/update', { users: shotgunUsers }, { withCredentials: true });
-      alert("✅ 모든 사용자 변경사항이 성공적으로 저장되었습니다.");
+      const response = await axios.put('/api/users/update', { users: managedUsers }, { withCredentials: true });
+      setStorageCapacity(response.data?.storageCapacity || storageCapacity);
+      await refreshUserManagement();
+      alert('사용자 역할과 저장공간 설정을 저장했습니다.');
     } catch (err) {
-      alert("업데이트 실패: " + (err.response?.data?.error || "서버 에러"));
+      setUserManagementError(err.response?.data?.error || '사용자 설정을 저장하지 못했습니다.');
+    } finally {
+      setUserManagementSaving(false);
     }
   };
 
@@ -173,25 +197,40 @@ const Settings = () => {
   const managers = filteredUsers.filter(u => u.role === 'MANAGER');
   const normalUsers = filteredUsers.filter(u => u.role === 'USER');
 
-  const bytesToGb = (bytes) => Math.round((Number(bytes || 0) / (1024 * 1024 * 1024)) * 10) / 10;
-  const formatStorage = (bytes) => bytes == null ? '계산 전' : `${bytesToGb(bytes).toLocaleString()}GB`;
+  const formatStorage = (bytes) => {
+    if (bytes == null) return '계산 전';
+    const gib = Number(bytes || 0) / (1024 * 1024 * 1024);
+    return gib >= 1024 ? `${(gib / 1024).toFixed(2)}TB` : `${Math.round(gib * 10) / 10}GB`;
+  };
   const getQuotaGbValue = (u) => {
-    if (u.storageQuotaMode === 'unlimited') return '';
     const bytes = Number(u.storageQuotaBytes || 0);
     return Number.isFinite(bytes) && bytes > 0 ? String(Math.round(bytes / (1024 * 1024 * 1024))) : '50';
   };
   const updateUserStorageQuota = (targetUser, value) => {
     const trimmed = String(value || '').trim();
+    const numericValue = Number(trimmed);
     setUsers(users.map(user => user.id === targetUser.id
       ? {
           ...user,
-          storageQuotaMode: trimmed ? 'limited' : 'unlimited',
-          storageQuotaGb: trimmed ? Math.max(1, Number(trimmed)) : undefined,
-          storageQuotaBytes: trimmed ? Math.max(1, Number(trimmed)) * 1024 * 1024 * 1024 : null
+          storageQuotaMode: 'limited',
+          storageQuotaGb: Number.isFinite(numericValue) ? Math.max(1, numericValue) : '',
+          storageQuotaBytes: Number.isFinite(numericValue) ? Math.max(1, numericValue) * 1024 * 1024 * 1024 : 0
         }
       : user
     ));
   };
+  const updateUserRole = (targetUser, nextRole) => {
+    setUsers(users.map((user) => user.id === targetUser.id
+      ? {
+          ...user,
+          role: nextRole,
+          globalAccess: nextRole === 'MASTER' ? true : (nextRole === 'USER' ? false : user.globalAccess)
+        }
+      : user));
+  };
+  const storageUsagePercent = storageCapacity?.totalBytes
+    ? Math.min(100, Math.round((Number(storageCapacity.usedBytes || 0) / Number(storageCapacity.totalBytes)) * 100))
+    : 0;
 
   const renderUserTable = (userList) => (
     isMobile ? (
@@ -210,7 +249,7 @@ const Settings = () => {
               <Grid container spacing={1.5}>
                 <Grid item xs={12}>
                     <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>권한</Typography>
-                    <Select size="small" value={u.role} disabled={!isMaster || u.username === 'admin'} onChange={(e) => setUsers(users.map(user => user.id === u.id ? { ...user, role: e.target.value } : user))} fullWidth>
+                    <Select size="small" value={u.role} disabled={!isMaster || u.username === 'admin'} onChange={(e) => updateUserRole(u, e.target.value)} fullWidth>
                         {isMaster && <MenuItem value="MASTER">마스터</MenuItem>}
                         <MenuItem value="MANAGER">관리자</MenuItem>
                         <MenuItem value="USER">일반 사용자</MenuItem>
@@ -218,31 +257,25 @@ const Settings = () => {
                 </Grid>
                 <Grid item xs={12}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 0.5 }}>
-                        <Typography variant="body2" color="text.secondary">타인 파일 접근 (전체 권한)</Typography>
-                        <Switch size="small" color="error" checked={u.role === 'MASTER' ? true : (u.globalAccess !== undefined ? u.globalAccess : (u.global_access || false))} disabled={!isMaster || u.role === 'MASTER'} 
+                        <Typography variant="body2" color="text.secondary">NAS 전체 루트 접근</Typography>
+                        <Switch size="small" color="error" checked={u.role === 'MASTER' || u.role === 'MANAGER' || !!u.globalAccess} disabled={!isMaster || u.role === 'MASTER' || u.role === 'MANAGER'}
                           onChange={(e) => {
                             const isGlobal = e.target.checked;
-                            const autoPath = isGlobal ? '/' : `/${u.username}`;
-                            setUsers(users.map(user => user.id === u.id ? { ...user, globalAccess: isGlobal, rootPath: autoPath } : user));
+                            setUsers(users.map(user => user.id === u.id ? { ...user, globalAccess: isGlobal } : user));
                           }} 
                         />
                     </Box>
                 </Grid>
                 <Grid item xs={12}>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>루트 경로</Typography>
-                    <input 
-                      type="text" 
-                      value={u.rootPath || u.root_path || ''} 
-                      onChange={(e) => setUsers(users.map(user => user.id === u.id ? { ...user, rootPath: e.target.value } : user))} 
-                      style={{ padding: '8px', width: '100%', borderRadius: '4px', border: themeName === 'dark' ? '1px solid rgba(255,255,255,0.18)' : '1px solid #ccc', backgroundColor: themeName === 'dark' ? '#0f172a' : '#fff', color: themeName === 'dark' ? '#f8fafc' : '#111827', boxSizing: 'border-box' }} 
-                      disabled={!isMaster && u.role === 'MASTER'} 
-                    />
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>개인 공간</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{u.personalRootPath || `/users/${u.username}`}</Typography>
+                    {(u.role === 'MASTER' || u.role === 'MANAGER' || u.globalAccess) && <Typography variant="caption" color="primary">개인 공간과 별도로 NAS 전체 루트를 탐색할 수 있습니다.</Typography>}
                 </Grid>
                 <Grid item xs={12}>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>????</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>개인 저장공간 할당</Typography>
                     <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                      <TextField size="small" type="number" value={getQuotaGbValue(u)} onChange={(e) => updateUserStorageQuota(u, e.target.value)} disabled={!isMaster && u.role === 'MASTER'} placeholder="???" inputProps={{ min: 1 }} sx={{ maxWidth: 140 }} />
-                      <Typography variant="body2" color="text.secondary">?? {formatStorage(u.storageUsedBytes)}</Typography>
+                      <TextField size="small" type="number" value={getQuotaGbValue(u)} onChange={(e) => updateUserStorageQuota(u, e.target.value)} disabled={!isMaster && u.role !== 'USER'} label="할당량(GB)" inputProps={{ min: 1 }} sx={{ maxWidth: 150 }} />
+                      <Typography variant="body2" color="text.secondary">사용 {formatStorage(u.storageUsedBytes)}</Typography>
                     </Box>
                 </Grid>
               </Grid>
@@ -257,9 +290,9 @@ const Settings = () => {
             <TableRow>
               <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>아이디</TableCell>
               <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>권한 변경</TableCell>
-              <TableCell align="center" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>타인 파일 접근</TableCell>
-              <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>저장공간</TableCell>
-              <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>루트 경로 지정</TableCell>
+              <TableCell align="center" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>전체 NAS 접근</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>개인 저장공간</TableCell>
+              <TableCell sx={{ fontWeight: 'bold', color: 'text.secondary' }}>개인 경로</TableCell>
               <TableCell align="center" sx={{ fontWeight: 'bold', color: 'text.secondary' }}>삭제</TableCell>
             </TableRow>
           </TableHead>
@@ -271,35 +304,30 @@ const Settings = () => {
                     {u.displayName || u.username} {currentUser.username === u.username && <Chip label="나" size="small" color="primary" sx={{ ml: 1, height: 20 }}/>}
                   </TableCell>
                   <TableCell>
-                    <Select size="small" value={u.role} disabled={!isMaster || u.username === 'admin'} onChange={(e) => setUsers(users.map(user => user.id === u.id ? { ...user, role: e.target.value } : user))} sx={{ width: 120 }}>
+                    <Select size="small" value={u.role} disabled={!isMaster || u.username === 'admin'} onChange={(e) => updateUserRole(u, e.target.value)} sx={{ width: 120 }}>
                       {isMaster && <MenuItem value="MASTER">마스터</MenuItem>}
                       <MenuItem value="MANAGER">관리자</MenuItem>
                       <MenuItem value="USER">일반 사용자</MenuItem>
                     </Select>
                   </TableCell>
                   <TableCell align="center">
-                    <Switch size="small" color="error" checked={u.role === 'MASTER' ? true : (u.globalAccess !== undefined ? u.globalAccess : (u.global_access || false))} disabled={!isMaster || u.role === 'MASTER'} 
+                    <Tooltip title={u.role === 'MASTER' || u.role === 'MANAGER' ? '마스터와 관리자는 역할상 NAS 전체 루트에 접근합니다.' : '마스터가 일반 사용자에게 별도 전체 접근 권한을 부여할 수 있습니다.'}>
+                    <Switch size="small" color="error" checked={u.role === 'MASTER' || u.role === 'MANAGER' || !!u.globalAccess} disabled={!isMaster || u.role === 'MASTER' || u.role === 'MANAGER'}
                       onChange={(e) => {
                         const isGlobal = e.target.checked;
-                        const autoPath = isGlobal ? '/' : `/${u.username}`;
-                        setUsers(users.map(user => user.id === u.id ? { ...user, globalAccess: isGlobal, rootPath: autoPath } : user));
+                        setUsers(users.map(user => user.id === u.id ? { ...user, globalAccess: isGlobal } : user));
                       }} 
                     />
+                    </Tooltip>
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <TextField size="small" type="number" value={getQuotaGbValue(u)} onChange={(e) => updateUserStorageQuota(u, e.target.value)} disabled={!isMaster && u.role === 'MASTER'} placeholder="무제한" inputProps={{ min: 1 }} sx={{ width: 96 }} />
-                      <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>/ 사용 {formatStorage(u.storageUsedBytes)}</Typography>
+                      <TextField size="small" type="number" value={getQuotaGbValue(u)} onChange={(e) => updateUserStorageQuota(u, e.target.value)} disabled={!isMaster && u.role !== 'USER'} inputProps={{ min: 1, 'aria-label': `${u.username} 할당량 GB` }} sx={{ width: 96 }} />
+                      <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>GB / 사용 {formatStorage(u.storageUsedBytes)}</Typography>
                     </Box>
                   </TableCell>
                   <TableCell>
-                    <input 
-                      type="text" 
-                      value={u.rootPath || u.root_path || ''} 
-                      onChange={(e) => setUsers(users.map(user => user.id === u.id ? { ...user, rootPath: e.target.value } : user))} 
-                      style={{ padding: '5px', width: '100%', borderRadius: '4px', border: themeName === 'dark' ? '1px solid rgba(255,255,255,0.18)' : '1px solid #ccc', backgroundColor: themeName === 'dark' ? '#0f172a' : '#fff', color: themeName === 'dark' ? '#f8fafc' : '#111827', boxSizing: 'border-box' }} 
-                      disabled={!isMaster && u.role === 'MASTER'} 
-                    />
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{u.personalRootPath || `/users/${u.username}`}</Typography>
                   </TableCell>
                   <TableCell align="center">
                     <IconButton color="error" size="small" disabled={u.username === 'admin' || currentUser.username === u.username} onClick={() => handleOpenDelete(u)}><DeleteIcon /></IconButton>
@@ -367,7 +395,42 @@ const Settings = () => {
           )}
           {activeTab === 2 && isManager && (
             <Box>
+              <Typography variant="h6" sx={{ mb: 2 }}>NAS 저장공간 현황</Typography>
+              {userManagementError && <Alert severity="error" onClose={() => setUserManagementError('')} sx={{ mb: 2 }}>{userManagementError}</Alert>}
+              {storageCapacity && (
+                <>
+                  {storageCapacity.overAllocatedBytes > 0 && (
+                    <Alert severity="error" sx={{ mb: 2 }}>
+                      현재 사용자·가입 대기자에게 약속된 용량이 안전 할당 가능 범위를 {formatStorage(storageCapacity.overAllocatedBytes)} 초과했습니다. 신규 가입과 추가 증설이 차단됩니다.
+                    </Alert>
+                  )}
+                  <Grid container spacing={2} sx={{ mb: 2 }}>
+                    {[
+                      ['전체 NAS', formatStorage(storageCapacity.totalBytes), `사용 ${formatStorage(storageCapacity.usedBytes)} · 여유 ${formatStorage(storageCapacity.freeBytes)}`],
+                      ['사용자 할당', formatStorage(storageCapacity.allocatedBytes), `가입 대기 예약 ${formatStorage(storageCapacity.pendingReservedBytes)}`],
+                      ['개인 공간 실사용', formatStorage(storageCapacity.actualUserBytes), `계정 ${storageCapacity.accountCount || 0}개`],
+                      ['추가 할당 가능', formatStorage(storageCapacity.availableForAllocationBytes), storageCapacity.signupAvailable ? '새 계정 50GB 제공 가능' : '신규 가입 차단']
+                    ].map(([label, value, detail]) => (
+                      <Grid item xs={12} sm={6} lg={3} key={label}>
+                        <Paper variant="outlined" sx={{ p: 2, height: '100%', borderRadius: 2 }}>
+                          <Typography variant="caption" color="text.secondary">{label}</Typography>
+                          <Typography variant="h5" sx={{ fontWeight: 800, my: 0.5 }}>{value}</Typography>
+                          <Typography variant="caption" color="text.secondary">{detail}</Typography>
+                        </Paper>
+                      </Grid>
+                    ))}
+                  </Grid>
+                  <Box sx={{ mb: 4 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.75 }}>
+                      <Typography variant="body2">물리 디스크 사용률 {storageUsagePercent}%</Typography>
+                      <Typography variant="caption" color="text.secondary">안전 여유분 {formatStorage(storageCapacity.systemReserveBytes)} 보호</Typography>
+                    </Box>
+                    <LinearProgress variant="determinate" value={storageUsagePercent} color={storageUsagePercent >= 90 ? 'error' : storageUsagePercent >= 75 ? 'warning' : 'primary'} sx={{ height: 10, borderRadius: 5 }} />
+                  </Box>
+                </>
+              )}
               <Typography variant="h6" sx={{ mb: 2 }}>가입 승인 대기자 {pendingUsers.length > 0 && <Chip label={pendingUsers.length} color="error" size="small" />}</Typography>
+              {pendingUsers.length > 0 && <Alert severity="info" sx={{ mb: 2 }}>가입 대기자 한 명마다 기본 50GB가 미리 예약되어 중복 승인을 해도 전체 용량을 초과하지 않습니다.</Alert>}
               <TableContainer component={Paper} sx={{ mb: 5, border: '1px solid #e2e8f0', borderRadius: 2 }} elevation={0}>
                 <Table size="small">
                   <TableHead sx={{ backgroundColor: themeName === 'dark' ? 'rgba(255,255,255,0.06)' : '#f8fafc' }}>
@@ -420,9 +483,10 @@ const Settings = () => {
                   color="primary" 
                   size="large" 
                   onClick={handleSaveChanges}
+                  disabled={userManagementSaving}
                   sx={{ px: 6, py: 1.5, fontSize: '1.1rem', fontWeight: 'bold', borderRadius: 2, boxShadow: 3 }}
                 >
-                  사용자 관리 변경사항 일괄 저장
+                  {userManagementSaving ? '검증 후 저장 중…' : '역할·용량 변경사항 저장'}
                 </Button>
               </Box>
             </Box>

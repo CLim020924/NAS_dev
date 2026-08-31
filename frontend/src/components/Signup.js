@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Container, TextField, Button, Typography, Box } from '@mui/material';
+import React, { useEffect, useState } from 'react';
+import { Alert, Box, Button, CircularProgress, Container, TextField, Typography } from '@mui/material';
 import axios from 'axios';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -21,11 +21,30 @@ function Signup() {
   const [error, setError] = useState('');
   const [idAvailable, setIdAvailable] = useState(null);
   const [nicknameAvailable, setNicknameAvailable] = useState(null);
+  const [capacity, setCapacity] = useState(null);
+  const [capacityLoading, setCapacityLoading] = useState(true);
   const requestedNext = searchParams.get('next');
   const safeNext = requestedNext?.startsWith('/') && !requestedNext.startsWith('//')
     ? requestedNext
     : '/platform';
   const loginPath = `/login?next=${encodeURIComponent(safeNext)}`;
+
+  const refreshSignupCapacity = async () => {
+    try {
+      const response = await axios.get('/api/signup-capacity', { withCredentials: true });
+      setCapacity(response.data || null);
+      return response.data || null;
+    } catch (err) {
+      setCapacity(null);
+      return null;
+    } finally {
+      setCapacityLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshSignupCapacity();
+  }, []);
 
   const checkIdentity = async (field) => {
     try {
@@ -41,6 +60,11 @@ function Signup() {
 
   const handleSignup = async () => {
     setError('');
+    const latestCapacity = await refreshSignupCapacity();
+    if (latestCapacity && latestCapacity.signupAvailable === false) {
+      setError(latestCapacity.reason || '현재 새 계정에 제공할 저장공간이 부족합니다.');
+      return;
+    }
     if (!id.trim() || !nickname.trim() || !password || !passwordConfirm) {
       setError('아이디, 닉네임, 비밀번호를 모두 입력해주세요.');
       return;
@@ -76,6 +100,15 @@ function Signup() {
       <Typography variant="h4" align="center" gutterBottom>
         회원가입
       </Typography>
+      {capacityLoading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}><CircularProgress size={24} /></Box>
+      ) : capacity?.signupAvailable === false ? (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          현재 새 계정의 기본 50GB를 확보할 수 없어 회원가입이 잠시 중단되었습니다. 관리자에게 문의해주세요.
+        </Alert>
+      ) : (
+        <Alert severity="info" sx={{ mb: 2 }}>승인된 계정에는 기본 개인 저장공간 50GB가 제공됩니다.</Alert>
+      )}
       {error && <Typography color="error" align="center">{error}</Typography>}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <TextField
@@ -111,7 +144,7 @@ function Signup() {
           onChange={(e) => setPasswordConfirm(e.target.value)}
           fullWidth
         />
-        <Button variant="contained" onClick={handleSignup}>
+        <Button variant="contained" onClick={handleSignup} disabled={capacityLoading || capacity?.signupAvailable === false}>
           회원가입 요청
         </Button>
         <Button variant="text" onClick={() => navigate(loginPath)}>

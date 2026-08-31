@@ -8,7 +8,10 @@ const MEMBERS_FILE = path.join(DATA_DIR, 'members.json');
 const USAGE_CACHE_FILE = path.join(DATA_DIR, 'storage_usage_cache.json');
 const CHAT_ATTACHMENTS_FILE = path.join(DATA_DIR, 'chatAttachments.json');
 const CHAT_TMP_ROOT = path.join(NAS_ROOT, 'chat_tmp');
-const DEFAULT_USER_QUOTA_BYTES = 50 * 1024 * 1024 * 1024;
+const GIB = 1024 * 1024 * 1024;
+const DEFAULT_USER_QUOTA_BYTES = 50 * GIB;
+const MIN_SYSTEM_RESERVE_BYTES = 10 * GIB;
+const SYSTEM_RESERVE_RATIO = 0.05;
 
 const ensureDataDir = () => {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -42,6 +45,18 @@ const normalizeRelativeRoot = (user = {}) => {
   return String(user.rootPath || path.join('users', loginId || 'default')).replace(/^(\/|\\)+/, '');
 };
 
+const normalizePersonalRelativeRoot = (user = {}) => {
+  const loginId = getLoginId(user) || 'default';
+  const explicitPersonalRoot = String(user.personalRootPath || '').trim();
+  const legacyRoot = String(user.rootPath || '').trim();
+  const candidate = explicitPersonalRoot
+    || (legacyRoot && legacyRoot !== '/' && legacyRoot !== '\\' ? legacyRoot : path.join('users', loginId));
+  const relative = candidate.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  const resolved = path.resolve(NAS_ROOT, relative || path.join('users', loginId));
+  if (!isSameOrChild(NAS_ROOT, resolved)) return path.join('users', loginId);
+  return path.relative(NAS_ROOT, resolved).replace(/\\/g, '/') || path.join('users', loginId);
+};
+
 const isSameOrChild = (parent, child) => {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
   return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
@@ -52,7 +67,7 @@ const resolveInside = (basePath, requestedPath = '') => {
   const safeReqPath = String(requestedPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   const target = path.resolve(base, safeReqPath);
   if (!isSameOrChild(base, target)) {
-    const err = new Error('?? ?? ?????.');
+    const err = new Error('요청한 경로가 허용된 저장공간을 벗어났습니다.');
     err.status = 403;
     throw err;
   }
@@ -66,27 +81,28 @@ const getAccessBasePath = (user = {}) => {
 };
 
 const getQuotaBasePath = (user = {}) => {
-  return isStorageAdmin(user)
-    ? NAS_ROOT
-    : path.resolve(NAS_ROOT, normalizeRelativeRoot(user));
+  return path.resolve(NAS_ROOT, normalizePersonalRelativeRoot(user));
+};
+
+const ensurePersonalStorageRoot = (user = {}) => {
+  const personalRoot = getQuotaBasePath(user);
+  if (!fs.existsSync(personalRoot)) fs.mkdirSync(personalRoot, { recursive: true });
+  return personalRoot;
 };
 
 const normalizeQuotaFields = (user = {}) => {
   const role = getRole(user);
   const next = { ...user, role };
 
-  if (next.storageQuotaMode !== 'unlimited' && next.storageQuotaMode !== 'limited') {
-    next.storageQuotaMode = role === 'USER' && !next.globalAccess ? 'limited' : 'unlimited';
-  }
+  // Every account, including managers and masters, owns a finite personal space.
+  // Elevated roles keep NAS-root access separately through getAccessBasePath().
+  next.storageQuotaMode = 'limited';
+  next.personalRootPath = `/${normalizePersonalRelativeRoot(next)}`;
 
   const quotaNumber = Number(next.storageQuotaBytes);
-  if (next.storageQuotaMode === 'limited') {
-    next.storageQuotaBytes = Number.isFinite(quotaNumber) && quotaNumber > 0
-      ? Math.floor(quotaNumber)
-      : DEFAULT_USER_QUOTA_BYTES;
-  } else {
-    next.storageQuotaBytes = null;
-  }
+  next.storageQuotaBytes = Number.isFinite(quotaNumber) && quotaNumber > 0
+    ? Math.floor(quotaNumber)
+    : DEFAULT_USER_QUOTA_BYTES;
 
   return next;
 };
@@ -212,10 +228,92 @@ const invalidateUsageCache = (changedPath) => {
 
 const getQuotaInfo = (user = {}) => {
   const normalized = normalizeQuotaFields(user);
-  if (isStorageAdmin(normalized) || normalized.storageQuotaMode === 'unlimited') {
-    return { mode: 'unlimited', quotaBytes: null };
-  }
   return { mode: 'limited', quotaBytes: normalized.storageQuotaBytes || DEFAULT_USER_QUOTA_BYTES };
+};
+
+const getFilesystemStats = () => {
+  try {
+    const stat = fs.statfsSync(NAS_ROOT);
+    const totalBytes = Number(stat.blocks) * Number(stat.bsize);
+    const freeBytes = Number(stat.bavail) * Number(stat.bsize);
+    return {
+      totalBytes: Number.isFinite(totalBytes) ? totalBytes : 0,
+      freeBytes: Number.isFinite(freeBytes) ? freeBytes : 0
+    };
+  } catch (err) {
+    return { totalBytes: 0, freeBytes: 0 };
+  }
+};
+
+const calculateCapacityLedger = ({
+  totalBytes = 0,
+  freeBytes = 0,
+  allocatedBytes = 0,
+  actualUserBytes = 0,
+  pendingReservedBytes = 0,
+  reserveBytes
+} = {}) => {
+  const total = Math.max(0, Number(totalBytes) || 0);
+  const free = Math.max(0, Math.min(total, Number(freeBytes) || 0));
+  const actual = Math.max(0, Number(actualUserBytes) || 0);
+  const allocated = Math.max(0, Number(allocatedBytes) || 0);
+  const pending = Math.max(0, Number(pendingReservedBytes) || 0);
+  const reserve = Math.max(
+    0,
+    Math.min(total, Number.isFinite(Number(reserveBytes))
+      ? Number(reserveBytes)
+      : Math.max(MIN_SYSTEM_RESERVE_BYTES, Math.floor(total * SYSTEM_RESERVE_RATIO)))
+  );
+  const used = Math.max(0, total - free);
+  const nonAccountUsed = Math.max(0, used - actual);
+  const quotaPool = Math.max(0, total - reserve - nonAccountUsed);
+  const committed = allocated + pending;
+  const logicalAvailable = Math.max(0, quotaPool - committed);
+  const physicalAvailable = Math.max(0, free - reserve);
+  const availableForAllocation = Math.min(logicalAvailable, physicalAvailable);
+
+  return {
+    totalBytes: total,
+    usedBytes: used,
+    freeBytes: free,
+    systemReserveBytes: reserve,
+    nonAccountUsedBytes: nonAccountUsed,
+    quotaPoolBytes: quotaPool,
+    actualUserBytes: actual,
+    allocatedBytes: allocated,
+    pendingReservedBytes: pending,
+    committedBytes: committed,
+    logicalAvailableBytes: logicalAvailable,
+    physicalAvailableBytes: physicalAvailable,
+    availableForAllocationBytes: availableForAllocation,
+    overAllocatedBytes: Math.max(0, committed - quotaPool),
+    defaultQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
+    signupAvailable: availableForAllocation >= DEFAULT_USER_QUOTA_BYTES
+  };
+};
+
+const getStorageCapacitySummary = (users = [], pendingRequests = []) => {
+  const normalizedUsers = (Array.isArray(users) ? users : []).map(normalizeQuotaFields);
+  let actualUserBytes = 0;
+  for (const user of normalizedUsers) {
+    actualUserBytes += getUserStorageSummary(user).usedBytes;
+  }
+  const allocatedBytes = normalizedUsers.reduce(
+    (total, user) => total + Number(user.storageQuotaBytes || DEFAULT_USER_QUOTA_BYTES),
+    0
+  );
+  const pendingCount = Array.isArray(pendingRequests) ? pendingRequests.length : 0;
+  const stats = getFilesystemStats();
+  return {
+    ...calculateCapacityLedger({
+      ...stats,
+      allocatedBytes,
+      actualUserBytes,
+      pendingReservedBytes: pendingCount * DEFAULT_USER_QUOTA_BYTES
+    }),
+    accountCount: normalizedUsers.length,
+    pendingCount
+  };
 };
 
 const getUserStorageSummary = (user = {}) => {
@@ -226,11 +324,9 @@ const getUserStorageSummary = (user = {}) => {
   let totalBytes = null;
   let freeBytes = null;
 
-  try {
-    const stat = fs.statfsSync(basePath);
-    totalBytes = stat.blocks * stat.bsize;
-    freeBytes = stat.bavail * stat.bsize;
-  } catch (err) {}
+  const stats = getFilesystemStats();
+  totalBytes = stats.totalBytes || null;
+  freeBytes = stats.freeBytes || null;
 
   return {
     basePath,
@@ -249,17 +345,43 @@ const getUserStorageSummary = (user = {}) => {
 const assertQuotaAvailable = (user = {}, incomingBytes = 0, changedPath = '') => {
   const bytes = Number(incomingBytes) || 0;
   const quota = getQuotaInfo(user);
-  if (quota.mode === 'unlimited' || bytes <= 0) return;
+  if (bytes <= 0) return;
+
+  let replacedBytes = 0;
+  try {
+    if (changedPath && fs.existsSync(changedPath) && fs.statSync(changedPath).isFile()) {
+      replacedBytes = fs.statSync(changedPath).size;
+    }
+  } catch (err) {}
+  const additionalBytes = Math.max(0, bytes - replacedBytes);
+
+  const stats = getFilesystemStats();
+  const reserveBytes = Math.max(MIN_SYSTEM_RESERVE_BYTES, Math.floor(stats.totalBytes * SYSTEM_RESERVE_RATIO));
+  if (additionalBytes > Math.max(0, stats.freeBytes - reserveBytes)) {
+    const err = new Error('NAS의 안전 여유 공간이 부족합니다. 불필요한 파일을 정리하거나 할당량을 조정해주세요.');
+    err.status = 507;
+    err.code = 'STORAGE_CAPACITY_LOW';
+    err.storage = { freeBytes: stats.freeBytes, reserveBytes, incomingBytes: bytes, additionalBytes };
+    throw err;
+  }
+
+  const quotaBasePath = getQuotaBasePath(user);
+  const targetIsPersonal = !changedPath || isSameOrChild(quotaBasePath, changedPath);
+  if (!targetIsPersonal && isStorageAdmin(user)) {
+    if (changedPath) invalidateUsageCache(changedPath);
+    return;
+  }
 
   const summary = getUserStorageSummary(user);
-  if (summary.usedBytes + bytes > quota.quotaBytes) {
-    const err = new Error('????? ?????. ????? ?? ??? ?????.');
+  if (summary.usedBytes + additionalBytes > quota.quotaBytes) {
+    const err = new Error('개인 저장공간 할당량을 초과합니다. 불필요한 파일을 정리하거나 관리자에게 용량 증설을 요청해주세요.');
     err.status = 413;
     err.code = 'STORAGE_QUOTA_EXCEEDED';
     err.storage = {
       usedBytes: summary.usedBytes,
       quotaBytes: quota.quotaBytes,
-      incomingBytes: bytes
+      incomingBytes: bytes,
+      additionalBytes
     };
     throw err;
   }
@@ -270,6 +392,7 @@ const assertQuotaAvailable = (user = {}, incomingBytes = 0, changedPath = '') =>
 module.exports = {
   NAS_ROOT,
   DEFAULT_USER_QUOTA_BYTES,
+  MIN_SYSTEM_RESERVE_BYTES,
   getLoginId,
   getRole,
   isStorageAdmin,
@@ -279,11 +402,13 @@ module.exports = {
   findMemberByAnyId,
   getAccessBasePath,
   getQuotaBasePath,
+  ensurePersonalStorageRoot,
   resolveInside,
   isSameOrChild,
   getCachedPathUsage,
   getUserStorageSummary,
+  getStorageCapacitySummary,
   invalidateUsageCache,
   assertQuotaAvailable,
-  _test: { countPathSize }
+  _test: { countPathSize, calculateCapacityLedger, normalizePersonalRelativeRoot }
 };

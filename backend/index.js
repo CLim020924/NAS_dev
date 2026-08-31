@@ -26,7 +26,9 @@ const {
 const {
   DEFAULT_USER_QUOTA_BYTES,
   normalizeQuotaFields,
-  getUserStorageSummary
+  getUserStorageSummary,
+  getStorageCapacitySummary,
+  ensurePersonalStorageRoot
 } = require('./storageQuota');
 const { getAiStatus } = require('./services/aiService');
 const { hashPassword, verifyPassword } = require('./passwordSecurity');
@@ -467,6 +469,13 @@ function loadData() {
 
   saveMembers();
   saveRequests();
+  approvedUsers.forEach((user) => {
+    try {
+      ensurePersonalStorageRoot(user);
+    } catch (err) {
+      console.error(`[storage] ${getUserLoginId(user)} 개인 공간 준비 실패:`, err.message);
+    }
+  });
 }
 loadData();
 
@@ -494,6 +503,7 @@ const aiAgentRoutes = require('./aiAgentRoutes');
 const publicApiPaths = new Set([
   '/login',
   '/signup-request',
+  '/signup-capacity',
   '/onlyoffice/callback',
   '/onlyoffice/file'
 ]);
@@ -915,6 +925,16 @@ app.post('/api/signup-request', (req, res) => {
     return res.status(409).json({ error: '이미 사용 중인 닉네임입니다.', field: 'nickname' });
   }
 
+  const capacity = getStorageCapacitySummary(approvedUsers, signupRequests);
+  if (!capacity.signupAvailable) {
+    return res.status(507).json({
+      error: '현재 새 계정에 제공할 50GB 저장공간이 부족해 회원가입을 받을 수 없습니다.',
+      code: 'SIGNUP_STORAGE_FULL',
+      defaultQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
+      availableForAllocationBytes: capacity.availableForAllocationBytes
+    });
+  }
+
   signupRequests.push(normalizeSignupRequest({
     id: loginId,
     loginId,
@@ -929,6 +949,17 @@ app.post('/api/signup-request', (req, res) => {
   saveRequests();
   io.emit('membersChanged');
   res.json({ success: true });
+});
+
+app.get('/api/signup-capacity', (req, res) => {
+  const capacity = getStorageCapacitySummary(approvedUsers, signupRequests);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    signupAvailable: capacity.signupAvailable,
+    defaultQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
+    availableForAllocationBytes: capacity.availableForAllocationBytes,
+    reason: capacity.signupAvailable ? null : '새 계정의 기본 50GB를 안전하게 확보할 수 없습니다.'
+  });
 });
 
 app.get('/api/users/check-identity', (req, res) => {
@@ -948,6 +979,8 @@ app.get('/api/users/data', requireManager, (req, res) => {
   const users = approvedUsers.map(u => {
     const loginId = getUserLoginId(u);
     const normalizedUser = normalizeQuotaFields(u);
+    try { ensurePersonalStorageRoot(normalizedUser); } catch (err) {}
+    const storage = getUserStorageSummary(normalizedUser);
     return {
       userUid: u.userUid,
       id: loginId,
@@ -959,11 +992,15 @@ app.get('/api/users/data', requireManager, (req, res) => {
       globalAccess: u.globalAccess,
       isOnline: connectedIds.includes(loginId) || connectedUserUids.includes(u.userUid),
       rootPath: u.rootPath || '',
+      personalRootPath: normalizedUser.personalRootPath,
+      canBrowseNasRoot: normalizedUser.role === 'MASTER' || normalizedUser.role === 'MANAGER' || !!normalizedUser.globalAccess,
       storageQuotaMode: normalizedUser.storageQuotaMode,
       storageQuotaBytes: normalizedUser.storageQuotaBytes,
-      storageUsedBytes: null,
-      storageTotalBytes: null,
-      storageFreeBytes: null
+      storageUsedBytes: storage.usedBytes,
+      storageFileBytes: storage.fileBytes,
+      storageChatAttachmentBytes: storage.chatAttachmentBytes,
+      storageTotalBytes: storage.totalBytes,
+      storageFreeBytes: storage.freeBytes
     };
   });
 
@@ -980,47 +1017,100 @@ app.get('/api/users/data', requireManager, (req, res) => {
     };
   });
 
-  res.json({ users, pendingUsers });
+  res.json({
+    users,
+    pendingUsers,
+    storageCapacity: getStorageCapacitySummary(approvedUsers, signupRequests)
+  });
 });
 
 // [권한 업데이트 & 강제 로그아웃 방송]
 app.put('/api/users/update', requireManager, (req, res) => {
-  const updatedIds = [];
+  try {
+    const requestUsers = Array.isArray(req.body?.users) ? req.body.users : [];
+    const requesterRole = getUserRole(req.authUser || {});
+    const requesterIsMaster = requesterRole === 'MASTER' || !!req.authUser?.Masters;
+    const proposedUsers = approvedUsers.map(user => ({ ...user }));
+    const updatedIds = new Set();
 
-  req.body.users.forEach(u => {
-    const target = findApprovedUserByAnyId(u.userUid || u.loginId || u.id);
-    if (target && getUserLoginId(target) !== 'admin') {
-      if ((target.role !== u.role || target.globalAccess !== u.globalAccess) && u.role !== 'MASTER') {
-        updatedIds.push(getUserLoginId(target));
+    for (const update of requestUsers) {
+      const targetIndex = proposedUsers.findIndex((user) =>
+        [user.userUid, user.loginId, user.id, user.username]
+          .filter(Boolean)
+          .includes(update.userUid || update.loginId || update.id)
+      );
+      if (targetIndex < 0) continue;
+
+      const target = proposedUsers[targetIndex];
+      const targetLoginId = getUserLoginId(target);
+      const targetRole = getUserRole(target);
+      const requestedRole = ['MASTER', 'MANAGER', 'USER'].includes(update.role) ? update.role : targetRole;
+      const roleChanged = requestedRole !== targetRole;
+      const globalChanged = update.globalAccess !== undefined && !!update.globalAccess !== !!target.globalAccess;
+
+      if (!requesterIsMaster && (targetRole !== 'USER' || roleChanged || globalChanged)) {
+        return res.status(403).json({ error: '관리자는 일반 사용자의 용량만 관리할 수 있으며 역할 변경은 마스터만 할 수 있습니다.' });
       }
-      target.Masters = u.role === 'MASTER';
-      target.Managers = u.role === 'MANAGER' || u.role === 'MASTER';
-      target.globalAccess = u.role === 'MASTER' ? true : !!u.globalAccess;
-      target.role = u.role || target.role;
-      target.rootPath = u.rootPath || u.root_path || target.rootPath;
-      if (u.storageQuotaMode === 'unlimited') {
-        target.storageQuotaMode = 'unlimited';
-        target.storageQuotaBytes = null;
-      } else if (u.storageQuotaGb !== undefined || u.storageQuotaBytes !== undefined) {
-        const quotaGb = Number(u.storageQuotaGb);
-        const quotaBytes = Number(u.storageQuotaBytes);
-        const nextQuotaBytes = Number.isFinite(quotaGb) && quotaGb > 0
-          ? Math.round(quotaGb * 1024 * 1024 * 1024)
-          : quotaBytes;
-        target.storageQuotaMode = 'limited';
-        target.storageQuotaBytes = Number.isFinite(nextQuotaBytes) && nextQuotaBytes > 0
-          ? Math.round(nextQuotaBytes)
-          : DEFAULT_USER_QUOTA_BYTES;
+      if (targetLoginId === 'admin' && (roleChanged || globalChanged)) {
+        return res.status(400).json({ error: '기본 마스터 계정의 역할과 전체 NAS 접근 권한은 변경할 수 없습니다.' });
       }
-      if (u.displayName !== undefined) target.displayName = u.displayName || getUserLoginId(target);
-      if (u.nickname !== undefined) target.nickname = u.nickname || '';
+
+      const quotaGb = Number(update.storageQuotaGb);
+      const quotaBytes = Number(update.storageQuotaBytes);
+      const requestedQuotaBytes = Number.isFinite(quotaGb) && quotaGb > 0
+        ? Math.round(quotaGb * 1024 * 1024 * 1024)
+        : quotaBytes;
+      if (!Number.isFinite(requestedQuotaBytes) || requestedQuotaBytes < 1024 * 1024 * 1024) {
+        return res.status(400).json({ error: '개인 저장공간은 1GB 이상의 숫자로 지정해야 합니다.' });
+      }
+
+      const next = normalizeQuotaFields({
+        ...target,
+        role: requestedRole,
+        Masters: requestedRole === 'MASTER',
+        Managers: requestedRole === 'MASTER' || requestedRole === 'MANAGER',
+        globalAccess: requestedRole === 'MASTER' ? true : !!update.globalAccess,
+        storageQuotaMode: 'limited',
+        storageQuotaBytes: Math.round(requestedQuotaBytes),
+        displayName: update.displayName !== undefined ? (update.displayName || targetLoginId) : target.displayName,
+        nickname: update.nickname !== undefined ? (update.nickname || '') : target.nickname
+      });
+      const usage = getUserStorageSummary(next);
+      if (next.storageQuotaBytes < usage.usedBytes) {
+        return res.status(409).json({
+          error: `${next.displayName || targetLoginId} 계정은 현재 사용량보다 작은 용량으로 줄일 수 없습니다.`,
+          code: 'QUOTA_BELOW_USAGE',
+          storageUsedBytes: usage.usedBytes,
+          requestedQuotaBytes: next.storageQuotaBytes
+        });
+      }
+      if (roleChanged || globalChanged) updatedIds.add(targetLoginId);
+      proposedUsers[targetIndex] = next;
     }
-  });
 
-  saveMembers();
-  updatedIds.forEach(targetId => io.emit('force_logout_target', { targetId }));
-  io.emit('membersChanged');
-  res.json({ success: true });
+    if (!proposedUsers.some((user) => getUserRole(user) === 'MASTER' || user.Masters)) {
+      return res.status(409).json({ error: '최소 한 개의 마스터 계정은 반드시 유지해야 합니다.' });
+    }
+
+    const capacity = getStorageCapacitySummary(proposedUsers, signupRequests);
+    if (capacity.overAllocatedBytes > 0) {
+      return res.status(409).json({
+        error: '요청한 할당량 합계가 NAS에서 안전하게 제공 가능한 용량을 초과합니다.',
+        code: 'STORAGE_ALLOCATION_EXCEEDED',
+        overAllocatedBytes: capacity.overAllocatedBytes,
+        availableForAllocationBytes: capacity.availableForAllocationBytes
+      });
+    }
+
+    approvedUsers = proposedUsers;
+    saveMembers();
+    updatedIds.forEach(targetId => io.emit('force_logout_target', { targetId }));
+    io.emit('membersChanged');
+    res.json({ success: true, storageCapacity: getStorageCapacitySummary(approvedUsers, signupRequests) });
+  } catch (err) {
+    console.error('[users/update] failed', err.message);
+    res.status(err.status || 500).json({ error: err.message || '사용자 설정을 저장하지 못했습니다.' });
+  }
 });
 
 // [보안 계정 삭제 & 폴더 백업]
@@ -1147,6 +1237,14 @@ app.post('/api/users/approve', requireManager, (req, res) => {
 
   const loginId = getUserLoginId(reqUser);
 
+  const capacity = getStorageCapacitySummary(approvedUsers, signupRequests);
+  if (capacity.overAllocatedBytes > 0) {
+    return res.status(507).json({
+      error: '예약된 기본 50GB를 현재 NAS에서 안전하게 제공할 수 없어 승인할 수 없습니다.',
+      code: 'SIGNUP_STORAGE_FULL'
+    });
+  }
+
   approvedUsers.push(normalizeApprovedUser({
     ...reqUser,
     id: loginId,
@@ -1159,7 +1257,10 @@ app.post('/api/users/approve', requireManager, (req, res) => {
     disabled: false,
     status: 'ACTIVE',
     approvedAt: nowIso(),
-    role: 'USER'
+    role: 'USER',
+    storageQuotaMode: 'limited',
+    storageQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
+    personalRootPath: `/users/${loginId}`
   }));
 
   signupRequests = signupRequests.filter(r => r.userUid !== reqUser.userUid);

@@ -806,3 +806,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 수정 경계: Windows 전역 배율을 100%로 바꾸는 우회는 사용하지 않는다. `PerMonitorV2`를 유지하면서 96-DPI 설계 좌표·폰트·owner-draw 카드를 현재 모니터 DPI로 정확히 한 번만 확대하는 공통 layout scale이 필요하다. 100%·150%·200%·300%와 서로 다른 배율 모니터 이동에서 폼 크기, 모든 버튼·문구, picker hover/focus를 실제 화면으로 확인해야 한다.
 - 기록: workbook에 `WIN-UI-DPI-SCALING`, 관련 Relation/Code map, 교정된 `WIN-UI-DPI-089`, 진단 Patch와 요청을 추가했다. formula error 0과 전체 시트 렌더·변경 범위 시각 검사를 통과했다.
 - 미완료/다음 조치: 1.10.24 수정, 빌드, NAS 배포, 현재 PC 설치는 아직 하지 않았다. 사용자가 수정을 요청하면 공통 단일 DPI scale을 구현하고 자동·실화면 검증까지 이어간다.
+## 2026-08-31 NAS Drive 1.10.24 고DPI 실설치 확인 + 계정별 용량 원장 구현
+
+- 사용자 요청: 이전에 수정한 NAS Drive UI 축소 문제를 실제 PC에서 마무리하고, 설정의 사용자 역할·용량 관리를 재설계한다. 모든 계정은 기본 50GB 개인 공간을 가지며 관리자/마스터도 개인 공간을 별도로 갖되 NAS 전체 루트 접근은 유지한다. 전체 NAS 용량·사용량·사용자 할당량을 표시하고 새 계정 50GB를 안전하게 제공할 수 없으면 가입을 차단한다.
+- NAS Drive 실화면: 현재 Windows 300% 배율에서 1.10.23→1.10.24 Setup의 `업데이트`를 실제 실행했다. 설치 창은 약 660px 폭으로 정상 표시됐고 완료 뒤 제어센터도 약 620px 폭에서 계정 상태·저장 위치·세 버튼이 접근성 tree에 모두 노출됐다. 현재 계정은 `계정 다시 연결 필요` 상태라 웹 관리 버튼 뒤 picker가 열리지 않았으며 인증은 자동화하지 않았다. 네 폼 300% headless layout 검사는 통과한 상태다.
+- 저장공간 원인: 기존 `storageQuota.js`는 MASTER/MANAGER/globalAccess를 무제한으로 보고 quota base를 NAS_ROOT 전체로 잡았다. `/api/users/data`는 실제 사용량을 null로 반환했고 가입 요청·승인 및 사용자 일괄 저장은 물리 공간, 비계정 데이터, 전체 할당, 가입 대기 예약을 검증하지 않았다. 프론트는 rootPath 문자열과 전체 접근·개인 공간을 한 필드처럼 다뤘다.
+- 구현: 관리자/마스터 포함 모든 계정을 제한된 개인 quota로 정규화하고 `personalRootPath`를 NAS 전체 접근과 분리했다. 기존 정상 사용자 custom root는 보존하고 `/`였던 관리자 계정은 `/users/<loginId>` 개인 공간을 자동 준비한다. MASTER/MANAGER는 기존처럼 NAS 루트를 탐색할 수 있으나 개인 사용량·할당량은 자신의 개인 root에서만 계산한다.
+- 용량 원장: statfs의 전체/여유, 실제 사용자 개인 사용량, 비계정 사용량, 안전 여유분(전체 5%와 10GiB 중 큰 값), 승인 계정 할당, 가입 대기자당 50GiB 예약을 바이트 정수로 합산한다. 추가 할당 가능 용량은 논리 quota pool과 물리 안전 여유 중 작은 값이며 50GiB 미만이면 `signup-capacity`와 `signup-request`가 신규 가입을 차단한다. quota 축소는 실제 사용량 미만, 증설은 안전 pool 초과를 거부한다. 덮어쓰기는 기존 파일 크기를 뺀 증가분만 검사하고 관리자의 개인 root 밖 관리 작업은 개인 quota와 분리하되 물리 안전 여유는 항상 검사한다.
+- 권한·UI: MANAGER는 일반 사용자 quota만 관리하고 역할 변경은 MASTER만 가능하다. 기본 admin 역할·전체 접근과 마지막 MASTER는 보호한다. 설정 화면에는 전체 NAS·사용·여유, 사용자 할당, 가입 대기 예약, 개인 실사용, 추가 할당 가능, 안전 여유와 계정별 역할·개인 경로·할당/사용량이 표시된다. 가입 화면은 기본 50GB 제공 가능 여부를 안내하고 부족하면 버튼을 비활성화하되 최종 권한은 서버 재검증에 둔다.
+- 로컬 검증: backend syntax, 신규 capacity ledger 3건과 기존 hardlink quota 테스트를 통과했다. 전체 backend는 22건 중 19건 통과·2건 환경 skip이며 기존 Windows 비관리자 symlink 생성 EPERM 한 건만 실패해 NAS Linux 재검증 대상으로 남았다. frontend production build와 react-pdf/PDF.js 4.8.69 검사를 통과했고 이번 변경 파일의 새 ESLint 경고는 없다. workbook은 관련 Feature/Relation/Code/API/DNB/Patch/Request를 갱신하고 formula error 0, 인코딩 의심 0, 전체 시트 렌더를 확인했다.
+- 미완료/다음 조치: 이 시점에는 NAS live 배포 전이다. 같은 브랜치에 push한 뒤 NAS fast-forward, Linux 전체 테스트, PM2 재시작, 내부/공개 HTTP, 실제 계정 원장 값·개인 폴더·관리자 화면·가입 가능 API를 검증하고 결과를 다시 기록한다.
