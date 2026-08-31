@@ -12,6 +12,7 @@ import initRhwp, { HwpDocument } from '@rhwp/core';
 import rhwpWasmUrl from '@rhwp/core/rhwp_bg.wasm';
 import { createEditor } from '@rhwp/editor';
 import NasItemPickerDialog from '../NasItemPickerDialog';
+import { focusRhwpEditorInput, shouldRestoreRhwpEditorFocus } from './rhwpFocusPolicy';
 import { exportRhwpWithRecovery, getNasRhwpShortcutAction, replaceRhwpExtension } from './rhwpSavePolicy';
 
 let rhwpReadyPromise = null;
@@ -56,7 +57,7 @@ const getPreviewNasPath = (previewUrl) => {
   }
 };
 
-const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNasPath = '', onSave, onDirtyChange, initialFolderPath = '/', initialMode = 'viewer' }) => {
+const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNasPath = '', onSave, onDirtyChange, initialFolderPath = '/', initialMode = 'viewer', isActive = true }) => {
   const containerRef = useRef(null);
   const editorHostRef = useRef(null);
   const editorRef = useRef(null);
@@ -78,6 +79,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
+  const focusTimersRef = useRef([]);
   const pageWidth = Math.max(280, Math.min(1200, Math.floor((surfaceWidth - 32) * zoom)));
 
   const markDirty = useCallback((nextDirty = true) => {
@@ -85,6 +87,29 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
     setDirty(!!nextDirty);
     onDirtyChange?.(!!nextDirty);
   }, [onDirtyChange]);
+
+  const cancelScheduledEditorFocus = useCallback(() => {
+    focusTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    focusTimersRef.current = [];
+  }, []);
+
+  const restoreEditorFocus = useCallback(() => {
+    if (!shouldRestoreRhwpEditorFocus({ mode, isActive, saveAsOpen, folderPickerOpen })) return false;
+    return focusRhwpEditorInput(editorRef.current?.element);
+  }, [folderPickerOpen, isActive, mode, saveAsOpen]);
+
+  const scheduleEditorFocus = useCallback(() => {
+    cancelScheduledEditorFocus();
+    [0, 80, 240].forEach((delay) => {
+      const timer = window.setTimeout(() => {
+        focusTimersRef.current = focusTimersRef.current.filter((item) => item !== timer);
+        if (restoreEditorFocus()) cancelScheduledEditorFocus();
+      }, delay);
+      focusTimersRef.current.push(timer);
+    });
+  }, [cancelScheduledEditorFocus, restoreEditorFocus]);
+
+  useEffect(() => () => cancelScheduledEditorFocus(), [cancelScheduledEditorFocus]);
 
   useEffect(() => {
     setSaveAsFolder(normalizeNasPath(initialFolderPath));
@@ -334,8 +359,6 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
         fileName: savedName,
         targetPath: targetPath ? normalizeNasPath(targetPath) : undefined
       });
-      const nextBuffer = bytes instanceof Uint8Array ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
-      setBuffer(nextBuffer);
       markDirty(false);
       setNotice(exported.recovered
         ? `기존 HWPX의 스타일 참조 오류를 복구해 NAS에 ${savedName} 파일로 저장했습니다.`
@@ -346,8 +369,9 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
       return false;
     } finally {
       setSaving(false);
+      scheduleEditorFocus();
     }
-  }, [getPreferredFormat, markDirty, name, onSave, saving]);
+  }, [getPreferredFormat, markDirty, name, onSave, saving, scheduleEditorFocus]);
 
   useEffect(() => {
     if (mode !== 'editor' || !dirty || saving) return undefined;
@@ -418,9 +442,6 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
       try {
         const doc = iframe.contentDocument;
         const isHwpx = String(name || '').toLowerCase().endsWith('.hwpx');
-        iframe.focus();
-        iframe.contentWindow?.focus();
-        doc?.querySelector('#scroll-container')?.focus({ preventScroll: true });
         iframe.contentWindow?.addEventListener('keydown', handleEditorKeyDown, true);
         doc?.addEventListener('keydown', handleEditorKeyDown, true);
         ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach((eventName) => {
@@ -454,6 +475,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
             toast.remove();
           }
         });
+        scheduleEditorFocus();
       } catch (err) {
         console.warn('Unable to attach rhwp editor shortcut handlers', err);
       }
@@ -480,7 +502,25 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
       iframe.removeEventListener('load', attach);
       detach();
     };
-  }, [editorReadyNonce, markDirty, mode, name, openSaveAsDialog, saveToNas]);
+  }, [editorReadyNonce, markDirty, mode, name, openSaveAsDialog, saveToNas, scheduleEditorFocus]);
+
+  useEffect(() => {
+    if (!editorReadyNonce || !shouldRestoreRhwpEditorFocus({ mode, isActive, saveAsOpen, folderPickerOpen })) {
+      cancelScheduledEditorFocus();
+      return undefined;
+    }
+    scheduleEditorFocus();
+    const handleFocusReturn = () => {
+      if (!document.hidden) scheduleEditorFocus();
+    };
+    window.addEventListener('focus', handleFocusReturn);
+    document.addEventListener('visibilitychange', handleFocusReturn);
+    return () => {
+      window.removeEventListener('focus', handleFocusReturn);
+      document.removeEventListener('visibilitychange', handleFocusReturn);
+      cancelScheduledEditorFocus();
+    };
+  }, [cancelScheduledEditorFocus, editorReadyNonce, folderPickerOpen, isActive, mode, saveAsOpen, scheduleEditorFocus]);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#5f6368' }}>
