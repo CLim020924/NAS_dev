@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.23.0")]
-[assembly: AssemblyFileVersion("1.10.23.0")]
+[assembly: AssemblyVersion("1.10.24.0")]
+[assembly: AssemblyFileVersion("1.10.24.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.23";
+        internal const string ProductVersion = "1.10.24";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
@@ -34,7 +34,12 @@ namespace NasDriveSetup
 
         internal static Font UiFont(string family, float pointSize)
         {
-            return new Font(family, pointSize * 96f / 72f, FontStyle.Regular, GraphicsUnit.Pixel);
+            return new Font(family, pointSize, FontStyle.Regular, GraphicsUnit.Point);
+        }
+
+        internal static int ScaleMetric(int value, float scale)
+        {
+            return Math.Max(0, (int)Math.Round(value * scale, MidpointRounding.AwayFromZero));
         }
 
         [STAThread]
@@ -47,7 +52,9 @@ namespace NasDriveSetup
             }
             if (Array.Exists(args, item => string.Equals(item, "--self-test", StringComparison.OrdinalIgnoreCase)))
             {
-                Environment.Exit(RunSelfTest() ? 0 : 1);
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Environment.Exit(RunSelfTest() && RunDpiLayoutSelfTest() ? 0 : 1);
                 return;
             }
             if (RunInstalledAgentCommand(args)) return;
@@ -497,13 +504,13 @@ namespace NasDriveSetup
                 }
                 return ResolveInstallState(false, "", "", "package") == InstallState.FirstInstall
                     && ResolveInstallState(true, ProductVersion, "same", "same") == InstallState.SameVersion
-                    && ResolveInstallState(true, "1.10.22", "same", "same") == InstallState.Upgrade
+                    && ResolveInstallState(true, "1.10.23", "same", "same") == InstallState.Upgrade
                     && ResolveInstallState(true, "1.6.0", "old", "new") == InstallState.Upgrade
                     && ResolveInstallState(true, ProductVersion, "changed", "new") == InstallState.Repair
                     && ResolveInstallState(true, "", "same", "same") == InstallState.Repair
                     && ResolveInstallState(true, "99.0.0", "newer", "new") == InstallState.NewerInstalled
                     && ResolveCompositeInstallState(InstallState.SameVersion, true, ProductVersion, true) == InstallState.SameVersion
-                    && ResolveCompositeInstallState(InstallState.SameVersion, true, "1.10.22", false) == InstallState.Upgrade
+                    && ResolveCompositeInstallState(InstallState.SameVersion, true, "1.10.23", false) == InstallState.Upgrade
                     && ResolveCompositeInstallState(InstallState.SameVersion, true, ProductVersion, false) == InstallState.Repair
                     && ResolveCompositeInstallState(InstallState.SameVersion, false, "", false) == InstallState.Repair
                     && IsKnownInstallerFileName("NAS-Drive-Setup_pair_test (2).exe")
@@ -516,12 +523,44 @@ namespace NasDriveSetup
                     && !IsInstalledAgentProcessPath(@"C:\Old\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe")
                     && QuoteArgument(@"C:\Users\Me\NAS Drive") == "\"C:\\Users\\Me\\NAS Drive\""
                     && QuoteArgument("C:\\Path\\") == "\"C:\\Path\\\\\""
+                    && ScaleMetric(660, 3f) == 1980
+                    && ScaleMetric(1, 1.5f) == 2
                     && NativeControlCenter.ShouldTreatHealthAsOffline("up-to-date", 13, true)
                     && !NativeControlCenter.ShouldTreatHealthAsOffline("needs-relink", 300, true)
                     && !NativeControlCenter.ShouldTreatHealthAsOffline("error", 300, true)
                     && !NativeControlCenter.ShouldTreatHealthAsOffline("paused", 300, true);
             }
             catch { return false; }
+        }
+
+        private static bool RunDpiLayoutSelfTest()
+        {
+            try
+            {
+                using (var setup = new InstallerForm())
+                using (var login = new NativeLoginForm(Path.Combine(Path.GetTempPath(), "NAS-Sync-Agent.exe")))
+                using (var control = new NativeControlCenter(Path.Combine(Path.GetTempPath(), "NAS-Sync-Agent.exe")))
+                using (var picker = new WebBrowserPickerForm())
+                {
+                    return HasExpectedScaledClientSize(setup, 660, 470)
+                        && HasExpectedScaledClientSize(login, 470, 650)
+                        && HasExpectedScaledClientSize(control, 620, 620)
+                        && HasExpectedScaledClientSize(picker, 720, 570);
+                }
+            }
+            catch { return false; }
+        }
+
+        private static bool HasExpectedScaledClientSize(Form form, int designWidth, int designHeight)
+        {
+            using (Graphics graphics = form.CreateGraphics())
+            {
+                float scale = Math.Max(1f, graphics.DpiX / 96f);
+                int expectedWidth = ScaleMetric(designWidth, scale);
+                int expectedHeight = ScaleMetric(designHeight, scale);
+                return Math.Abs(form.ClientSize.Width - expectedWidth) <= 2
+                    && Math.Abs(form.ClientSize.Height - expectedHeight) <= 2;
+            }
         }
 
         internal static InstallState ResolveInstallState(bool installedExists, string installedVersion, string installedHash, string packageHash)
@@ -554,6 +593,64 @@ namespace NasDriveSetup
                 && Version.TryParse(ProductVersion, out current)
                 && installedLauncher.CompareTo(current) < 0) return InstallState.Upgrade;
             return InstallState.Repair;
+        }
+    }
+
+    internal class DpiScaledForm : Form
+    {
+        private const int WmDpiChanged = 0x02E0;
+        private float appliedLayoutScale = 1f;
+        private bool initialLayoutScaled;
+
+        protected float LayoutScale { get { return appliedLayoutScale; } }
+
+        protected Point UiPoint(int x, int y)
+        {
+            return new Point(Program.ScaleMetric(x, appliedLayoutScale), Program.ScaleMetric(y, appliedLayoutScale));
+        }
+
+        protected Size UiSize(int width, int height)
+        {
+            return new Size(Program.ScaleMetric(width, appliedLayoutScale), Program.ScaleMetric(height, appliedLayoutScale));
+        }
+
+        protected Padding UiPadding(int all)
+        {
+            return new Padding(Program.ScaleMetric(all, appliedLayoutScale));
+        }
+
+        protected void ApplyInitialDpiScale()
+        {
+            if (initialLayoutScaled) return;
+            float dpi;
+            using (Graphics graphics = CreateGraphics()) dpi = graphics.DpiX;
+            float nextScale = Math.Max(1f, dpi / 96f);
+            if (Math.Abs(nextScale - 1f) > 0.01f)
+            {
+                SuspendLayout();
+                Scale(new SizeF(nextScale, nextScale));
+                ResumeLayout(true);
+            }
+            appliedLayoutScale = nextScale;
+            initialLayoutScaled = true;
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            if (initialLayoutScaled && message.Msg == WmDpiChanged)
+            {
+                int nextDpi = (int)(message.WParam.ToInt64() & 0xffff);
+                float nextScale = Math.Max(1f, nextDpi / 96f);
+                float ratio = nextScale / appliedLayoutScale;
+                if (Math.Abs(ratio - 1f) > 0.01f)
+                {
+                    SuspendLayout();
+                    Scale(new SizeF(ratio, ratio));
+                    appliedLayoutScale = nextScale;
+                    ResumeLayout(true);
+                }
+            }
+            base.WndProc(ref message);
         }
     }
 
@@ -659,22 +756,24 @@ namespace NasDriveSetup
 
         protected override void OnPaint(PaintEventArgs eventArgs)
         {
+            float scale = Math.Max(1f, eventArgs.Graphics.DpiX / 96f);
             bool pressed = Capture && MouseButtons == MouseButtons.Left;
             Color background = pressed ? PressedColor : (hovered ? HoverColor : Color.White);
             eventArgs.Graphics.Clear(Color.White);
             eventArgs.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             eventArgs.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            Rectangle cardBounds = new Rectangle(2, 2, Width - 5, Height - 5);
-            using (var cardPath = WebPickerDrawing.RoundedRectangle(cardBounds, 12))
+            int cardInset = Program.ScaleMetric(2, scale);
+            Rectangle cardBounds = new Rectangle(cardInset, cardInset, Width - Program.ScaleMetric(5, scale), Height - Program.ScaleMetric(5, scale));
+            using (var cardPath = WebPickerDrawing.RoundedRectangle(cardBounds, Program.ScaleMetric(12, scale)))
             using (var fill = new SolidBrush(background))
-            using (var border = new Pen(hovered || Focused ? BrandBlue : BorderColor, hovered || Focused ? 2f : 1f))
+            using (var border = new Pen(hovered || Focused ? BrandBlue : BorderColor, Program.ScaleMetric(hovered || Focused ? 2 : 1, scale)))
             {
                 eventArgs.Graphics.FillPath(fill, cardPath);
                 eventArgs.Graphics.DrawPath(border, cardPath);
             }
 
-            int imageSize = ProfileLayout ? 72 : 70;
-            int imageY = ProfileLayout ? 18 : 24;
+            int imageSize = Program.ScaleMetric(ProfileLayout ? 72 : 70, scale);
+            int imageY = Program.ScaleMetric(ProfileLayout ? 18 : 24, scale);
             if (CardImage != null)
             {
                 int imageX = (Width - imageSize) / 2;
@@ -682,8 +781,8 @@ namespace NasDriveSetup
             }
 
             Rectangle titleRect = ProfileLayout
-                ? new Rectangle(10, 101, Width - 20, 28)
-                : new Rectangle(10, 108, Width - 20, 30);
+                ? new Rectangle(Program.ScaleMetric(10, scale), Program.ScaleMetric(101, scale), Width - Program.ScaleMetric(20, scale), Program.ScaleMetric(28, scale))
+                : new Rectangle(Program.ScaleMetric(10, scale), Program.ScaleMetric(108, scale), Width - Program.ScaleMetric(20, scale), Program.ScaleMetric(30, scale));
             using (Font titleFont = Program.UiFont("Segoe UI Semibold", 10.5f))
             {
                 TextRenderer.DrawText(eventArgs.Graphics, CardTitle, titleFont, titleRect, ForeColor,
@@ -691,8 +790,8 @@ namespace NasDriveSetup
             }
 
             Rectangle subtitleRect = ProfileLayout
-                ? new Rectangle(10, 132, Width - 20, 40)
-                : new Rectangle(10, 143, Width - 20, 24);
+                ? new Rectangle(Program.ScaleMetric(10, scale), Program.ScaleMetric(132, scale), Width - Program.ScaleMetric(20, scale), Program.ScaleMetric(40, scale))
+                : new Rectangle(Program.ScaleMetric(10, scale), Program.ScaleMetric(143, scale), Width - Program.ScaleMetric(20, scale), Program.ScaleMetric(24, scale));
             using (Font subtitleFont = Program.UiFont("Segoe UI", ProfileLayout ? 8.5f : 9f))
             {
                 TextRenderer.DrawText(eventArgs.Graphics, CardSubtitle, subtitleFont, subtitleRect,
@@ -702,10 +801,11 @@ namespace NasDriveSetup
 
             if (ProfileLayout && !string.IsNullOrWhiteSpace(CardBadge))
             {
-                var badgeRect = new Rectangle((Width - 84) / 2, 178, 84, 24);
+                int badgeWidth = Program.ScaleMetric(84, scale);
+                var badgeRect = new Rectangle((Width - badgeWidth) / 2, Program.ScaleMetric(178, scale), badgeWidth, Program.ScaleMetric(24, scale));
                 if (BadgeFilled)
                 {
-                    using (var badgePath = WebPickerDrawing.RoundedRectangle(badgeRect, 10))
+                    using (var badgePath = WebPickerDrawing.RoundedRectangle(badgeRect, Program.ScaleMetric(10, scale)))
                     using (var brush = new SolidBrush(BrandBlue)) eventArgs.Graphics.FillPath(brush, badgePath);
                 }
                 using (Font badgeFont = Program.UiFont("Segoe UI Semibold", 8.5f))
@@ -718,9 +818,10 @@ namespace NasDriveSetup
 
             if (Focused && ShowFocusCues)
             {
-                Rectangle focusBounds = new Rectangle(7, 7, Width - 15, Height - 15);
-                using (var focusPath = WebPickerDrawing.RoundedRectangle(focusBounds, 9))
-                using (var focusPen = new Pen(BrandBlue) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot })
+                int focusInset = Program.ScaleMetric(7, scale);
+                Rectangle focusBounds = new Rectangle(focusInset, focusInset, Width - Program.ScaleMetric(15, scale), Height - Program.ScaleMetric(15, scale));
+                using (var focusPath = WebPickerDrawing.RoundedRectangle(focusBounds, Program.ScaleMetric(9, scale)))
+                using (var focusPen = new Pen(BrandBlue, Program.ScaleMetric(1, scale)) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot })
                     eventArgs.Graphics.DrawPath(focusPen, focusPath);
             }
         }
@@ -765,14 +866,16 @@ namespace NasDriveSetup
 
         protected override void OnPaint(PaintEventArgs eventArgs)
         {
+            float scale = Math.Max(1f, eventArgs.Graphics.DpiX / 96f);
             bool pressed = Capture && MouseButtons == MouseButtons.Left;
             Color background = pressed ? PressedColor : (hovered ? HoverColor : Color.White);
             eventArgs.Graphics.Clear(Color.White);
             eventArgs.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            Rectangle bounds = new Rectangle(2, 2, Width - 5, Height - 5);
-            using (var path = WebPickerDrawing.RoundedRectangle(bounds, 9))
+            int inset = Program.ScaleMetric(2, scale);
+            Rectangle bounds = new Rectangle(inset, inset, Width - Program.ScaleMetric(5, scale), Height - Program.ScaleMetric(5, scale));
+            using (var path = WebPickerDrawing.RoundedRectangle(bounds, Program.ScaleMetric(9, scale)))
             using (var fill = new SolidBrush(background))
-            using (var border = new Pen(Focused ? BrandBlue : BorderColor, Focused ? 2f : 1f))
+            using (var border = new Pen(Focused ? BrandBlue : BorderColor, Program.ScaleMetric(Focused ? 2 : 1, scale)))
             {
                 eventArgs.Graphics.FillPath(fill, path);
                 if (Bordered || hovered || Focused) eventArgs.Graphics.DrawPath(border, path);
@@ -784,15 +887,16 @@ namespace NasDriveSetup
             }
             if (Focused && ShowFocusCues)
             {
-                Rectangle focus = new Rectangle(7, 7, Width - 15, Height - 15);
-                using (var path = WebPickerDrawing.RoundedRectangle(focus, 6))
-                using (var pen = new Pen(BrandBlue) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot })
+                int focusInset = Program.ScaleMetric(7, scale);
+                Rectangle focus = new Rectangle(focusInset, focusInset, Width - Program.ScaleMetric(15, scale), Height - Program.ScaleMetric(15, scale));
+                using (var path = WebPickerDrawing.RoundedRectangle(focus, Program.ScaleMetric(6, scale)))
+                using (var pen = new Pen(BrandBlue, Program.ScaleMetric(1, scale)) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dot })
                     eventArgs.Graphics.DrawPath(pen, path);
             }
         }
     }
 
-    internal sealed class WebBrowserPickerForm : Form
+    internal sealed class WebBrowserPickerForm : DpiScaledForm
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
         private readonly Label title = new Label();
@@ -809,6 +913,7 @@ namespace NasDriveSetup
         {
             BuildUi();
             LoadChoices();
+            ApplyInitialDpiScale();
         }
 
         private void BuildUi()
@@ -823,8 +928,8 @@ namespace NasDriveSetup
             TopMost = true;
             BackColor = Color.White;
 
-            title.Location = new Point(34, 25);
-            title.Size = new Size(650, 40);
+            title.Location = UiPoint(34, 25);
+            title.Size = UiSize(650, 40);
             title.Font = Program.UiFont("Segoe UI Semibold", 17f);
             Controls.Add(title);
             subtitle.Location = new Point(36, 70);
@@ -910,8 +1015,8 @@ namespace NasDriveSetup
         {
             if (selectedBrowser == null) { ShowBrowserPage(); return; }
             title.Text = selectedBrowser.Label + " 사용자 선택";
-            title.Location = new Point(174, 25);
-            title.Size = new Size(510, 40);
+            title.Location = UiPoint(174, 25);
+            title.Size = UiSize(510, 40);
             subtitle.Text = "웹 NAS를 열 프로필을 선택하세요. 선택한 브라우저 창에서 현재 NAS Drive 계정으로 자동 로그인합니다.";
             backButton.Visible = true;
             privacyHint.Text = "표시 이름·대표 이메일·로컬 프로필 이미지만 사용하며 쿠키와 비밀번호는 읽지 않습니다.";
@@ -943,8 +1048,8 @@ namespace NasDriveSetup
         {
             var card = new WebPickerCardButton
             {
-                Size = new Size(194, 185),
-                Margin = new Padding(6),
+                Size = UiSize(194, 185),
+                Margin = UiPadding(6),
                 CardImage = LoadBrowserLogo(browser),
                 CardTitle = browser.Label,
                 CardSubtitle = browser.Id == "system" ? "바로 열기" : "사용자 선택",
@@ -960,8 +1065,8 @@ namespace NasDriveSetup
             string account = string.IsNullOrWhiteSpace(profile.Account) ? "브라우저 사용자" : profile.Account;
             var card = new WebPickerCardButton
             {
-                Size = new Size(194, 215),
-                Margin = new Padding(6),
+                Size = UiSize(194, 215),
+                Margin = UiPadding(6),
                 ProfileLayout = true,
                 CardImage = LoadProfileAvatar(profile),
                 CardTitle = profile.Label,
@@ -1184,7 +1289,7 @@ namespace NasDriveSetup
         }
     }
 
-    internal sealed class NativeLoginForm : Form
+    internal sealed class NativeLoginForm : DpiScaledForm
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
         private readonly string agentExe;
@@ -1200,6 +1305,7 @@ namespace NasDriveSetup
         {
             agentExe = installedAgentExe;
             BuildUi();
+            ApplyInitialDpiScale();
         }
 
         private void BuildUi()
@@ -1399,7 +1505,7 @@ namespace NasDriveSetup
         internal int AccountCount;
     }
 
-    internal sealed class NativeControlCenter : Form
+    internal sealed class NativeControlCenter : DpiScaledForm
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
         private static readonly string StateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent");
@@ -1416,6 +1522,7 @@ namespace NasDriveSetup
         {
             agentExe = installedAgentExe;
             BuildUi();
+            ApplyInitialDpiScale();
             RefreshStatus();
             refreshTimer.Interval = 3000;
             refreshTimer.Tick += (sender, args) => RefreshStatus();
@@ -1844,7 +1951,7 @@ namespace NasDriveSetup
 
     internal enum InstallState { FirstInstall, Upgrade, SameVersion, NewerInstalled, Repair }
 
-    internal sealed class InstallerForm : Form
+    internal sealed class InstallerForm : DpiScaledForm
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
         private readonly string installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "NAS Drive");
@@ -1874,6 +1981,7 @@ namespace NasDriveSetup
             installedVersion = ReadInstalledVersion();
             installState = DetectInstallState();
             BuildUi();
+            ApplyInitialDpiScale();
             ApplyLandingState();
         }
 
