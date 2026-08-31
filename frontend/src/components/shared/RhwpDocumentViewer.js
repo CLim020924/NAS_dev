@@ -417,6 +417,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
     const attach = () => {
       try {
         const doc = iframe.contentDocument;
+        const isHwpx = String(name || '').toLowerCase().endsWith('.hwpx');
         iframe.focus();
         iframe.contentWindow?.focus();
         doc?.querySelector('#scroll-container')?.focus({ preventScroll: true });
@@ -430,7 +431,9 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
         });
         [
           ['file:save', 'NAS에 저장'],
-          ['file:save-as', 'NAS에 다른 이름으로 저장...']
+          ['file:save-as', 'NAS에 다른 이름으로 저장...'],
+          ['file:print', '인쇄'],
+          ['file:print-to-pdf', 'PDF로 저장...']
         ].forEach(([cmd, text]) => {
           const item = doc?.querySelector(`[data-cmd="${cmd}"]`);
           if (!item) return;
@@ -439,6 +442,17 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
           item.title = text;
           const label = item.querySelector('.md-label');
           if (label) label.textContent = text;
+        });
+        const statusMessage = doc?.querySelector('#sb-message');
+        if (statusMessage) {
+          statusMessage.textContent = isHwpx
+            ? 'HWPX 원본 형식으로 NAS에 저장합니다'
+            : 'HWP 원본 형식으로 NAS에 저장합니다';
+        }
+        doc?.querySelectorAll('#rhwp-toast-container > *').forEach((toast) => {
+          if (/HWPX 문서는 저장 시 HWP 형식으로 변환 저장/.test(toast.textContent || '')) {
+            toast.remove();
+          }
         });
       } catch (err) {
         console.warn('Unable to attach rhwp editor shortcut handlers', err);
@@ -466,7 +480,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
       iframe.removeEventListener('load', attach);
       detach();
     };
-  }, [editorReadyNonce, markDirty, mode, openSaveAsDialog, saveToNas]);
+  }, [editorReadyNonce, markDirty, mode, name, openSaveAsDialog, saveToNas]);
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#5f6368' }}>
