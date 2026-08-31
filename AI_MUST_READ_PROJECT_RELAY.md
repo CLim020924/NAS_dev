@@ -832,3 +832,22 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 원인: 파일 창의 `isImmersive`는 창 크기만 부모 NAS workspace의 100%로 바꿨다. workspace 자체는 48px 전역 `TopBar` 아래의 main 영역과 낮은 stacking layer 안에 있어 브라우저 Fullscreen API가 거부되거나 지연되면 상단 바가 계속 남았다.
 - 구현: 표시 중인 file/folder 창 하나라도 `isImmersive`이면 NAS workspace layer를 `position: fixed`, `100vw × 100dvh`, z-index 1600으로 승격해 TopBar·채팅 창 layer까지 덮는다. 일반 최대화와 백그라운드 NAS route의 기존 pointer/z-index 규칙은 유지한다.
 - 사전 검증: 새 fullscreen layout policy tests 3/3과 frontend production build가 통과했다. 기존 unrelated ESLint warning만 남았고 이번 변경 파일에는 새 warning이 없다. 다음 단계는 기능·워크북·릴레이를 push하고 NAS에 배포한 뒤 공개 로그인 화면에서 전체화면 진입·상단 바 비표시·해제 복원을 직접 확인하는 것이다.
+
+### NAS 배포 결과와 실화면 검증 경계
+
+- 기능·문서 commit `d7a64f6`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다. NAS에서 fullscreen layout policy tests 3/3과 frontend production build, react-pdf/PDF.js 4.8.69 호환 gate가 통과했다.
+- live `/var/www/html`에 원자 배포했고 최종 bundle은 `main.9db04e4a.js`다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, `msp-backend`는 online이며 내부 3030과 공개 HTTPS는 HTTP 200이다.
+- 현재 자동화에 연결된 공개 브라우저에는 로그인된 NAS 세션이 없고 `/login` 탭만 있어 파일 창의 전체화면 진입·해제를 직접 클릭하지 않았다. 코드·회귀·NAS build·live asset 확인은 완료했지만 인증된 공개 실화면의 상단 바 비표시와 해제 복원은 `확인 필요`로 남긴다.
+
+## 2026-08-31 NAS AI 기능·하드웨어 적합성 전반 조사
+
+- 사용자 요청: 전체화면 작업 완료 후 현재 NAS 서버에서 가능한 AI 기능을 전부 공부하고 이후 AI 기능 개발의 기준을 만든다. 이번 요청은 조사·설계이며 운영 AI 기능이나 모델 설치를 임의로 변경하지 않는다.
+- 실제 NAS 기준선: Debian 12, Ryzen 5 3400G 4코어/8스레드, RAM 21GiB, swap 약 1GiB, AMD Vega 내장 GPU, NVIDIA GPU 없음이다. root NVMe와 `/mnt/nas` 모두 약 1.8TiB이며 가용 공간은 각각 약 1.6TiB·1.7TiB다. Node 18.19, Python 3.11.2, Docker 20.10.24가 있고 Ollama/llama.cpp/vLLM/LocalAI 실행 항목은 없다.
+- 현재 AI 기준선: `/api/ai/status`는 OpenAI `gpt-4.1-mini`가 enabled/configured라고 반환한다. `aiService.js`는 Responses API 우선과 Chat Completions fallback, 회의 메시지 요약을 제공한다. `aiAgentRoutes.js`는 계정 인증 채팅, 파일명 검색, 제한된 텍스트 파일 읽기, 폴더 생성·텍스트 쓰기/추가 action plan과 사용자 실행 승인을 제공한다. 계정별 AI JSON 메시지·action·preferences 저장과 chat/files/read/actions UI도 존재한다.
+- 현재 빠진 기능: PDF·DOCX·XLSX·PPTX·HWP·HWPX 본문 추출과 인용형 RAG, embeddings/vector index, OCR·사진 의미 검색, 음성 전사·번역·TTS, realtime/streaming, 실제 job progress·취소, tool loop, 예약 자동화, usage/cost·사용자별 AI quota, local model fallback이 없다.
+- 가능한 제품 영역: (1) ACL 인식 NAS 통합 의미 검색과 근거 인용 Q&A, (2) 문서 요약·비교·분류·태그·정보 추출, (3) 문서 스튜디오 Copilot과 템플릿/수식/슬라이드 생성, (4) dry-run·승인형 파일 정리·일괄 이름 변경·이동·복사, (5) 회의 전사·요약·결정·할 일·번역, (6) OCR·사진/스캔 문서 검색·중복/유사 이미지, (7) 영상 자막·장면/챕터 요약·TTS, (8) 저장공간 이상·대용량·중복·오래된 파일·백업/권한 감사 요약, (9) 새 파일·공유·회의 기반 예약 digest와 알림이다.
+- 권장 구조: NAS는 인증·ACL, 문서 추출, revision 기반 증분 색인, cache, job queue, 승인·감사를 소유하고 OpenAI는 고품질 추론·vision·생성·realtime을 담당하는 하이브리드를 기본으로 한다. 사용자/폴더마다 `로컬 전용`, `선택 문맥만 클라우드`, `클라우드 강화` 모드를 둔다. 외부 전송은 자동 opt-in으로 만들지 않는다.
+- 로컬 범위: CPU로 embeddings/rerank, OCR, whisper.cpp small/base급, 1~3B 양자화 LLM은 현실적인 benchmark 대상이다. 7~8B Q4는 RAM에는 들어갈 수 있으나 4코어 NAS의 대화형 다중 사용자 성능은 수치 측정 전 보장하지 않는다. Vega iGPU는 Ollama 공식 ROCm 지원 목록의 보장 대상이 아니므로 Vulkan 가속은 실험 경로로만 두고 CPU fallback을 유지한다. 대형 vision·이미지 생성·대형 LLM 다중 사용자 추론은 현재 장비보다 클라우드 또는 별도 GPU 서버가 적합하다.
+- 구현 전 0단계 보안: 현재 AI 파일 경계는 문자열 경로 검사 뒤 `fs`가 symlink를 따라갈 수 있으므로 realpath/lstat 재검증이 필요하다. AI 쓰기는 quota·물리 안전 여유를 검사하지 않고 동기식 직접 저장하므로 임시 파일+원자 교체, 버전·감사 로그, quota/physical reserve, idempotency와 취소를 공통 action executor에서 강제해야 한다. MASTER/MANAGER의 전체 NAS scope는 개인 scope와 UI에서 분리하고 모든 파괴 가능 작업은 dry-run과 명시 승인을 유지한다.
+- 신뢰성 0단계: `AI_ENABLED`를 실제 호출 경계에서 강제하고 timeout·retry·rate limit·사용량/비용 계측을 둔다. 검색 결과에는 파일·페이지/구간 출처와 ACL 필터를 붙이고, 파일 내부 지시문은 시스템 명령이 아닌 비신뢰 데이터로 격리한다. per-account JSON 저장은 원자 저장·크기/보존 제한으로 바꾸고 타이머 기반 가짜 진행 UI는 서버 job/stream 상태로 교체한다.
+- 권장 구현 순서: 0) 위 안전 기반, 1) 문서 추출+권한 인식 RAG+인용, 2) 문서 Copilot+안전 파일 action, 3) 회의 전사·요약·할 일, 4) OCR·사진 검색, 5) llama.cpp/whisper.cpp 로컬 benchmark와 하이브리드 fallback, 6) 관리자 AI와 예약 자동화 순서다.
