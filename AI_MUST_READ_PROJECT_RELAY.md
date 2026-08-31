@@ -760,3 +760,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - frontend 기능·정책 테스트 18개는 통과했다. 기본 `App.test.js` 하나는 이번 기능이 아니라 기존 Node 18/Jest resolver가 설치된 React Router 7 package를 찾지 못해 suite 시작 전에 실패했다. production build는 기존 unrelated eslint warning만 남기고 성공했고 PDF.js API/Worker 4.8.69 일치를 확인했다.
 - `msp-backend`는 restart/save 후 online이고 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active다. 내부 3030과 공개 HTTPS는 HTTP 200, 새 문서 API의 비로그인 요청은 401로 차단된다.
 - NAS Drive는 일회용 웹 세션을 정상 발급해 Chrome을 열었지만, 열린 프로필 창이 기존 Browser 연결 밖에 있었고 Windows 화면 제어는 현재 Chrome URL을 충분히 확정하지 못해 안전상 자동 중단됐다. 따라서 공개 화면의 두 앱 이름·생성 버튼·OnlyOffice/RHWP 전면 창은 이번 배포에서 `확인 필요`로 남긴다. 다음 안전한 단계는 사용자가 로그인된 Chrome 탭을 열어 둔 상태에서 해당 세 항목만 실화면 회귀 확인하는 것이다.
+## 2026-08-31 NAS 채팅 전송 지연·중복 전송 원인 진단
+
+- 사용자 요청: NAS 채팅에서 메시지를 입력하고 전송할 때 체감 지연과 문제가 있는데 어느 구간이 원인인지 확인한다. 이번 요청은 바로 수정하지 않고 원인부터 특정한다.
+- 확인한 경로: 공개 Chrome의 실제 사이드 채팅, `DockedChatPanel.handleSend` → `ChatContext.sendMessage` → `POST /api/chat/messages` → `chatStore.createMessage` → `notificationStore.createNotification` → 수신자 `chat:message` Socket.IO 순서를 확인했다.
+- 주 원인: 발신 화면은 HTTP 응답이 돌아온 뒤에야 메시지를 append하고 draft를 지운다. 그동안 전송 버튼과 Enter가 잠기지 않으며 clientMessageId·낙관 메시지·서버 idempotency가 없어 재클릭을 별도 메시지로 저장한다. 실제 공개 대화에서 같은 문장이 같은 분에 연속 두 번 표시된 흔적이 현재 구조와 일치한다.
+- 서버 경계: 응답 전에 messages/conversations/notifications JSON 전체를 동기식으로 읽고 다시 저장한 뒤 socket을 전파한다. 그러나 현재 live 데이터는 messages 15건 약 9.5KB, conversations 15건 약 9.9KB, notifications 186건 약 113KB이고 NAS load average는 0.01/0.05/0.13, 디스크 사용률은 9%였다. 500회 읽기·parse·stringify 벤치마크도 1ms 안팎이어서 현재 체감 지연의 단독 주원인은 서버 과부하나 JSON 크기가 아니라 HTTP 완료를 기다리는 UI 계약이다. 동기식 전체 재작성은 데이터 증가 시 별도 확장 위험이다.
+- 미수정·검증 경계: 사용자 계정으로 새 테스트 메시지를 전송하지 않았고 코드·서비스는 변경하지 않았다. 다음 안전한 수정은 clientMessageId 기반 낙관 표시와 즉시 draft 비우기, 전송 중 중복 방지, 실패 시 복원·재시도, 서버 idempotency를 한 묶음으로 적용하고 클릭→POST→저장→socket→상대 표시 타임라인을 계측하는 것이다.
+- 기록: workbook의 `Request_Archive`, `Patch_Log`, `Feature_Index`, `Relation_Map`, `Code_Map`, `Do_Not_Break`에 진단·미수정 상태와 회귀 방지 규칙을 기록했다.
