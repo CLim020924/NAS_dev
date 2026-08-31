@@ -863,3 +863,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 현재 PC 적용·검증: Setup과 Agent 1.10.26을 실제 설치했다. 수정 뒤 0ms 두 번·5ms·10ms·25ms 총 5회 모두 launcher 2, Agent 1, Provider 1로 복구됐고 `agent.exit`는 남지 않았다. `--background`를 10회 연속 호출해도 background launcher 1, open launcher 1, Agent 1, Provider 1만 유지됐다. Agent self-test, Setup self-test, backend syntax가 통과했다.
 - 자동 테스트 경계: 로컬 backend 전체는 22건 중 19건 통과·2건 환경 skip이며 기존 Windows 비관리자 symlink 생성 EPERM 1건만 실패했다. 이 테스트는 NAS Linux에서 다시 실행한다. 실제 tray 메뉴 클릭→바탕화면 `NAS Drive` 바로가기→아이콘 재표시의 최종 육안 확인은 공개 배포 후 남아 있다.
 - 다음 안전한 단계: 같은 브랜치에 code/dist/workbook/relay를 commit·push하고 NAS가 fast-forward로 받은 뒤 Linux 전체 backend tests, PM2, 내부·공개 HTTP, 공개 Agent/Setup 1.10.26 metadata와 hash를 확인한다. 그 후 실제 tray 메뉴 종료/재실행 육안 경계를 완료 상태로 갱신한다.
+
+### 1.10.26 GitHub·NAS 배포 결과
+
+- 기능·배포 파일·워크북·릴레이 commit `b7ee123`을 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS Linux에서 Agent self-test와 전체 backend tests 22/22가 통과했다. Windows에서만 발생한 비관리자 symlink EPERM 테스트도 NAS에서는 정상 통과했다.
+- `msp-backend`를 restart/save한 뒤 online을 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이고 내부 `127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
+- NAS 공개 metadata 상수는 1.10.26이며 배포 Agent SHA-256은 `bab18d7f5b051461b1291dc5ae8498e8632d9227ecee1fdec180b943246e1f90`, Setup SHA-256은 `80d58bb3106390ccd6b23eebb0f7bbf48b517dc3fb7a4b27c4d2266ac5ab87bf`로 로컬 build와 일치한다.
+- 실제 tray 메뉴 클릭은 Windows 시스템 알림 영역을 현재 자동화가 안전하게 단일 대상으로 식별하지 못해 임의 아이콘을 누르지 않았다. 다만 동일 cleanup core의 0ms 경쟁 5/5와 background refresh event 중복 10회, 설치 후 실제 launcher/Agent/Provider 생존을 확인했다. 사용자가 tray `종료`→바탕화면 `NAS Drive` 바로가기를 한 번 실행하면 최종 육안 경계만 확인하면 된다.
