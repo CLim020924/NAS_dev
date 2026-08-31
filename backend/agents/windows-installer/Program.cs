@@ -18,15 +18,16 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.24.0")]
-[assembly: AssemblyFileVersion("1.10.24.0")]
+[assembly: AssemblyVersion("1.10.26.0")]
+[assembly: AssemblyFileVersion("1.10.26.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.24";
+        internal const string ProductVersion = "1.10.26";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
+        private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
         [DllImport("user32.dll")]
@@ -158,7 +159,13 @@ namespace NasDriveSetup
 
             if (shutdownBackground)
             {
-                StopInstalledBackgroundProcesses(installedExe);
+                DateTime shutdownIntentAt = DateTime.UtcNow;
+                try
+                {
+                    using (Process current = Process.GetCurrentProcess()) shutdownIntentAt = current.StartTime.ToUniversalTime();
+                }
+                catch { }
+                StopInstalledBackgroundProcesses(installedExe, shutdownIntentAt);
                 return true;
             }
 
@@ -194,10 +201,17 @@ namespace NasDriveSetup
                 bool created;
                 using (var trayMutex = new Mutex(true, "Local\\NAS-Drive-Native-Tray-SingleInstance", out created))
                 {
-                    if (!created) return true;
+                    if (!created)
+                    {
+                        SignalNativeTrayRefresh();
+                        return true;
+                    }
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
-                    Application.Run(new NativeTrayContext(installedExe));
+                    using (var refreshEvent = new EventWaitHandle(false, EventResetMode.AutoReset, NativeTrayRefreshEventName))
+                    {
+                        Application.Run(new NativeTrayContext(installedExe, refreshEvent));
+                    }
                 }
                 return true;
             }
@@ -235,6 +249,11 @@ namespace NasDriveSetup
 
         internal static void StopInstalledBackgroundProcesses(string installedAgentExe)
         {
+            StopInstalledBackgroundProcesses(installedAgentExe, DateTime.UtcNow);
+        }
+
+        private static void StopInstalledBackgroundProcesses(string installedAgentExe, DateTime shutdownIntentAt)
+        {
             bool created;
             using (var shutdownMutex = new Mutex(true, ShutdownMutexName, out created))
             {
@@ -243,19 +262,19 @@ namespace NasDriveSetup
                     try { shutdownMutex.WaitOne(15000); shutdownMutex.ReleaseMutex(); } catch (AbandonedMutexException) { }
                     return;
                 }
-                try { StopInstalledBackgroundProcessesCore(installedAgentExe); }
+                try { StopInstalledBackgroundProcessesCore(installedAgentExe, shutdownIntentAt); }
                 finally { try { shutdownMutex.ReleaseMutex(); } catch { } }
             }
         }
 
-        private static void StopInstalledBackgroundProcessesCore(string installedAgentExe)
+        private static void StopInstalledBackgroundProcessesCore(string installedAgentExe, DateTime shutdownIntentAt)
         {
             string stateDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent");
             string providerExe = Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive-Provider.exe");
             string launcherExe = Path.Combine(Path.GetDirectoryName(installedAgentExe), "NAS-Drive.exe");
-            List<int> agentPids = CaptureExactProcessIds("NAS-Sync-Agent", installedAgentExe);
-            List<int> providerPids = CaptureExactProcessIds("NAS-Drive-Provider", providerExe);
-            List<int> launcherPids = CaptureExactProcessIds("NAS-Drive", launcherExe);
+            List<int> agentPids = CaptureExactProcessIds("NAS-Sync-Agent", installedAgentExe, shutdownIntentAt);
+            List<int> providerPids = CaptureExactProcessIds("NAS-Drive-Provider", providerExe, shutdownIntentAt);
+            List<int> launcherPids = CaptureExactProcessIds("NAS-Drive", launcherExe, shutdownIntentAt);
             try { Directory.CreateDirectory(stateDir); File.WriteAllText(Path.Combine(stateDir, "agent.exit"), DateTime.UtcNow.Ticks.ToString()); } catch { }
 
             DateTime deadline = DateTime.UtcNow.AddSeconds(5);
@@ -280,6 +299,20 @@ namespace NasDriveSetup
             StopCapturedProcesses(launcherPids, launcherExe);
             try { File.Delete(Path.Combine(stateDir, "agent.pid")); } catch { }
             try { File.Delete(Path.Combine(stateDir, "agent.exit")); } catch { }
+            if (HasExactProcessStartedAfter("NAS-Drive", launcherExe, shutdownIntentAt))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(launcherExe, "--background")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        WorkingDirectory = Path.GetDirectoryName(launcherExe)
+                    });
+                }
+                catch { }
+            }
         }
 
         private static void WaitForBackgroundShutdown()
@@ -325,7 +358,7 @@ namespace NasDriveSetup
             }
         }
 
-        private static List<int> CaptureExactProcessIds(string processName, string expectedPath)
+        private static List<int> CaptureExactProcessIds(string processName, string expectedPath, DateTime notAfterUtc)
         {
             var result = new List<int>();
             int currentProcessId;
@@ -334,12 +367,31 @@ namespace NasDriveSetup
             {
                 try
                 {
-                    if (process.Id != currentProcessId && !process.HasExited && IsInstalledAgentProcessPath(process.MainModule.FileName, expectedPath)) result.Add(process.Id);
+                    if (process.Id != currentProcessId
+                        && !process.HasExited
+                        && process.StartTime.ToUniversalTime() <= notAfterUtc
+                        && IsInstalledAgentProcessPath(process.MainModule.FileName, expectedPath)) result.Add(process.Id);
                 }
                 catch { }
                 finally { process.Dispose(); }
             }
             return result;
+        }
+
+        private static bool HasExactProcessStartedAfter(string processName, string expectedPath, DateTime afterUtc)
+        {
+            foreach (Process process in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    if (!process.HasExited
+                        && process.StartTime.ToUniversalTime() > afterUtc
+                        && IsInstalledAgentProcessPath(process.MainModule.FileName, expectedPath)) return true;
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
+            return false;
         }
 
         private static void StopCapturedProcesses(IEnumerable<int> processIds, string expectedPath)
@@ -442,6 +494,19 @@ namespace NasDriveSetup
                 WindowStyle = ProcessWindowStyle.Hidden,
                 WorkingDirectory = Path.GetDirectoryName(launcher)
             });
+        }
+
+        private static void SignalNativeTrayRefresh()
+        {
+            try
+            {
+                using (EventWaitHandle refreshEvent = EventWaitHandle.OpenExisting(NativeTrayRefreshEventName))
+                {
+                    refreshEvent.Set();
+                }
+            }
+            catch (WaitHandleCannotBeOpenedException) { }
+            catch (UnauthorizedAccessException) { }
         }
 
         internal static string QuoteArgument(string value)
@@ -1800,6 +1865,7 @@ namespace NasDriveSetup
         private readonly ToolStripMenuItem openDriveItem = new ToolStripMenuItem("NAS Drive 열기");
         private readonly ToolStripMenuItem accountActionItem = new ToolStripMenuItem();
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
+        private readonly EventWaitHandle trayRefreshEvent;
         private Icon currentIcon;
         private string currentVisualState = "";
         private DateTime lastAgentStartAt = DateTime.MinValue;
@@ -1807,10 +1873,11 @@ namespace NasDriveSetup
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern bool DestroyIcon(IntPtr handle);
 
-        internal NativeTrayContext(string installedAgentExe)
+        internal NativeTrayContext(string installedAgentExe, EventWaitHandle refreshEvent)
         {
             agentExe = installedAgentExe;
             launcherExe = Application.ExecutablePath;
+            trayRefreshEvent = refreshEvent;
             StopLegacyTray();
 
             accountItem.Enabled = false;
@@ -1834,12 +1901,26 @@ namespace NasDriveSetup
             menu.Items.Add(exitItem);
 
             notifyIcon.ContextMenuStrip = menu;
-            notifyIcon.Visible = true;
             notifyIcon.DoubleClick += (sender, args) => OpenControlCenter();
             refreshTimer.Interval = 2500;
-            refreshTimer.Tick += (sender, args) => RefreshStatus();
-            refreshTimer.Start();
+            refreshTimer.Tick += (sender, args) =>
+            {
+                RefreshStatus();
+                if (trayRefreshEvent.WaitOne(0)) RestoreTrayRegistration();
+            };
             RefreshStatus();
+            notifyIcon.Visible = true;
+            refreshTimer.Start();
+        }
+
+        private void RestoreTrayRegistration()
+        {
+            try
+            {
+                notifyIcon.Visible = false;
+                notifyIcon.Visible = true;
+            }
+            catch { }
         }
 
         private void RefreshStatus()
@@ -1923,11 +2004,17 @@ namespace NasDriveSetup
         private void ExitNasDrive()
         {
             refreshTimer.Stop();
-            notifyIcon.Visible = false;
-            notifyIcon.Dispose();
-            if (currentIcon != null) currentIcon.Dispose();
-            Program.StopInstalledBackgroundProcesses(agentExe);
-            ExitThread();
+            try
+            {
+                Program.StopInstalledBackgroundProcesses(agentExe);
+            }
+            finally
+            {
+                try { notifyIcon.Visible = false; } catch { }
+                try { notifyIcon.Dispose(); } catch { }
+                try { if (currentIcon != null) currentIcon.Dispose(); } catch { }
+                ExitThread();
+            }
         }
 
         private static void StopLegacyTray()

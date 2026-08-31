@@ -851,3 +851,15 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 구현 전 0단계 보안: 현재 AI 파일 경계는 문자열 경로 검사 뒤 `fs`가 symlink를 따라갈 수 있으므로 realpath/lstat 재검증이 필요하다. AI 쓰기는 quota·물리 안전 여유를 검사하지 않고 동기식 직접 저장하므로 임시 파일+원자 교체, 버전·감사 로그, quota/physical reserve, idempotency와 취소를 공통 action executor에서 강제해야 한다. MASTER/MANAGER의 전체 NAS scope는 개인 scope와 UI에서 분리하고 모든 파괴 가능 작업은 dry-run과 명시 승인을 유지한다.
 - 신뢰성 0단계: `AI_ENABLED`를 실제 호출 경계에서 강제하고 timeout·retry·rate limit·사용량/비용 계측을 둔다. 검색 결과에는 파일·페이지/구간 출처와 ACL 필터를 붙이고, 파일 내부 지시문은 시스템 명령이 아닌 비신뢰 데이터로 격리한다. per-account JSON 저장은 원자 저장·크기/보존 제한으로 바꾸고 타이머 기반 가짜 진행 UI는 서버 job/stream 상태로 교체한다.
 - 권장 구현 순서: 0) 위 안전 기반, 1) 문서 추출+권한 인식 RAG+인용, 2) 문서 Copilot+안전 파일 action, 3) 회의 전사·요약·할 일, 4) OCR·사진 검색, 5) llama.cpp/whisper.cpp 로컬 benchmark와 하이브리드 fallback, 6) 관리자 AI와 예약 자동화 순서다.
+
+## 2026-08-31 NAS Drive 트레이 종료 후 재실행 불가 정확한 원인·1.10.26 수정
+
+- 사용자 요청: 새 PC에서 연결이 끊긴 뒤 작업표시줄 NAS Drive 아이콘의 `종료`를 눌렀고 다시 Drive를 열었지만 트레이 아이콘이 돌아오지 않았다. 이전부터 반복된 문제이므로 종료 버튼 뒤 다시 열리지 않는 정확한 이유까지 찾아 해결한다.
+- 별도 인증 상태: 현재 PC Agent 로그의 반복 실패는 서버 `HTTP 403 Agent 인증 실패`이고 control center는 `계정 다시 연결 필요`를 표시한다. 이는 아래 tray lifecycle 결함과 별개이며 폐기된 인증을 우회하지 않는다.
+- 기존 수정이 놓친 경계: 1.10.14/1.10.17은 exact-path PID snapshot과 shutdown mutex를 추가했지만 snapshot 시점이 종료 요청 프로세스의 OS 생성 시각이 아니라 cleanup method 실행 시점이었다. 종료 요청을 먼저 시작해도 Windows가 곧바로 실행한 `--open`을 먼저 스케줄하면 새 launcher·Agent·Provider가 종료 snapshot이나 전역 `agent.exit`에 휩쓸릴 수 있었다.
+- 실제 실패 재현: 설치된 1.10.25에서 `--shutdown-background`와 `--open`을 겹쳐 실행했다. 0ms와 10ms에서는 최종 launcher/Agent/Provider가 모두 0개가 됐고, 25ms 이상에서는 launcher 2·Agent 1·Provider 1로 복구됐다. 사용자가 본 “종료 뒤 다시 열어도 아무것도 뜨지 않음”과 같은 프로세스 경계다.
+- 추가 tray 원인: `NativeTrayContext`는 상태 Icon이 null인 상태에서 `NotifyIcon.Visible=true`를 먼저 호출했다. 종료는 아이콘을 먼저 숨기고 Dispose한 뒤 cleanup을 수행하며 `finally`가 없어 예상 밖 예외 시 보이지 않는 tray mutex owner가 남을 수 있었다. 이후 중복 `--background`는 mutex가 있다는 이유로 기존 아이콘 재등록 요청 없이 종료했다.
+- 1.10.26 구현: 상태 Icon을 먼저 만든 뒤 NotifyIcon을 표시한다. 중복 background는 named AutoResetEvent로 기존 tray에 Windows 알림 영역 재등록을 요청한다. 종료 cleanup은 먼저 실행하고 `finally`에서 아이콘 폐기와 `ExitThread`를 보장한다. shutdown 명령은 자신의 OS process StartTime을 cutoff로 전달해 그 이전 exact-path PID만 정리하고, cutoff 이후 새 launcher가 있으면 marker 제거 후 `--background`를 다시 보장한다.
+- 현재 PC 적용·검증: Setup과 Agent 1.10.26을 실제 설치했다. 수정 뒤 0ms 두 번·5ms·10ms·25ms 총 5회 모두 launcher 2, Agent 1, Provider 1로 복구됐고 `agent.exit`는 남지 않았다. `--background`를 10회 연속 호출해도 background launcher 1, open launcher 1, Agent 1, Provider 1만 유지됐다. Agent self-test, Setup self-test, backend syntax가 통과했다.
+- 자동 테스트 경계: 로컬 backend 전체는 22건 중 19건 통과·2건 환경 skip이며 기존 Windows 비관리자 symlink 생성 EPERM 1건만 실패했다. 이 테스트는 NAS Linux에서 다시 실행한다. 실제 tray 메뉴 클릭→바탕화면 `NAS Drive` 바로가기→아이콘 재표시의 최종 육안 확인은 공개 배포 후 남아 있다.
+- 다음 안전한 단계: 같은 브랜치에 code/dist/workbook/relay를 commit·push하고 NAS가 fast-forward로 받은 뒤 Linux 전체 backend tests, PM2, 내부·공개 HTTP, 공개 Agent/Setup 1.10.26 metadata와 hash를 확인한다. 그 후 실제 tray 메뉴 종료/재실행 육안 경계를 완료 상태로 갱신한다.
