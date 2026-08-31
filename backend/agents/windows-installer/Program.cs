@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.22.0")]
-[assembly: AssemblyFileVersion("1.10.22.0")]
+[assembly: AssemblyVersion("1.10.23.0")]
+[assembly: AssemblyFileVersion("1.10.23.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.22";
+        internal const string ProductVersion = "1.10.23";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
@@ -497,9 +497,15 @@ namespace NasDriveSetup
                 }
                 return ResolveInstallState(false, "", "", "package") == InstallState.FirstInstall
                     && ResolveInstallState(true, ProductVersion, "same", "same") == InstallState.SameVersion
+                    && ResolveInstallState(true, "1.10.22", "same", "same") == InstallState.Upgrade
                     && ResolveInstallState(true, "1.6.0", "old", "new") == InstallState.Upgrade
                     && ResolveInstallState(true, ProductVersion, "changed", "new") == InstallState.Repair
-                    && ResolveInstallState(true, "1.9.0", "newer", "new") == InstallState.NewerInstalled
+                    && ResolveInstallState(true, "", "same", "same") == InstallState.Repair
+                    && ResolveInstallState(true, "99.0.0", "newer", "new") == InstallState.NewerInstalled
+                    && ResolveCompositeInstallState(InstallState.SameVersion, true, ProductVersion, true) == InstallState.SameVersion
+                    && ResolveCompositeInstallState(InstallState.SameVersion, true, "1.10.22", false) == InstallState.Upgrade
+                    && ResolveCompositeInstallState(InstallState.SameVersion, true, ProductVersion, false) == InstallState.Repair
+                    && ResolveCompositeInstallState(InstallState.SameVersion, false, "", false) == InstallState.Repair
                     && IsKnownInstallerFileName("NAS-Drive-Setup_pair_test (2).exe")
                     && IsKnownInstallerFileName("NAS-Sync-Agent_pair_test.exe")
                     && !IsKnownInstallerFileName("my-important-file.exe")
@@ -521,17 +527,33 @@ namespace NasDriveSetup
         internal static InstallState ResolveInstallState(bool installedExists, string installedVersion, string installedHash, string packageHash)
         {
             if (!installedExists) return InstallState.FirstInstall;
-            if (!string.IsNullOrWhiteSpace(installedHash)
-                && string.Equals(installedHash, packageHash, StringComparison.OrdinalIgnoreCase)) return InstallState.SameVersion;
             Version installed;
             Version current;
             if (Version.TryParse(installedVersion, out installed) && Version.TryParse(ProductVersion, out current))
             {
                 if (installed.CompareTo(current) > 0) return InstallState.NewerInstalled;
                 if (installed.CompareTo(current) < 0) return InstallState.Upgrade;
-                return InstallState.Repair;
+                return !string.IsNullOrWhiteSpace(installedHash)
+                    && string.Equals(installedHash, packageHash, StringComparison.OrdinalIgnoreCase)
+                    ? InstallState.SameVersion
+                    : InstallState.Repair;
             }
+            if (!string.IsNullOrWhiteSpace(installedHash)
+                && string.Equals(installedHash, packageHash, StringComparison.OrdinalIgnoreCase)) return InstallState.Repair;
             return InstallState.Upgrade;
+        }
+
+        internal static InstallState ResolveCompositeInstallState(InstallState agentState, bool launcherExists, string launcherVersion, bool launcherHealthy)
+        {
+            if (agentState != InstallState.SameVersion) return agentState;
+            if (launcherHealthy) return InstallState.SameVersion;
+            Version installedLauncher;
+            Version current;
+            if (launcherExists
+                && Version.TryParse(launcherVersion, out installedLauncher)
+                && Version.TryParse(ProductVersion, out current)
+                && installedLauncher.CompareTo(current) < 0) return InstallState.Upgrade;
+            return InstallState.Repair;
         }
     }
 
@@ -2383,7 +2405,12 @@ namespace NasDriveSetup
                 if (installedExists) installedHash = ReadSha256(installedExe);
             }
             catch { }
-            return Program.ResolveInstallState(installedExists, installedVersion, installedHash, embeddedHash);
+            InstallState agentState = Program.ResolveInstallState(installedExists, installedVersion, installedHash, embeddedHash);
+            bool launcherExists = File.Exists(launcherExe);
+            string launcherVersion = "";
+            try { if (launcherExists) launcherVersion = FileVersionInfo.GetVersionInfo(launcherExe).FileVersion ?? ""; }
+            catch { }
+            return Program.ResolveCompositeInstallState(agentState, launcherExists, launcherVersion, IsLauncherHealthy());
         }
 
         private string ReadInstalledVersion()

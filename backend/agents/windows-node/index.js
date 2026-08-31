@@ -18,7 +18,7 @@ const {
 } = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.22';
+const AGENT_VERSION = '1.10.23';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -2040,11 +2040,14 @@ async function checkForAgentUpdate(profile, { force = false } = {}) {
 $processId = ${process.pid}
 $source = ${JSON.stringify(tempExe)}
 $target = ${JSON.stringify(INSTALLED_EXE)}
+$versionFile = Join-Path (Split-Path -Parent $target) 'agent-version.txt'
+$nextVersion = ${JSON.stringify(String(metadata.version || ''))}
 $launcher = Join-Path (Split-Path -Parent $target) 'NAS-Drive.exe'
 $deadline = (Get-Date).AddSeconds(45)
 while ((Get-Process -Id $processId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
 if (Get-Process -Id $processId -ErrorAction SilentlyContinue) { Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue }
 Copy-Item -LiteralPath $source -Destination $target -Force
+[System.IO.File]::WriteAllText($versionFile, $nextVersion, [System.Text.UTF8Encoding]::new($false))
 Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue
 if (Test-Path -LiteralPath $launcher) { Start-Process -FilePath $launcher -ArgumentList @('--background') -WindowStyle Hidden }
 else { Start-Process -FilePath $target -ArgumentList @('--background') -WindowStyle Hidden }
