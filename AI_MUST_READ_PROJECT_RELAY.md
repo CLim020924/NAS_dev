@@ -928,3 +928,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 현재 PC 실검증: 설치본을 1.10.29로 보존 교체했다. stale native-ui/web-picker/foreground PID를 주입한 뒤 종료 결과 launcher·Agent·Provider 0개, runtime marker 0개를 확인했다. 완전 종료 상태에서 재시작 명령 뒤 background launcher 정확히 1개가 생성됐다. `--open`으로 새 로그인 창을 실제 화면에서 확인하고 닫은 뒤 background 1개만 남고 native-ui/web-picker 표식이 없는 것을 확인했다.
 - 자동 검증: source/packaged Agent self-test, Setup compile/self-test, Node syntax, 새 종료·재시작·TaskbarCreated regression 단언과 `git diff --check`가 통과했다. Windows 전체 backend test는 기존 비관리자 symlink 생성 EPERM 지점에서만 중단됐으며 해당 Linux 경계는 NAS 배포 후 재검증한다. workbook은 `WIN-TRAY-FULL-EXIT-RESTART-114`, `WIN-TRAY-EXIT-RESTART-RECOVERY`, Relation/Code/Patch/Request 기록을 추가하고 전 시트 렌더와 formula error 0을 확인했다.
 - 완료 경계: 현재 로컬 구현·설치·프로세스/실화면 검증은 끝났다. 다음 단계는 기능 commit/push, NAS clean fast-forward, Linux 전체 테스트, PM2 restart/save, 필수 서비스·내부/공개 HTTP와 배포 binary hash 확인이다. 시스템 알림 영역 자체는 자동화 대상 창으로 노출되지 않아 실제 트레이 메뉴의 `재시작` 클릭 1회는 사용자 체감 확인 경계로 남긴다.
+
+### 1.10.29 GitHub·NAS 배포 결과
+
+- 기능·binary·워크북·릴레이 commit `f93c425`를 GitHub branch `cleanup/git-tracking-2026-06-08`에 push했고 NAS live worktree가 clean fast-forward로 받았다.
+- NAS Linux에서 Agent self-test와 backend test files 13/13이 통과했다. `msp-backend`를 restart/save한 뒤 online이며 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다. 내부 `http://127.0.0.1:3030`과 공개 `https://filemanager-nas.com`은 HTTP 200이다.
+- NAS metadata는 1.10.29다. 배포 Agent SHA-256은 `2bf70a684871b105fa73348f456012b45b902bee91d933d65345831c1ea1f593`, Setup SHA-256은 `fa61154f25a5880e95eb3bd6c5f4f2f6d0bb5f9d8f28800ab072964d5b84e9ed`이며 현재 로컬 build와 일치한다.
+- workbook의 Feature/Patch 상태를 운영 배포 완료로 갱신하고 formula error 0과 최종 변경 시트 렌더를 다시 확인했다. 남은 항목은 시스템 알림 영역이 자동화 대상 창으로 노출되지 않아 실제 tray 메뉴에서 `NAS Drive 재시작`을 한 번 누르는 사용자 체감 확인뿐이다. 종료·재시작 프로세스 경로와 잔류 0개는 현재 PC에서 직접 검증했다.
