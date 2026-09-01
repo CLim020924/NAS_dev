@@ -970,3 +970,16 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - `msp-backend`를 restart/save했고 online이다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이며 내부 `127.0.0.1:3030`과 공개 HTTPS는 HTTP 200이다. 공개 설치 endpoint는 잘못된 token에 정상적으로 401을 반환하고 `cf-cache-status: DYNAMIC`이므로 구버전 binary cache 경로가 아니다.
 - 최종 NAS·로컬 Agent SHA-256은 `2dc2609ea6a9c89a59d6a97af3eb054d2cd4809566f6ab5a396c09b3233ab17d`, Setup SHA-256은 `e65ce0131119f06ea0f397c6a4ae6567ac4a76be7d243b236af47978496e8a53`로 일치한다. Setup FileVersion/ProductVersion은 `1.10.31.0`이다.
 - 남은 실제 장치 경계: 장애가 난 별도 PC의 기존 반쪽 관계는 1.10.31을 새로 내려받아 계정을 한 번 재연결해야 새 token과 첫 heartbeat가 생긴다. 그 PC의 실제 자격 증명을 자동 사용하지 않았으므로 웹과 Drive가 online으로 함께 수렴하는 최종 체감 확인만 남는다. 재부팅은 필요하지 않다.
+
+## 2026-09-01 NAS Drive 1.10.32 설치 직후·웹에서 탐색기 전면 열기
+
+- 사용자 요청: 설치가 끝난 직후 NAS Drive 폴더가 열린 파일 탐색기 창이 바로 눈앞에 보여야 한다. NAS 웹의 PC 연동 화면에서도 이미 설치된 NAS Drive를 직접 여는 방법을 제공한다.
+- 원인: 설치 프로그램의 `설치 완료 후 NAS Drive 열기` 체크는 동일 버전·업데이트 등 일부 경로에서 launcher `--open`을 실행해 실제 탐색기 대신 제어 창을 띄웠다. pairing Agent의 Explorer 실행은 설치/진행 창과 전면 순서가 경합했다. 웹 `openLinkedDrive`는 브라우저 localStorage에 해당 계정 deviceId가 없으면 설치된 Drive 열기 대신 새 연동 흐름으로 되돌아갔다.
+- 1.10.32 구현: Agent의 개인 Drive 열기는 설치된 native launcher `--open-drive-after-install`로 위임한다. launcher는 설치·pairing이 profile 경로를 기록할 때까지 최대 45초 기다리고, protocol deviceId가 있으면 그 profile의 개인 root를 선택한다. Explorer Shell의 실제 폴더 경로가 같은 창을 찾은 뒤 복원·맨 앞으로 활성화한다. 경로가 준비되지 않으면 무한 대기하지 않고 계정 연결 안내를 표시한다.
+- 웹 UX: PC 연동 대화상자에는 현재 브라우저의 연결 표식과 무관하게 `설치된 NAS Drive 열기` 버튼이 보인다. 명시적으로 누르면 `nas-sync://open-drive`를 호출한다. 기존 deviceId가 있으면 해당 ID를 함께 전달하며, deviceId가 없다는 이유로 자동 재연동하지 않는다. 첫 PC 연동 아이콘 클릭 자체는 기존 보안 규칙대로 연동 시작이며 protocol 자동 실행은 하지 않는다.
+- Windows 실화면 검증: 실제 사용자 파일·자격 증명을 사용하지 않고 임시 profile과 빈 안전 폴더로 새 launcher를 실행했다. `visual-open-test - 파일 탐색기` 창이 대상 주소로 실제 전면 표시된 것을 화면과 접근성 트리로 확인했다. 테스트 config를 원래 profiles 0 상태로 복원하고 임시 창·폴더·테스트 background를 정리했다.
+- 자동 검증: Agent self-test, Setup C# compile/self-test, Windows `deviceSyncSecurity` 회귀 테스트, frontend production build와 PDF.js API/Worker 4.8.69 검증을 통과했다. 기능 commit은 `5a8ec46`이며 GitHub와 NAS live branch에 fast-forward됐다.
+- NAS 운영 검증: Linux Agent self-test와 backend tests 22/22가 통과했다. frontend production bundle `main.3323e6e2.js`를 `/var/www/html`에 반영했다. PM2 재시작 직후 0초 probe만 기동 전 HTTP 000이었고 10초 뒤 `msp-backend=online`, 내부·공개 HTTP 200으로 수렴했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다.
+- 배포 산출물: NAS와 로컬 Agent SHA-256은 `480419249d0cef1a9e749cfc4ddb5fe2019563e23832791c406a5852c5755924`, Setup SHA-256은 `688f338244b27dcac3ea15b73952d89780e8ebdadeea018a4b4e76b0e271aff4`로 일치한다. 서버 배포 버전은 1.10.32다.
+- 프로젝트 메모리: `WIN-INSTALL-WEB-OPEN-116`, `WIN-INSTALL-WEB-DRIVE-OPEN`과 Relation/Code/Patch/Request 기록을 `docs/NAS_PROJECT_LOG.xlsx`에 추가했다. formula error 0, 기존 설명용 `??` 문자열 외 신규 모지바케 없음, 전체 14개 시트 렌더와 변경 범위 시각 검사를 통과했다.
+- 남은 경계: 운영 브라우저의 현재 세션은 로그인되지 않아 실제 사용자 계정의 PC 연동 대화상자 클릭은 자동화하지 않았다. production bundle과 버튼 회귀 gate, native protocol·탐색기 전면 표시를 각각 검증했다. 사용자는 새 1.10.32를 설치한 뒤 설치 직후 탐색기 전면 표시와 웹의 `설치된 NAS Drive 열기`를 한 번 체감 확인하면 된다.
