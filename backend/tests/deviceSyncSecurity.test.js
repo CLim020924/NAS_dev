@@ -49,7 +49,11 @@ assert.match(windowsAgentSource, /acquireForegroundLock\(\{ supersedeExisting: t
 assert.match(windowsAgentSource, /if \(!profile\?\.deviceId\) \{[\s\S]{0,900}profiles: \[\][\s\S]{0,900}return true;/);
 assert.match(windowsLauncherSource, /AcquireNativeUiMutexWithPriority\(\)/);
 assert.match(windowsLauncherSource, /SupersedeExistingNativeUi\(\)/);
+assert.match(windowsLauncherSource, /AcquireWebPickerMutexWithRecovery\(\)/);
+assert.match(windowsLauncherSource, /RegisterProcessOwner\(WebPickerPidFile\)/);
+assert.match(windowsLauncherSource, /SupersedeRegisteredLauncherRole\(WebPickerPidFile\)/);
 assert.match(windowsLauncherSource, /StartBackgroundLauncher\(\);[\s\S]{0,180}HasUsableProfile\(\)/);
+assert.match(windowsLauncherSource, /Process\.Start\(new ProcessStartInfo\(launcher, "--background"\)[\s\S]{0,260}SignalNativeTrayRefresh\(\)/);
 
 assert.strictEqual(hasConcurrentFileChange(10_000, 10_000), false);
 assert.strictEqual(hasConcurrentFileChange(11_500, 10_000), false);

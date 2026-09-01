@@ -18,17 +18,18 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.27.0")]
-[assembly: AssemblyFileVersion("1.10.27.0")]
+[assembly: AssemblyVersion("1.10.28.0")]
+[assembly: AssemblyFileVersion("1.10.28.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.27";
+        internal const string ProductVersion = "1.10.28";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
+        private static readonly string WebPickerPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "web-picker.pid");
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
         [DllImport("user32.dll")]
@@ -473,27 +474,64 @@ namespace NasDriveSetup
 
         internal static void OpenWebWithBrowserPicker(string installedExe)
         {
-            bool created;
-            using (var pickerMutex = new Mutex(true, "Local\\NAS-Drive-Web-Browser-Picker-SingleInstance", out created))
+            Mutex pickerMutex = AcquireWebPickerMutexWithRecovery();
+            if (pickerMutex == null) return;
+            using (pickerMutex)
             {
-                if (!created)
+                RegisterWebPickerOwner();
+                try
                 {
-                    FocusExistingLauncherWindow("NAS 웹에서 열기");
-                    return;
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    BrowserSelection selection;
+                    using (var picker = new WebBrowserPickerForm())
+                    {
+                        if (picker.ShowDialog() != DialogResult.OK || picker.Selection == null) return;
+                        selection = picker.Selection;
+                    }
+                    string arguments = "--open-web --hidden-bootstrap --web-browser " + QuoteArgument(selection.BrowserId);
+                    if (!string.IsNullOrWhiteSpace(selection.ProfileDirectory))
+                        arguments += " --web-browser-profile " + QuoteArgument(selection.ProfileDirectory);
+                    StartInstalledAgent(installedExe, arguments);
                 }
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                BrowserSelection selection;
-                using (var picker = new WebBrowserPickerForm())
-                {
-                    if (picker.ShowDialog() != DialogResult.OK || picker.Selection == null) return;
-                    selection = picker.Selection;
-                }
-                string arguments = "--open-web --hidden-bootstrap --web-browser " + QuoteArgument(selection.BrowserId);
-                if (!string.IsNullOrWhiteSpace(selection.ProfileDirectory))
-                    arguments += " --web-browser-profile " + QuoteArgument(selection.ProfileDirectory);
-                StartInstalledAgent(installedExe, arguments);
+                finally { ClearWebPickerOwner(); }
             }
+        }
+
+        private static Mutex AcquireWebPickerMutexWithRecovery()
+        {
+            const string mutexName = "Local\\NAS-Drive-Web-Browser-Picker-SingleInstance";
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                bool created;
+                var mutex = new Mutex(true, mutexName, out created);
+                if (created) return mutex;
+                mutex.Dispose();
+
+                // A visible picker is still a valid target: restore it and let the
+                // pending selection continue. If its owner has become invisible or
+                // unresponsive, replace only the registered exact-path picker role.
+                if (FocusExistingLauncherWindow("NAS 웹에서 열기")) return null;
+                SupersedeRegisteredWebPicker();
+                Thread.Sleep(200 + (attempt * 200));
+            }
+            MessageBox.Show("이전 브라우저 선택 창을 복구하지 못했습니다. NAS Drive를 종료하거나 Windows를 다시 시작할 필요 없이 잠시 후 다시 눌러 주세요.", "NAS 웹에서 열기", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return null;
+        }
+
+        private static void RegisterWebPickerOwner()
+        {
+            RegisterProcessOwner(WebPickerPidFile);
+        }
+
+        private static void ClearWebPickerOwner()
+        {
+            ClearProcessOwner(WebPickerPidFile);
+        }
+
+        private static void SupersedeRegisteredWebPicker()
+        {
+            SupersedeRegisteredLauncherRole(WebPickerPidFile);
         }
 
         private static void StartBackgroundLauncher()
@@ -555,31 +593,46 @@ namespace NasDriveSetup
 
         private static void RegisterNativeUiOwner()
         {
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(NativeUiPidFile));
-                File.WriteAllText(NativeUiPidFile, Process.GetCurrentProcess().Id.ToString(), Encoding.UTF8);
-            }
-            catch { }
+            RegisterProcessOwner(NativeUiPidFile);
         }
 
         private static void ClearNativeUiOwner()
         {
+            ClearProcessOwner(NativeUiPidFile);
+        }
+
+        private static void RegisterProcessOwner(string pidFile)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(pidFile));
+                File.WriteAllText(pidFile, Process.GetCurrentProcess().Id.ToString(), Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        private static void ClearProcessOwner(string pidFile)
+        {
             try
             {
                 int owner;
-                if (File.Exists(NativeUiPidFile) && int.TryParse(File.ReadAllText(NativeUiPidFile).Trim(), out owner)
-                    && owner == Process.GetCurrentProcess().Id) File.Delete(NativeUiPidFile);
+                if (File.Exists(pidFile) && int.TryParse(File.ReadAllText(pidFile).Trim(), out owner)
+                    && owner == Process.GetCurrentProcess().Id) File.Delete(pidFile);
             }
             catch { }
         }
 
         private static void SupersedeRegisteredNativeUi()
         {
+            SupersedeRegisteredLauncherRole(NativeUiPidFile);
+        }
+
+        private static void SupersedeRegisteredLauncherRole(string pidFile)
+        {
             try
             {
                 int owner;
-                if (!File.Exists(NativeUiPidFile) || !int.TryParse(File.ReadAllText(NativeUiPidFile).Trim(), out owner)) return;
+                if (!File.Exists(pidFile) || !int.TryParse(File.ReadAllText(pidFile).Trim(), out owner)) return;
                 using (Process process = Process.GetProcessById(owner))
                 {
                     if (process.Id == Process.GetCurrentProcess().Id || process.HasExited) return;
@@ -595,11 +648,11 @@ namespace NasDriveSetup
             catch { }
             finally
             {
-                try { if (File.Exists(NativeUiPidFile)) File.Delete(NativeUiPidFile); } catch { }
+                try { if (File.Exists(pidFile)) File.Delete(pidFile); } catch { }
             }
         }
 
-        private static void SignalNativeTrayRefresh()
+        internal static void SignalNativeTrayRefresh()
         {
             try
             {
@@ -1589,6 +1642,7 @@ namespace NasDriveSetup
                 status.Text = "연결이 완료되었습니다. 계정 상태를 여는 중입니다...";
                 string launcher = Application.ExecutablePath;
                 Process.Start(new ProcessStartInfo(launcher, "--background") { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
+                Program.SignalNativeTrayRefresh();
                 Hide();
                 using (var center = new NativeControlCenter(agentExe)) center.ShowDialog(this);
                 Close();
