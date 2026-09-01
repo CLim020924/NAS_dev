@@ -19,6 +19,12 @@ import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
 const appOpenMode = () => localStorage.getItem('platform_app_open_mode') || 'window';
 const DEVICE_OFFLINE_AFTER_MS = 30000;
 
+const getPcConnectionState = (liveState) => {
+  if (liveState === 'offline' || liveState === 'revoked') return 'offline';
+  if (liveState === 'connecting') return 'connecting';
+  return 'online';
+};
+
 const getDeviceLiveState = (device, now = Date.now()) => {
   if (!device || device.status === 'revoked' || device.relationshipState === 'revoked' || device.connectionState === 'revoked') return 'revoked';
   if (device.connectionState === 'offline') return 'offline';
@@ -124,7 +130,7 @@ function ServicePlatform() {
         const liveState = getDeviceLiveState(localDevice);
         setPcLinkedHere(true);
         setPcLiveState(liveState);
-        setPcConnectionState(liveState === 'offline' ? 'offline' : 'online');
+        setPcConnectionState(getPcConnectionState(liveState));
       } else {
         if (saved?.deviceId) localStorage.removeItem(localLinkKey);
         setPcLinkedHere(false);
@@ -163,7 +169,7 @@ function ServicePlatform() {
           const liveState = getDeviceLiveState(acceptedDevice);
           setPcLinkedHere(acceptedDevice.status !== 'revoked');
           setPcLiveState(liveState);
-          setPcConnectionState(liveState === 'offline' || liveState === 'revoked' ? 'offline' : 'online');
+          setPcConnectionState(getPcConnectionState(liveState));
           if (liveState === 'revoked') localStorage.removeItem(localLinkKey);
         }
       } catch {}
@@ -179,7 +185,7 @@ function ServicePlatform() {
       if (!localDevice) return;
       const liveState = getDeviceLiveState(localDevice, statusNow);
       setPcLiveState(liveState);
-      setPcConnectionState(liveState === 'offline' || liveState === 'revoked' ? 'offline' : 'online');
+      setPcConnectionState(getPcConnectionState(liveState));
     } catch {}
   }, [localLinkKey, pcDevices, statusNow]);
 
@@ -274,6 +280,7 @@ function ServicePlatform() {
         } catch (error) {
           if (error.response?.status === 410 || error.response?.status === 404) {
             stopPcSyncPoll();
+            pcPairingTokenRef.current = '';
             setPcSyncState('error');
             setPcSyncMessage('연결 요청을 더 이상 사용할 수 없습니다. 다시 시도해주세요.');
           }
@@ -343,7 +350,11 @@ function ServicePlatform() {
     setPcSyncOpen(true);
     setShowDeviceManager(true);
     setPcSyncState('manager');
-    setPcSyncMessage(pcConnectionState === 'online' ? '이 PC의 NAS Drive가 정상적으로 동기화되고 있습니다.' : '연결된 PC와 최근 동기화 상태를 확인할 수 있습니다.');
+    setPcSyncMessage(pcConnectionState === 'online'
+      ? '이 PC의 NAS Drive가 정상적으로 동기화되고 있습니다.'
+      : pcConnectionState === 'connecting'
+        ? '계정 등록은 완료되었으며 NAS Drive의 첫 연결 신호를 기다리고 있습니다.'
+        : '연결된 PC와 최근 동기화 상태를 확인할 수 있습니다.');
     refreshPcDevices();
   }, [pcConnectionState, refreshPcDevices]);
 

@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.30.0")]
-[assembly: AssemblyFileVersion("1.10.30.0")]
+[assembly: AssemblyVersion("1.10.31.0")]
+[assembly: AssemblyFileVersion("1.10.31.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.30";
+        internal const string ProductVersion = "1.10.31";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
@@ -2063,7 +2063,7 @@ namespace NasDriveSetup
                 while (DateTime.UtcNow < deadline)
                 {
                     if (process.WaitForExit(250)) return process.ExitCode;
-                    // Agent 1.10.30 persists the local disconnect first, then
+                    // Agent 1.10.31 persists the local disconnect first, then
                     // performs remote revoke and shell cleanup in the background.
                     if (!HasConfiguredProfile()) return 0;
                 }

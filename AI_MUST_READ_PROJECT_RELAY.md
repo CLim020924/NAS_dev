@@ -954,3 +954,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 실제 다운로드 경로: 프런트의 PC 연동 버튼은 pairing 응답의 `/api/devices/agent/windows?token=...`을 사용하고, 실행 중인 backend는 `backend/agents/dist/NAS-Drive-Setup.exe`를 내려준다. 잘못된 token으로 공개 endpoint까지 요청해 HTTP 401과 `cf-cache-status: DYNAMIC`을 확인했으므로 Cloudflare의 오래된 설치 파일 cache가 개입하는 경로가 아니다.
 - 파일 대조: NAS가 실제 제공하는 Setup SHA-256은 `a7347a03d1b0e7de50c1dfd84e2885d454ece509582ac2b4e009a7b5a02ae59e`, Agent SHA-256은 `376e48aeef7e8ef06de524fad500a28f440d34daf4cf7695cb8ad532d7b1dae1`이며 최종 로컬 release와 바이트 단위로 일치한다. Setup의 FileVersion/ProductVersion은 `1.10.30.0`이다.
 - 결론: 서버 다운로드 산출물과 실행 backend는 최신이다. 다만 이미 반쪽 연결이 된 문제 PC는 서버 파일 교체만으로 설치 프로그램이 자동 실행되거나 유효 token이 새로 생기지 않으므로, 그 PC에서 1.10.30을 새로 내려받아 실행하고 계정을 한 번 재연결해야 한다. 다운로드 폴더에 token별 설치본과 `(1)`, `(2)` 사본이 남을 수 있으므로 실행 화면 또는 파일 속성의 1.10.30을 기준으로 구분한다. 재부팅은 필요하지 않다.
+
+## 2026-09-01 NAS Drive 전 경우 재감사·1.10.31
+
+- 사용자 요청: 서버 다운로드 반영 여부뿐 아니라 설치·업데이트·연결·상태·로그아웃·종료·재시작의 가능한 경우를 다시 검토하고 직접 테스트한다.
+- 추가 발견: 1.10.30은 token/config 저장 뒤 foreground 첫 heartbeat를 기다린 다음 background를 시작했다. 이 단일 요청이 순간 실패하면 자동 재시도 프로세스가 생기기 전에 전체 연결 흐름이 중단될 수 있었다. 파일관리의 별도 PC 연동은 서버 등록만으로 성공을 표시했고, 플랫폼 polling 404·410은 pairing token 참조를 남겨 같은 화면의 새 요청을 막을 수 있었다.
+- 1.10.31 구현: durable config/DPAPI 검증 직후 background를 먼저 보장하고 foreground heartbeat 실패는 background 재시도로 넘긴다. 플랫폼은 connecting을 online으로 축약하지 않고 만료/소실 pairing 참조를 비운다. 파일관리 연동도 `connectionState=online`과 `lastSeenAt`을 모두 확인해야 성공으로 표시한다. Windows 비관리자 symlink EPERM은 해당 테스트만 명시적으로 skip하며 NAS Linux에서는 실제 symlink 경계 검사를 유지한다.
+- Windows 검증: backend test files 13/13, Agent source/package self-test, Setup build/self-test, Node syntax가 통과했다. 완전 종료 뒤 관련 프로세스 0개·runtime marker 0개, 재시작 뒤 background launcher 1개를 확인했다. 실제 화면에서 1.10.31 동일 버전은 `최신 버전`, 설치된 1.10.30 대비 1.10.31은 `업데이트` 버튼과 두 버전을 정확히 표시했고 무프로필 로그인 창이 전면에 열렸다. 현재 PC는 최종 1.10.31과 background 1개 상태다.
+- 검증 경계: Windows frontend build는 코드 오류가 아니라 로컬 pnpm/node_modules의 중복 eslint plugin 경로 충돌로 중단됐다. NAS Linux의 clean dependency 환경에서 production build와 전체 테스트를 수행한 뒤 운영 배포·hash·서비스 상태를 확정한다. 실제 문제 PC의 계정 비밀번호와 token은 자동 사용하지 않으므로 새 설치본에서 정상 첫 heartbeat를 한 번 체감 확인해야 한다.

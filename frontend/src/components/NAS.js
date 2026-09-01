@@ -766,10 +766,14 @@ const NAS = ({ showWorkspace = true }) => {
             withCredentials: true
           });
 
-          if (statusRes.data?.status === 'connected') {
+          const connectedDevice = statusRes.data?.device;
+          const heartbeatConfirmed = statusRes.data?.status === 'connected'
+            && connectedDevice?.connectionState === 'online'
+            && !!connectedDevice?.lastSeenAt;
+          if (heartbeatConfirmed) {
             setSnackbar({
               open: true,
-              message: `연동 감지! '${statusRes.data.device?.name || statusRes.data.device?.deviceName || '내 PC 폴더'}'가 NAS에 준비되었습니다.`,
+              message: `연동 확인! '${connectedDevice?.name || connectedDevice?.deviceName || '내 PC 폴더'}'의 NAS Drive가 온라인 상태입니다.`,
               severity: 'success'
             });
 

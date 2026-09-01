@@ -52,7 +52,7 @@ assert.match(windowsAgentSource, /acquireForegroundLock\(\{ supersedeExisting = 
 assert.match(windowsAgentSource, /acquireForegroundLock\(\{ supersedeExisting: true \}\)/);
 assert.match(windowsAgentSource, /if \(!profile\?\.deviceId\) \{[\s\S]{0,900}profiles: \[\][\s\S]{0,900}return true;/);
 assert.match(windowsAgentSource, /Persist the local[\s\S]{0,420}saveConfig\(nextConfig\);[\s\S]{0,300}devices\/agent\/logout/);
-assert.match(windowsAgentSource, /await sendHeartbeat\(profile, 'connecting'\);[\s\S]{0,260}restartBackground\(\)/);
+assert.match(windowsAgentSource, /restartBackground\(\);[\s\S]{0,180}await sendHeartbeat\(profile, 'connecting'\);[\s\S]{0,300}first heartbeat deferred to background/);
 assert.match(windowsAgentSource, /post-registration provider setup deferred/);
 assert.match(windowsAgentSource, /unprotectAgentToken\(profile\.accountKey\) !== profile\.agentToken/);
 assert.match(windowsAgentSource, /연결 생성을 취소했습니다/);
@@ -73,6 +73,11 @@ assert.match(windowsLauncherSource, /startupRestoreTick == 1 \|\| startupRestore
 assert.match(windowsLauncherSource, /EmergencyLocalLogout\(\)/);
 assert.match(windowsLauncherSource, /profiles"\] = remainingProfiles\.ToArray\(\)/);
 assert.match(windowsLauncherSource, /try \{ exitCode = await Task\.Run\(\(\) => RunLogout\(\)\); \} catch \{ \}/);
+const servicePlatformSource = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'ServicePlatform.js'), 'utf8');
+const nasFrontendSource = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'NAS.js'), 'utf8');
+assert.match(servicePlatformSource, /if \(liveState === 'connecting'\) return 'connecting'/);
+assert.match(servicePlatformSource, /error\.response\?\.status === 410 \|\| error\.response\?\.status === 404[\s\S]{0,180}pcPairingTokenRef\.current = ''/);
+assert.match(nasFrontendSource, /heartbeatConfirmed[\s\S]{0,220}connectionState === 'online'[\s\S]{0,160}lastSeenAt/);
 
 assert.strictEqual(hasConcurrentFileChange(10_000, 10_000), false);
 assert.strictEqual(hasConcurrentFileChange(11_500, 10_000), false);
@@ -91,8 +96,15 @@ assert.strictEqual(assertRealPathInside(tempRoot, path.join(inside, 'new-file.tx
 
 const link = path.join(inside, 'escape-link');
 try {
-  fs.symlinkSync(outside, link, 'dir');
-  assert.throws(() => assertRealPathInside(tempRoot, path.join(link, 'secret.txt')), /경계 밖/);
+  try {
+    fs.symlinkSync(outside, link, 'dir');
+    assert.throws(() => assertRealPathInside(tempRoot, path.join(link, 'secret.txt')), /경계 밖/);
+  } catch (error) {
+    // Non-elevated Windows commonly denies symlink creation. The same escape
+    // assertion remains mandatory on Linux/NAS where production runs.
+    if (error?.code !== 'EPERM') throw error;
+    console.log('symlink escape test skipped: Windows Developer Mode or elevation is required');
+  }
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });
   fs.rmSync(outside, { recursive: true, force: true });

@@ -18,7 +18,7 @@ const {
 } = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.30';
+const AGENT_VERSION = '1.10.31';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -3791,10 +3791,20 @@ async function runForeground() {
     throw error;
   }
   setProfileHealth(profile, 'connecting', 'NAS Drive 연결을 마무리하는 중입니다.');
-  await sendHeartbeat(profile, 'connecting');
-  // Provider/Explorer initialization is recoverable background work. Start the
-  // authenticated Agent before it so a provider failure cannot strand pairing.
+  // The durable profile is now the recovery source of truth. Start the
+  // background Agent before the foreground heartbeat so a transient network
+  // failure cannot strand a registered device without an automatic retry.
   restartBackground();
+  try {
+    await sendHeartbeat(profile, 'connecting');
+  } catch (error) {
+    const state = classifyAgentError(error);
+    log('[first heartbeat deferred to background]', profile.accountKey, error.message);
+    setProfileHealth(profile, state, state === 'offline'
+      ? '계정 등록은 완료되었습니다. NAS에 연결되면 자동으로 마무리합니다.'
+      : error.message);
+  }
+  // Provider/Explorer initialization is also recoverable background work.
   writeInstallProgress(68, '파일 탐색기에 연결하는 중', '계정별 NAS Drive와 보안 토큰을 등록합니다.');
   if (!isPersonalDrive) await initialSync(root, profile);
   if (isPersonalDrive) {
