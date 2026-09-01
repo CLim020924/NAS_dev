@@ -18,7 +18,7 @@ const {
 } = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.31';
+const AGENT_VERSION = '1.10.32';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -818,7 +818,16 @@ async function openPersonalDrive(profile) {
   const root = getRoots(profile).find(item => item.kind === 'personal-drive');
   if (!root?.localPath) return false;
   await registerPersonalDrive(profile);
-  spawn('explorer.exe', [root.localPath], { windowsHide: true, detached: true, stdio: 'ignore' }).unref();
+  const nativeLauncher = path.join(path.dirname(INSTALLED_EXE), 'NAS-Drive.exe');
+  if (isNativeLauncherAvailable(INSTALLED_EXE)) {
+    spawn(nativeLauncher, ['--open-drive-after-install'], {
+      windowsHide: true,
+      detached: true,
+      stdio: 'ignore'
+    }).unref();
+  } else {
+    spawn('explorer.exe', [root.localPath], { windowsHide: true, detached: true, stdio: 'ignore' }).unref();
+  }
   await new Promise(resolve => setTimeout(resolve, 700));
   const viewResult = spawnSync(INSTALLED_PROVIDER_EXE, [
     'configure-view', '--root', root.localPath

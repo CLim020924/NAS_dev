@@ -81,10 +81,18 @@ assert.match(windowsLauncherSource, /startupRestoreTick == 1 \|\| startupRestore
 assert.match(windowsLauncherSource, /EmergencyLocalLogout\(\)/);
 assert.match(windowsLauncherSource, /profiles"\] = remainingProfiles\.ToArray\(\)/);
 assert.match(windowsLauncherSource, /try \{ exitCode = await Task\.Run\(\(\) => RunLogout\(\)\); \} catch \{ \}/);
+assert.match(windowsLauncherSource, /--open-drive-after-install/);
+assert.match(windowsLauncherSource, /OpenDriveForegroundWhenReady\(openDriveDeviceId\)/);
+assert.match(windowsLauncherSource, /DrivePathForDeviceId\(deviceId\)/);
+assert.match(windowsLauncherSource, /FindExplorerWindow\(drive\)/);
+assert.match(windowsLauncherSource, /AttachThreadInput\(currentThread, foregroundThread, true\)/);
 const servicePlatformSource = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'ServicePlatform.js'), 'utf8');
 const nasFrontendSource = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'NAS.js'), 'utf8');
 assert.match(servicePlatformSource, /if \(liveState === 'connecting'\) return 'connecting'/);
 assert.match(servicePlatformSource, /error\.response\?\.status === 410 \|\| error\.response\?\.status === 404[\s\S]{0,180}pcPairingTokenRef\.current = ''/);
+assert.match(servicePlatformSource, /설치된 NAS Drive 열기/);
+assert.match(servicePlatformSource, /window\.location\.href = 'nas-sync:\/\/open-drive'/);
+assert.doesNotMatch(servicePlatformSource, /if \(!saved\?\.deviceId\) \{[\s\S]{0,100}startPcSyncFlow\(\)/);
 assert.match(nasFrontendSource, /heartbeatConfirmed[\s\S]{0,220}connectionState === 'online'[\s\S]{0,160}lastSeenAt/);
 
 assert.strictEqual(hasConcurrentFileChange(10_000, 10_000), false);

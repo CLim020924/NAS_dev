@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.31.0")]
-[assembly: AssemblyFileVersion("1.10.31.0")]
+[assembly: AssemblyVersion("1.10.32.0")]
+[assembly: AssemblyFileVersion("1.10.32.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.31";
+        internal const string ProductVersion = "1.10.32";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
@@ -34,6 +34,16 @@ namespace NasDriveSetup
         private static extern bool ShowWindow(IntPtr hWnd, int command);
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")]
+        private static extern bool AttachThreadInput(uint attach, uint attachTo, bool value);
+        [DllImport("user32.dll")]
+        private static extern bool BringWindowToTop(IntPtr hWnd);
 
         internal static Font UiFont(string family, float pointSize)
         {
@@ -131,6 +141,8 @@ namespace NasDriveSetup
             bool login = false;
             bool shutdownBackground = false;
             bool restartBackground = false;
+            bool openDriveAfterInstall = false;
+            string openDriveDeviceId = "";
             string notificationPayload = "";
             for (int index = 0; index < args.Length; index++)
             {
@@ -142,6 +154,7 @@ namespace NasDriveSetup
                 if (string.Equals(arg, "--login", StringComparison.OrdinalIgnoreCase)) login = true;
                 if (string.Equals(arg, "--shutdown-background", StringComparison.OrdinalIgnoreCase)) shutdownBackground = true;
                 if (string.Equals(arg, "--restart-background", StringComparison.OrdinalIgnoreCase)) restartBackground = true;
+                if (string.Equals(arg, "--open-drive-after-install", StringComparison.OrdinalIgnoreCase)) openDriveAfterInstall = true;
                 if (string.Equals(arg, "--notify-base64", StringComparison.OrdinalIgnoreCase) && index + 1 < args.Length) notificationPayload = args[++index];
             }
             if (protocolUrl.StartsWith("nas-sync://open-web", StringComparison.OrdinalIgnoreCase)) openWeb = true;
@@ -150,12 +163,24 @@ namespace NasDriveSetup
                 ShowNativeNotification(notificationPayload);
                 return true;
             }
-            if (string.IsNullOrWhiteSpace(protocolUrl) && !background && !open && !openWeb && !login && !shutdownBackground && !restartBackground) return false;
+            if (protocolUrl.StartsWith("nas-sync://open-drive", StringComparison.OrdinalIgnoreCase))
+            {
+                openDriveAfterInstall = true;
+                openDriveDeviceId = ProtocolQueryValue(protocolUrl, "deviceId");
+            }
+            if (string.IsNullOrWhiteSpace(protocolUrl) && !background && !open && !openWeb && !login && !shutdownBackground && !restartBackground && !openDriveAfterInstall) return false;
 
             string installedExe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "NAS Drive", "NAS-Sync-Agent.exe");
             if (!File.Exists(installedExe))
             {
                 if (!background) MessageBox.Show("NAS Drive Agent가 설치되어 있지 않습니다. 설치 프로그램을 다시 실행해주세요.", "NAS Drive", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return true;
+            }
+
+            if (openDriveAfterInstall)
+            {
+                StartBackgroundLauncher();
+                OpenDriveForegroundWhenReady(openDriveDeviceId);
                 return true;
             }
 
@@ -265,6 +290,105 @@ namespace NasDriveSetup
                 finally { process.Dispose(); }
             }
             return false;
+        }
+
+        private static string ProtocolQueryValue(string protocolUrl, string name)
+        {
+            try
+            {
+                Uri uri = new Uri(protocolUrl);
+                foreach (string pair in uri.Query.TrimStart('?').Split('&'))
+                {
+                    string[] parts = pair.Split(new[] { '=' }, 2);
+                    if (parts.Length > 0 && string.Equals(Uri.UnescapeDataString(parts[0]), name, StringComparison.OrdinalIgnoreCase))
+                        return parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "";
+                }
+            }
+            catch { }
+            return "";
+        }
+
+        private static void OpenDriveForegroundWhenReady(string deviceId)
+        {
+            // Pairing writes the durable profile shortly after the installer exits.
+            // Wait for that path instead of racing the final installer window.
+            string drive = "";
+            DateTime pathDeadline = DateTime.UtcNow.AddSeconds(45);
+            while (DateTime.UtcNow < pathDeadline)
+            {
+                drive = NativeControlCenter.DrivePathForDeviceId(deviceId);
+                if (!string.IsNullOrWhiteSpace(drive) && Directory.Exists(drive)) break;
+                Thread.Sleep(250);
+            }
+            if (string.IsNullOrWhiteSpace(drive) || !Directory.Exists(drive))
+            {
+                MessageBox.Show("연결된 NAS Drive 폴더를 찾을 수 없습니다. 먼저 이 PC에 NAS 계정을 연결해 주세요.", "NAS Drive", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            Thread.Sleep(650);
+            Process.Start("explorer.exe", QuoteArgument(drive));
+            DateTime windowDeadline = DateTime.UtcNow.AddSeconds(6);
+            while (DateTime.UtcNow < windowDeadline)
+            {
+                IntPtr window = FindExplorerWindow(drive);
+                if (window != IntPtr.Zero)
+                {
+                    ActivateWindow(window);
+                    return;
+                }
+                Thread.Sleep(150);
+            }
+        }
+
+        private static IntPtr FindExplorerWindow(string drive)
+        {
+            object shell = null;
+            object windows = null;
+            try
+            {
+                Type shellType = Type.GetTypeFromProgID("Shell.Application");
+                if (shellType == null) return IntPtr.Zero;
+                shell = Activator.CreateInstance(shellType);
+                dynamic shellObject = shell;
+                windows = shellObject.Windows();
+                dynamic shellWindows = windows;
+                for (int index = 0; index < shellWindows.Count; index++)
+                {
+                    object rawWindow = shellWindows.Item(index);
+                    try
+                    {
+                        dynamic item = rawWindow;
+                        string folderPath = Convert.ToString(item.Document.Folder.Self.Path);
+                        if (!string.Equals(Path.GetFullPath(folderPath).TrimEnd('\\'), Path.GetFullPath(drive).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) continue;
+                        return new IntPtr(Convert.ToInt64(item.HWND));
+                    }
+                    catch { }
+                    finally { if (rawWindow != null && Marshal.IsComObject(rawWindow)) Marshal.FinalReleaseComObject(rawWindow); }
+                }
+            }
+            catch { }
+            finally
+            {
+                if (windows != null && Marshal.IsComObject(windows)) Marshal.FinalReleaseComObject(windows);
+                if (shell != null && Marshal.IsComObject(shell)) Marshal.FinalReleaseComObject(shell);
+            }
+            return IntPtr.Zero;
+        }
+
+        private static void ActivateWindow(IntPtr window)
+        {
+            IntPtr foreground = GetForegroundWindow();
+            uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, IntPtr.Zero);
+            uint currentThread = GetCurrentThreadId();
+            bool attached = foregroundThread != 0 && foregroundThread != currentThread && AttachThreadInput(currentThread, foregroundThread, true);
+            try
+            {
+                ShowWindow(window, 9);
+                BringWindowToTop(window);
+                SetForegroundWindow(window);
+            }
+            finally { if (attached) AttachThreadInput(currentThread, foregroundThread, false); }
         }
 
         internal static void StopInstalledBackgroundProcesses(string installedAgentExe)
@@ -1829,6 +1953,39 @@ namespace NasDriveSetup
             return account == null ? "" : account.DrivePath;
         }
 
+        internal static string DrivePathForDeviceId(string deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId)) return FirstDrivePath();
+            try
+            {
+                var serializer = new JavaScriptSerializer();
+                var config = serializer.DeserializeObject(File.ReadAllText(ConfigFile, Encoding.UTF8)) as Dictionary<string, object>;
+                object rawProfiles;
+                var profiles = config != null && config.TryGetValue("profiles", out rawProfiles) ? rawProfiles as object[] : null;
+                if (profiles == null) return "";
+                foreach (object item in profiles)
+                {
+                    var profile = item as Dictionary<string, object>;
+                    if (profile == null || !string.Equals(GetString(profile, "deviceId"), deviceId, StringComparison.OrdinalIgnoreCase)) continue;
+                    object rawRoots;
+                    var roots = profile.TryGetValue("syncRoots", out rawRoots) ? rawRoots as object[] : null;
+                    string firstPath = "";
+                    if (roots == null) return firstPath;
+                    foreach (object rootItem in roots)
+                    {
+                        var root = rootItem as Dictionary<string, object>;
+                        if (root == null) continue;
+                        string candidate = GetString(root, "localPath");
+                        if (string.IsNullOrWhiteSpace(firstPath)) firstPath = candidate;
+                        if (string.Equals(GetString(root, "kind"), "personal-drive", StringComparison.OrdinalIgnoreCase)) return candidate;
+                    }
+                    return firstPath;
+                }
+            }
+            catch { }
+            return "";
+        }
+
         internal static AccountSnapshot ActiveAccount()
         {
             try
@@ -2917,7 +3074,7 @@ namespace NasDriveSetup
             }
             var info = new ProcessStartInfo(useLauncher ? launcherExe : installedExe) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
             info.Arguments = useLauncher
-                ? "--open"
+                ? (NativeControlCenter.HasUsableProfile() ? "--open-drive-after-install" : "--open")
                 : "--pairing-token " + pairingToken + " --auto-setup --hidden-bootstrap";
             Process.Start(info);
         }

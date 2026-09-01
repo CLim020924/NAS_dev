@@ -323,12 +323,14 @@ function ServicePlatform() {
   const openLinkedDrive = useCallback(() => {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(localLinkKey) || 'null'); } catch {}
-    if (!saved?.deviceId) {
-      startPcSyncFlow();
-      return;
-    }
-    window.location.href = `nas-sync://open-drive?deviceId=${encodeURIComponent(saved.deviceId)}`;
-  }, [localLinkKey, startPcSyncFlow]);
+    window.location.href = saved?.deviceId
+      ? `nas-sync://open-drive?deviceId=${encodeURIComponent(saved.deviceId)}`
+      : 'nas-sync://open-drive';
+  }, [localLinkKey]);
+
+  const openInstalledDrive = useCallback(() => {
+    window.location.href = 'nas-sync://open-drive';
+  }, []);
 
   const removeLinkedDevice = useCallback(async (device) => {
     if (!window.confirm(`'${device.deviceName || '이 PC'}' 연결을 해제하시겠습니까?\n해당 PC의 로컬 파일은 삭제되지 않습니다.`)) return;
@@ -533,6 +535,7 @@ function ServicePlatform() {
           </Stack>
         </DialogContent>
         <DialogActions>
+          {!pcLinkedHere && <Button variant="outlined" onClick={openInstalledDrive}>설치된 NAS Drive 열기</Button>}
           {(pcSyncState === 'needs-install' || pcSyncState === 'installing') && <Button variant="outlined" onClick={connectInstalledPcAgent}>이미 설치됨 · 이 계정 연결</Button>}
           {(pcSyncState === 'needs-install' || pcSyncState === 'installing') && <Button variant="contained" onClick={downloadPcAgent}>{pcSyncState === 'installing' ? '설치 프로그램 다시 받기' : '설치 프로그램 다운로드'}</Button>}
           {pcSyncState === 'error' && <Button variant="contained" onClick={startPcSyncFlow}>다시 시도</Button>}
