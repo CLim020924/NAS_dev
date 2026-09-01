@@ -962,3 +962,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 1.10.31 구현: durable config/DPAPI 검증 직후 background를 먼저 보장하고 foreground heartbeat 실패는 background 재시도로 넘긴다. 플랫폼은 connecting을 online으로 축약하지 않고 만료/소실 pairing 참조를 비운다. 파일관리 연동도 `connectionState=online`과 `lastSeenAt`을 모두 확인해야 성공으로 표시한다. Windows 비관리자 symlink EPERM은 해당 테스트만 명시적으로 skip하며 NAS Linux에서는 실제 symlink 경계 검사를 유지한다.
 - Windows 검증: backend test files 13/13, Agent source/package self-test, Setup build/self-test, Node syntax가 통과했다. 완전 종료 뒤 관련 프로세스 0개·runtime marker 0개, 재시작 뒤 background launcher 1개를 확인했다. 실제 화면에서 1.10.31 동일 버전은 `최신 버전`, 설치된 1.10.30 대비 1.10.31은 `업데이트` 버튼과 두 버전을 정확히 표시했고 무프로필 로그인 창이 전면에 열렸다. 현재 PC는 최종 1.10.31과 background 1개 상태다.
 - 검증 경계: Windows frontend build는 코드 오류가 아니라 로컬 pnpm/node_modules의 중복 eslint plugin 경로 충돌로 중단됐다. NAS Linux의 clean dependency 환경에서 production build와 전체 테스트를 수행한 뒤 운영 배포·hash·서비스 상태를 확정한다. 실제 문제 PC의 계정 비밀번호와 token은 자동 사용하지 않으므로 새 설치본에서 정상 첫 heartbeat를 한 번 체감 확인해야 한다.
+
+### 1.10.31 NAS 운영 배포 결과
+
+- 서버 상태 시간 경계를 `deviceSyncSecurity.getDeviceConnectionState` 순수 함수로 분리해 revoked, 90초 최초 연결 유예, 30초 이내 online, 만료 offline을 실제 값으로 테스트했다. Windows에서는 비관리자 symlink 생성만 명시적으로 skip했고 나머지 13개 test files가 통과했다.
+- commit `cade076`을 GitHub와 NAS live worktree에 반영했다. NAS Linux backend test files 13/13은 문서 변환 통합 2건과 실제 symlink 경계까지 모두 통과했다. frontend production build와 react-pdf/PDF.js API·Worker 4.8.69 gate도 통과했다. 기존 unrelated lint warning과 fileTrash test 시작 시 document-studio 상태 파일 EACCES 경고는 있었지만 test/build exit는 성공했다.
+- `msp-backend`를 restart/save했고 online이다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active이며 내부 `127.0.0.1:3030`과 공개 HTTPS는 HTTP 200이다. 공개 설치 endpoint는 잘못된 token에 정상적으로 401을 반환하고 `cf-cache-status: DYNAMIC`이므로 구버전 binary cache 경로가 아니다.
+- 최종 NAS·로컬 Agent SHA-256은 `2dc2609ea6a9c89a59d6a97af3eb054d2cd4809566f6ab5a396c09b3233ab17d`, Setup SHA-256은 `e65ce0131119f06ea0f397c6a4ae6567ac4a76be7d243b236af47978496e8a53`로 일치한다. Setup FileVersion/ProductVersion은 `1.10.31.0`이다.
+- 남은 실제 장치 경계: 장애가 난 별도 PC의 기존 반쪽 관계는 1.10.31을 새로 내려받아 계정을 한 번 재연결해야 새 token과 첫 heartbeat가 생긴다. 그 PC의 실제 자격 증명을 자동 사용하지 않았으므로 웹과 Drive가 online으로 함께 수렴하는 최종 체감 확인만 남는다. 재부팅은 필요하지 않다.

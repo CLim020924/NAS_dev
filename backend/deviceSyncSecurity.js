@@ -22,6 +22,20 @@ const findPairingIndexByToken = (pairings, token) => {
   ));
 };
 
+const getDeviceConnectionState = (device = {}, options = {}) => {
+  const now = Number(options.now ?? Date.now());
+  const offlineAfterMs = Math.max(1000, Number(options.offlineAfterMs || 30_000));
+  const connectGraceMs = Math.max(1000, Number(options.connectGraceMs || 90_000));
+  if (device.status === 'revoked' || device.revokedAt) return 'revoked';
+  const lastSeenMs = new Date(device.lastSeenAt || 0).getTime();
+  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) {
+    const registeredMs = new Date(device.stateChangedAt || device.connectedAt || device.createdAt || 0).getTime();
+    if (device.syncState === 'connecting' && Number.isFinite(registeredMs) && registeredMs > 0 && now - registeredMs <= connectGraceMs) return 'connecting';
+    return 'offline';
+  }
+  return now - lastSeenMs <= offlineAfterMs ? 'online' : 'offline';
+};
+
 const assertRealPathInside = (basePath, targetPath) => {
   const base = path.resolve(basePath);
   const target = path.resolve(targetPath);
@@ -65,6 +79,7 @@ module.exports = {
   secureHashEquals,
   hashPairingToken,
   findPairingIndexByToken,
+  getDeviceConnectionState,
   assertRealPathInside,
   hasConcurrentFileChange,
   buildConflictFileName

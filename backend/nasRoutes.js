@@ -15,6 +15,7 @@ const {
   secureHashEquals,
   hashPairingToken,
   findPairingIndexByToken,
+  getDeviceConnectionState: deriveDeviceConnectionState,
   assertRealPathInside,
   hasConcurrentFileChange,
   buildConflictFileName
@@ -359,14 +360,10 @@ const getCurrentDeviceOwner = (device = {}) => {
 };
 
 const getDeviceConnectionState = (device = {}) => {
-  if (device.status === 'revoked' || device.revokedAt) return 'revoked';
-  const lastSeenMs = new Date(device.lastSeenAt || 0).getTime();
-  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) {
-    const registeredMs = new Date(device.stateChangedAt || device.connectedAt || device.createdAt || 0).getTime();
-    if (device.syncState === 'connecting' && Number.isFinite(registeredMs) && registeredMs > 0 && Date.now() - registeredMs <= DEVICE_CONNECT_GRACE_MS) return 'connecting';
-    return 'offline';
-  }
-  return Date.now() - lastSeenMs <= DEVICE_OFFLINE_AFTER_MS ? 'online' : 'offline';
+  return deriveDeviceConnectionState(device, {
+    offlineAfterMs: DEVICE_OFFLINE_AFTER_MS,
+    connectGraceMs: DEVICE_CONNECT_GRACE_MS
+  });
 };
 
 const getDeviceReason = (device = {}) => {

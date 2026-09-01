@@ -9,6 +9,7 @@ const {
   secureHashEquals,
   hashPairingToken,
   findPairingIndexByToken,
+  getDeviceConnectionState,
   assertRealPathInside,
   hasConcurrentFileChange,
   buildConflictFileName
@@ -22,6 +23,13 @@ assert.strictEqual(secureHashEquals(hashToken(token), hashToken('other')), false
 assert.strictEqual(findPairingIndexByToken([{ tokenHash: hashPairingToken(token) }], token), 0);
 assert.strictEqual(findPairingIndexByToken([{ tokenHash: hashPairingToken(token) }], 'wrong'), -1);
 assert.strictEqual(findPairingIndexByToken([{ token }], token), 0);
+
+const connectionNow = Date.parse('2026-09-01T00:02:00.000Z');
+assert.strictEqual(getDeviceConnectionState({ status: 'revoked', lastSeenAt: '2026-09-01T00:02:00.000Z' }, { now: connectionNow }), 'revoked');
+assert.strictEqual(getDeviceConnectionState({ syncState: 'connecting', createdAt: '2026-09-01T00:01:00.000Z' }, { now: connectionNow }), 'connecting');
+assert.strictEqual(getDeviceConnectionState({ syncState: 'connecting', createdAt: '2026-08-31T23:59:00.000Z' }, { now: connectionNow }), 'offline');
+assert.strictEqual(getDeviceConnectionState({ syncState: 'up-to-date', lastSeenAt: '2026-09-01T00:01:45.000Z' }, { now: connectionNow }), 'online');
+assert.strictEqual(getDeviceConnectionState({ syncState: 'up-to-date', lastSeenAt: '2026-09-01T00:01:20.000Z' }, { now: connectionNow }), 'offline');
 
 const passwordHash = hashPassword('desktop-login-test-password');
 assert.strictEqual(verifyPassword('desktop-login-test-password', passwordHash), true);
