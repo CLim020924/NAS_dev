@@ -947,3 +947,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 배포 산출물: NAS metadata는 1.10.30이다. Agent SHA-256은 `376e48aeef7e8ef06de524fad500a28f440d34daf4cf7695cb8ad532d7b1dae1`, 최종 Setup/launcher SHA-256은 `a7347a03d1b0e7de50c1dfd84e2885d454ece509582ac2b4e009a7b5a02ae59e`다.
 - 남은 사용자 체감 확인: 장애가 발생한 별도 PC의 기존 반쪽 장치는 새 1.10.30 설치본을 다시 받아 계정을 한 번 재연결해야 새 token과 첫 heartbeat가 생성된다. 그 PC의 실제 계정 인증은 자동화하지 않았으므로 업데이트 후 웹 상태가 `현재 PC 연결됨`, Drive가 `NAS와 동기화됨`으로 수렴하는지만 확인한다. 다시 문제가 생겨도 1.10.30에서는 로그아웃이 로컬에서 막히지 않는다.
 - workbook의 Feature/Patch 상태를 운영 배포 완료로 갱신하고 formula error 0과 최종 변경 시트 렌더를 다시 확인했다. 남은 항목은 시스템 알림 영역이 자동화 대상 창으로 노출되지 않아 실제 tray 메뉴에서 `NAS Drive 재시작`을 한 번 누르는 사용자 체감 확인뿐이다. 종료·재시작 프로세스 경로와 잔류 0개는 현재 PC에서 직접 검증했다.
+
+### 1.10.30 운영 다운로드 파일 재검증
+
+- 사용자 의문: 반복 수정한 1.10.30이 실제 NAS 웹의 PC 연동 다운로드 파일에는 반영되지 않은 것인지 확인한다.
+- 실제 다운로드 경로: 프런트의 PC 연동 버튼은 pairing 응답의 `/api/devices/agent/windows?token=...`을 사용하고, 실행 중인 backend는 `backend/agents/dist/NAS-Drive-Setup.exe`를 내려준다. 잘못된 token으로 공개 endpoint까지 요청해 HTTP 401과 `cf-cache-status: DYNAMIC`을 확인했으므로 Cloudflare의 오래된 설치 파일 cache가 개입하는 경로가 아니다.
+- 파일 대조: NAS가 실제 제공하는 Setup SHA-256은 `a7347a03d1b0e7de50c1dfd84e2885d454ece509582ac2b4e009a7b5a02ae59e`, Agent SHA-256은 `376e48aeef7e8ef06de524fad500a28f440d34daf4cf7695cb8ad532d7b1dae1`이며 최종 로컬 release와 바이트 단위로 일치한다. Setup의 FileVersion/ProductVersion은 `1.10.30.0`이다.
+- 결론: 서버 다운로드 산출물과 실행 backend는 최신이다. 다만 이미 반쪽 연결이 된 문제 PC는 서버 파일 교체만으로 설치 프로그램이 자동 실행되거나 유효 token이 새로 생기지 않으므로, 그 PC에서 1.10.30을 새로 내려받아 실행하고 계정을 한 번 재연결해야 한다. 다운로드 폴더에 token별 설치본과 `(1)`, `(2)` 사본이 남을 수 있으므로 실행 화면 또는 파일 속성의 1.10.30을 기준으로 구분한다. 재부팅은 필요하지 않다.
