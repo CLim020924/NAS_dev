@@ -18,7 +18,7 @@ const {
 } = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.29';
+const AGENT_VERSION = '1.10.30';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -82,7 +82,14 @@ function readJson(file, fallback) {
 
 function writeJson(file, value) {
   ensureStateDir();
-  fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(value, null, 2), 'utf8');
+  try {
+    fs.renameSync(tempFile, file);
+  } catch (error) {
+    try { fs.unlinkSync(file); } catch {}
+    fs.renameSync(tempFile, file);
+  }
 }
 
 function writePowerShellScript(file, script) {
@@ -2075,6 +2082,7 @@ $quotedPath = '"' + $scriptPath + '"'
 Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quotedPath) -WindowStyle Hidden
 `;
   spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', launcher], { windowsHide: true, stdio: 'ignore' });
+  await sendHeartbeat(profile, 'updating').catch(error => log('[pre-update heartbeat deferred]', error.message));
   setAgentHealth('updating', `${AGENT_VERSION} → ${metadata.version}`);
   return true;
 }
@@ -2447,6 +2455,11 @@ function saveConfig(config) {
     return saved;
   });
   writeJson(CONFIG_FILE, next);
+  for (const profile of getProfiles(config).filter(item => item?.agentToken)) {
+    if (unprotectAgentToken(profile.accountKey) !== profile.agentToken) {
+      throw new Error('저장한 장치 인증 정보를 다시 확인하지 못했습니다. 로컬 연결을 만들지 않았습니다.');
+    }
+  }
   try { if (fs.existsSync(LEGACY_TOKEN_FILE)) fs.unlinkSync(LEGACY_TOKEN_FILE); } catch {}
 }
 
@@ -2471,7 +2484,15 @@ function protectAgentToken(token, accountKey) {
   if (result.status !== 0 || !(result.stdout || '').trim()) {
     throw new Error('Windows DPAPI로 장치 토큰을 보호하지 못했습니다.');
   }
-  fs.writeFileSync(tokenFileFor(accountKey), result.stdout.trim(), { encoding: 'utf8', mode: 0o600 });
+  const tokenFile = tokenFileFor(accountKey);
+  const tempFile = `${tokenFile}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempFile, result.stdout.trim(), { encoding: 'utf8', mode: 0o600 });
+  try {
+    fs.renameSync(tempFile, tokenFile);
+  } catch (error) {
+    try { fs.unlinkSync(tokenFile); } catch {}
+    fs.renameSync(tempFile, tokenFile);
+  }
 }
 
 function unprotectAgentToken(accountKey, allowLegacy = false) {
@@ -2551,17 +2572,19 @@ if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Write-Output "yes" }
 function clearLocalProfileResources(profile) {
   if (!profile) return;
   for (const root of getRoots(profile).filter(item => item.kind === 'personal-drive')) {
-    stopPersonalDriveProvider(profile, root);
-    setPersonalDriveHomePin(root.localPath, false);
-    if (root.localPath && fs.existsSync(INSTALLED_PROVIDER_EXE)) {
-      spawnSync(INSTALLED_PROVIDER_EXE, ['unregister', '--root', root.localPath, '--account', profile.accountKey], {
-        windowsHide: true,
-        stdio: 'ignore',
-        timeout: 10_000
-      });
-    }
-    setPersonalDriveFolderIcon(root.localPath, false);
-    setPersonalDriveWebShortcut(root.localPath, profile, false);
+    try { stopPersonalDriveProvider(profile, root); } catch (error) { log('[logout provider stop deferred]', error.message); }
+    try { setPersonalDriveHomePin(root.localPath, false); } catch (error) { log('[logout home unpin deferred]', error.message); }
+    try {
+      if (root.localPath && fs.existsSync(INSTALLED_PROVIDER_EXE)) {
+        spawnSync(INSTALLED_PROVIDER_EXE, ['unregister', '--root', root.localPath, '--account', profile.accountKey], {
+          windowsHide: true,
+          stdio: 'ignore',
+          timeout: 5_000
+        });
+      }
+    } catch (error) { log('[logout provider unregister deferred]', error.message); }
+    try { setPersonalDriveFolderIcon(root.localPath, false); } catch (error) { log('[logout icon cleanup deferred]', error.message); }
+    try { setPersonalDriveWebShortcut(root.localPath, profile, false); } catch (error) { log('[logout shortcut cleanup deferred]', error.message); }
   }
   try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
 }
@@ -2593,6 +2616,20 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
   }
   if (!confirmed && !confirmProfileLogout(profile)) return false;
 
+  const remainingProfiles = getProfiles(config).filter(item => safeAccountKey(item.accountKey) !== safeAccountKey(profile.accountKey));
+  const nextConfig = {
+    ...(config || {}),
+    schemaVersion: 2,
+    profiles: remainingProfiles,
+    activeAccountKey: remainingProfiles[0]?.accountKey || '',
+    savedAt: new Date().toISOString()
+  };
+  // The newest explicit logout request wins immediately. Persist the local
+  // disconnect before any network call or provider cleanup that can time out.
+  saveConfig(nextConfig);
+  try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
+  setAgentHealth('needs-relink', '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
+
   if (profile.agentToken) {
     try {
       await requestJson('POST', '/api/devices/agent/logout', {
@@ -2609,16 +2646,6 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
   }
 
   clearLocalProfileResources(profile);
-  const remainingProfiles = getProfiles(config).filter(item => safeAccountKey(item.accountKey) !== safeAccountKey(profile.accountKey));
-  const nextConfig = {
-    ...(config || {}),
-    schemaVersion: 2,
-    profiles: remainingProfiles,
-    activeAccountKey: remainingProfiles[0]?.accountKey || '',
-    savedAt: new Date().toISOString()
-  };
-  saveConfig(nextConfig);
-  setAgentHealth('needs-relink', '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
   restartBackground();
   if (reopenLogin) {
     const launcher = path.join(path.dirname(INSTALLED_EXE), 'NAS-Drive.exe');
@@ -3732,13 +3759,53 @@ async function runForeground() {
     startWithWindows: setupOptions.startWithWindows !== false,
     cloudAppChoice: setupOptions.cloudAction || 'coexist'
   };
-  saveConfig(nextConfig);
+  try {
+    saveConfig(nextConfig);
+  } catch (error) {
+    // Registration has already issued a server token. If durable local storage
+    // fails, revoke that half-created relationship instead of leaving a device
+    // that can only transition from connecting to disconnected.
+    await requestJson('POST', '/api/devices/agent/logout', { deviceId: profile.deviceId }, profile.agentToken, 5_000).catch(() => {});
+    try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
+    const rollbackProfiles = getProfiles(currentConfig).filter(item => safeAccountKey(item.accountKey) !== safeAccountKey(profile.accountKey));
+    const rollbackConfig = {
+      ...(currentConfig || {}),
+      schemaVersion: 2,
+      profiles: rollbackProfiles,
+      activeAccountKey: rollbackProfiles[0]?.accountKey || '',
+      savedAt: new Date().toISOString()
+    };
+    try {
+      saveConfig(rollbackConfig);
+    } catch {
+      writeJson(CONFIG_FILE, {
+        ...rollbackConfig,
+        profiles: rollbackProfiles.map(item => {
+          const saved = { ...item };
+          delete saved.agentToken;
+          return saved;
+        })
+      });
+    }
+    setAgentHealth('needs-relink', '장치 인증 정보를 안전하게 저장하지 못해 연결 생성을 취소했습니다. 다시 로그인해 주세요.');
+    throw error;
+  }
   setProfileHealth(profile, 'connecting', 'NAS Drive 연결을 마무리하는 중입니다.');
+  await sendHeartbeat(profile, 'connecting');
+  // Provider/Explorer initialization is recoverable background work. Start the
+  // authenticated Agent before it so a provider failure cannot strand pairing.
+  restartBackground();
   writeInstallProgress(68, '파일 탐색기에 연결하는 중', '계정별 NAS Drive와 보안 토큰을 등록합니다.');
   if (!isPersonalDrive) await initialSync(root, profile);
-  if (isPersonalDrive) await registerPersonalDrive(profile);
+  if (isPersonalDrive) {
+    try {
+      await registerPersonalDrive(profile);
+    } catch (error) {
+      log('[post-registration provider setup deferred]', profile.accountKey, error.message);
+      setProfileHealth(profile, 'connecting', '계정 연결은 완료되었습니다. 파일 탐색기 연결을 백그라운드에서 복구하는 중입니다.');
+    }
+  }
   writeInstallProgress(88, '백그라운드 동기화를 시작하는 중', '한 번만 실행되는 동기화 프로세스를 준비합니다.');
-  restartBackground();
   if (isPersonalDrive) await openPersonalDrive(profile);
   if (setupProgressActive) {
     writeInstallProgress(100, 'NAS Drive 설치 완료', `${root.name} 드라이브를 파일 탐색기에서 사용할 수 있습니다.`, 'done');

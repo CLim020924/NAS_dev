@@ -17,16 +17,18 @@ import DocumentStudio from './DocumentStudio/DocumentStudio';
 import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
 
 const appOpenMode = () => localStorage.getItem('platform_app_open_mode') || 'window';
-const DEVICE_OFFLINE_AFTER_MS = 9000;
+const DEVICE_OFFLINE_AFTER_MS = 30000;
 
 const getDeviceLiveState = (device, now = Date.now()) => {
   if (!device || device.status === 'revoked' || device.relationshipState === 'revoked' || device.connectionState === 'revoked') return 'revoked';
   if (device.connectionState === 'offline') return 'offline';
+  if (device.connectionState === 'connecting') return 'connecting';
   const lastSeen = Date.parse(device.lastSeenAt || 0) || 0;
   const offlineAfterMs = Math.max(1000, Number(device.offlineAfterMs || DEVICE_OFFLINE_AFTER_MS));
-  if (!lastSeen || now - lastSeen > offlineAfterMs) return 'offline';
+  if (!lastSeen) return device.syncState === 'connecting' ? 'connecting' : 'offline';
+  if (now - lastSeen > offlineAfterMs) return 'offline';
   if (device.syncPaused || device.syncState === 'paused') return 'paused';
-  return ['connecting', 'syncing', 'up-to-date', 'error'].includes(device.syncState) ? device.syncState : 'connecting';
+  return ['connecting', 'syncing', 'up-to-date', 'updating', 'error'].includes(device.syncState) ? device.syncState : 'connecting';
 };
 
 const preferNewerDevice = (current, incoming) => {
@@ -50,6 +52,7 @@ const getDeviceStatusUi = (state) => ({
   'up-to-date': { label: '파일 최신 상태', color: 'primary', iconColor: '#1976d2' },
   syncing: { label: '파일 동기화 중', color: 'info', iconColor: '#0288d1' },
   connecting: { label: '계정 연결 중', color: 'info', iconColor: '#0288d1' },
+  updating: { label: 'NAS Drive 업데이트 중', color: 'info', iconColor: '#0288d1' },
   paused: { label: '동기화 일시 중지', color: 'default', iconColor: '#757575' },
   error: { label: '동기화 오류', color: 'error', iconColor: '#d32f2f' },
   offline: { label: 'PC 연결 끊김', color: 'warning', iconColor: '#ed8b00' },
@@ -60,6 +63,7 @@ const getDeviceConnectionUi = (device, now = Date.now()) => {
   const state = getDeviceLiveState(device, now);
   if (state === 'revoked') return { label: '연결 해제됨', color: 'default' };
   if (state === 'offline') return { label: '현재 연결 끊김', color: 'warning' };
+  if (state === 'connecting') return { label: '연결 확인 중', color: 'info' };
   return { label: '현재 PC 연결됨', color: 'success' };
 };
 
@@ -241,10 +245,13 @@ function ServicePlatform() {
             setPcLinkedHere(true);
             const liveState = getDeviceLiveState(status.device);
             setPcLiveState(liveState);
-            setPcConnectionState(liveState === 'offline' ? 'offline' : 'online');
-            if (liveState === 'offline') {
+            const heartbeatConfirmed = status.device.connectionState === 'online' && !!status.device.lastSeenAt;
+            setPcConnectionState(heartbeatConfirmed ? 'online' : (liveState === 'offline' ? 'offline' : 'connecting'));
+            if (!heartbeatConfirmed) {
               setPcSyncState('connecting');
-              setPcSyncMessage('계정 등록은 완료되었습니다. NAS Drive 백그라운드 연결 신호를 확인하고 있습니다.');
+              setPcSyncMessage(liveState === 'offline'
+                ? '계정 등록은 완료되었지만 첫 연결 신호가 도착하지 않았습니다. NAS Drive가 자동 복구를 시도하고 있습니다.'
+                : '계정 등록은 완료되었습니다. NAS Drive의 첫 백그라운드 연결 신호를 확인하고 있습니다.');
               return;
             }
             stopPcSyncPoll();

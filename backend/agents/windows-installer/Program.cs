@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.29.0")]
-[assembly: AssemblyFileVersion("1.10.29.0")]
+[assembly: AssemblyVersion("1.10.30.0")]
+[assembly: AssemblyFileVersion("1.10.30.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.29";
+        internal const string ProductVersion = "1.10.30";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
@@ -795,7 +795,11 @@ namespace NasDriveSetup
                     && QuoteArgument("C:\\Path\\") == "\"C:\\Path\\\\\""
                     && ScaleMetric(660, 3f) == 1980
                     && ScaleMetric(1, 1.5f) == 2
-                    && NativeControlCenter.ShouldTreatHealthAsOffline("up-to-date", 13, true)
+                    && NativeControlCenter.ShouldTreatHealthAsOffline("up-to-date", 46, true)
+                    && !NativeControlCenter.ShouldTreatHealthAsOffline("connecting", 89, true)
+                    && NativeControlCenter.ShouldTreatHealthAsOffline("connecting", 91, true)
+                    && !NativeControlCenter.ShouldTreatHealthAsOffline("updating", 179, true)
+                    && NativeControlCenter.ShouldTreatHealthAsOffline("updating", 181, true)
                     && !NativeControlCenter.ShouldTreatHealthAsOffline("needs-relink", 300, true)
                     && !NativeControlCenter.ShouldTreatHealthAsOffline("error", 300, true)
                     && !NativeControlCenter.ShouldTreatHealthAsOffline("paused", 300, true);
@@ -1903,7 +1907,10 @@ namespace NasDriveSetup
 
         internal static bool ShouldTreatHealthAsOffline(string state, double ageSeconds, bool hasConfiguredProfile)
         {
-            if (!hasConfiguredProfile || ageSeconds <= 12) return false;
+            if (!hasConfiguredProfile) return false;
+            if (string.Equals(state, "updating", StringComparison.OrdinalIgnoreCase)) return ageSeconds > 180;
+            if (string.Equals(state, "connecting", StringComparison.OrdinalIgnoreCase)) return ageSeconds > 90;
+            if (ageSeconds <= 45) return false;
             return !string.Equals(state, "needs-relink", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(state, "error", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(state, "paused", StringComparison.OrdinalIgnoreCase);
@@ -2026,8 +2033,10 @@ namespace NasDriveSetup
             statusLabel.Text = "NAS 계정 연결을 안전하게 해제하는 중입니다...";
             try
             {
-                int exitCode = await Task.Run(() => RunLogout());
-                if (exitCode != 0) throw new InvalidOperationException("로컬 연결을 해제하지 못했습니다. NAS Drive를 다시 열어 재시도해 주세요.");
+                int exitCode = 1;
+                try { exitCode = await Task.Run(() => RunLogout()); } catch { }
+                if ((exitCode != 0 || HasConfiguredProfile()) && !EmergencyLocalLogout())
+                    throw new InvalidOperationException("로컬 연결을 해제하지 못했습니다. NAS Drive를 다시 열어 재시도해 주세요.");
                 Hide();
                 using (var login = new NativeLoginForm(agentExe)) login.ShowDialog(this);
                 Close();
@@ -2050,13 +2059,90 @@ namespace NasDriveSetup
                 WorkingDirectory = Path.GetDirectoryName(agentExe)
             }))
             {
-                if (!process.WaitForExit(45000))
+                DateTime deadline = DateTime.UtcNow.AddSeconds(45);
+                while (DateTime.UtcNow < deadline)
                 {
-                    try { process.Kill(); } catch { }
-                    return 1;
+                    if (process.WaitForExit(250)) return process.ExitCode;
+                    // Agent 1.10.30 persists the local disconnect first, then
+                    // performs remote revoke and shell cleanup in the background.
+                    if (!HasConfiguredProfile()) return 0;
                 }
-                return process.ExitCode;
+                try { process.Kill(); } catch { }
+                return 1;
             }
+        }
+
+        private bool EmergencyLocalLogout()
+        {
+            try
+            {
+                var serializer = new JavaScriptSerializer();
+                Dictionary<string, object> config = null;
+                try { config = serializer.DeserializeObject(File.ReadAllText(ConfigFile, Encoding.UTF8)) as Dictionary<string, object>; } catch { }
+                if (config == null) config = new Dictionary<string, object>();
+                string activeKey = GetString(config, "activeAccountKey");
+                object rawProfiles;
+                var profiles = config.TryGetValue("profiles", out rawProfiles) ? rawProfiles as object[] : null;
+                var remainingProfiles = new List<object>();
+                if (profiles != null)
+                {
+                    if (string.IsNullOrWhiteSpace(activeKey) && profiles.Length > 0)
+                        activeKey = GetString(profiles[0] as Dictionary<string, object>, "accountKey");
+                    foreach (object item in profiles)
+                    {
+                        var profile = item as Dictionary<string, object>;
+                        if (profile == null || string.Equals(GetString(profile, "accountKey"), activeKey, StringComparison.OrdinalIgnoreCase)) continue;
+                        remainingProfiles.Add(item);
+                    }
+                }
+                config["schemaVersion"] = 2;
+                config["profiles"] = remainingProfiles.ToArray();
+                config["activeAccountKey"] = remainingProfiles.Count > 0
+                    ? GetString(remainingProfiles[0] as Dictionary<string, object>, "accountKey") : "";
+                config["savedAt"] = DateTime.UtcNow.ToString("o");
+                WriteTextAtomically(ConfigFile, serializer.Serialize(config));
+
+                if (Directory.Exists(StateDir))
+                {
+                    string safeKey = Regex.Replace(activeKey ?? "", "[^a-zA-Z0-9_.-]", "_");
+                    if (safeKey.Length > 80) safeKey = safeKey.Substring(0, 80);
+                    if (!string.IsNullOrWhiteSpace(safeKey))
+                        try { File.Delete(Path.Combine(StateDir, "agent-token-" + safeKey + ".dpapi")); } catch { }
+                    if (remainingProfiles.Count == 0)
+                        try { File.Delete(Path.Combine(StateDir, "agent-token.dpapi")); } catch { }
+                }
+                var health = new Dictionary<string, object>
+                {
+                    { "state", "needs-relink" },
+                    { "message", "로컬 NAS Drive 연결을 해제했습니다. 다시 로그인할 수 있습니다." },
+                    { "needsRelink", true },
+                    { "updatedAt", DateTime.UtcNow.ToString("o") }
+                };
+                WriteTextAtomically(HealthFile, serializer.Serialize(health));
+
+                string launcher = Path.Combine(Path.GetDirectoryName(agentExe), "NAS-Drive.exe");
+                if (File.Exists(launcher))
+                {
+                    Process.Start(new ProcessStartInfo(launcher, "--restart-background")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        WorkingDirectory = Path.GetDirectoryName(launcher)
+                    });
+                }
+                return !HasConfiguredProfile();
+            }
+            catch { return false; }
+        }
+
+        private static void WriteTextAtomically(string filePath, string text)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath));
+            string tempPath = filePath + "." + Process.GetCurrentProcess().Id + ".tmp";
+            File.WriteAllText(tempPath, text, new UTF8Encoding(false));
+            try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+            File.Move(tempPath, filePath);
         }
     }
 

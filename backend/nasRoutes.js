@@ -118,8 +118,9 @@ const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.10.29';
-const DEVICE_OFFLINE_AFTER_MS = 9 * 1000;
+const WINDOWS_AGENT_VERSION = '1.10.30';
+const DEVICE_OFFLINE_AFTER_MS = 30 * 1000;
+const DEVICE_CONNECT_GRACE_MS = 90 * 1000;
 let windowsAgentBuildCache = null;
 const agentMutationWindows = new Map();
 const agentLoginAttempts = new Map();
@@ -360,13 +361,18 @@ const getCurrentDeviceOwner = (device = {}) => {
 const getDeviceConnectionState = (device = {}) => {
   if (device.status === 'revoked' || device.revokedAt) return 'revoked';
   const lastSeenMs = new Date(device.lastSeenAt || 0).getTime();
-  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) return 'offline';
+  if (!Number.isFinite(lastSeenMs) || lastSeenMs <= 0) {
+    const registeredMs = new Date(device.stateChangedAt || device.connectedAt || device.createdAt || 0).getTime();
+    if (device.syncState === 'connecting' && Number.isFinite(registeredMs) && registeredMs > 0 && Date.now() - registeredMs <= DEVICE_CONNECT_GRACE_MS) return 'connecting';
+    return 'offline';
+  }
   return Date.now() - lastSeenMs <= DEVICE_OFFLINE_AFTER_MS ? 'online' : 'offline';
 };
 
 const getDeviceReason = (device = {}) => {
   const connectionState = getDeviceConnectionState(device);
   if (connectionState === 'revoked') return { code: 'relationship-revoked', label: '이 계정과 PC의 연결이 해제되었습니다.' };
+  if (connectionState === 'connecting') return { code: 'first-heartbeat-pending', label: 'PC 등록은 완료되었으며 첫 상태 신호를 기다리고 있습니다.' };
   if (connectionState === 'offline') return { code: 'pc-heartbeat-timeout', label: 'PC 상태 신호가 끊겼습니다. PC 전원·인터넷·NAS Drive 실행 상태를 확인하세요.' };
   if (device.syncPaused || device.syncState === 'paused') return { code: 'sync-paused', label: '파일 동기화가 일시 중지되었습니다.' };
   if (device.syncState === 'error') return { code: 'sync-error', label: device.lastError || '파일 동기화 오류가 발생했습니다.' };
@@ -408,6 +414,7 @@ const sanitizeDeviceForResponse = (device = {}) => {
     stateChangedAt: device.stateChangedAt || device.lastSeenAt || device.createdAt || null,
     lastConfirmedAt: device.lastSeenAt || null,
     offlineAfterMs: DEVICE_OFFLINE_AFTER_MS,
+    connectingGraceMs: DEVICE_CONNECT_GRACE_MS,
     syncMode: device.syncMode || 'safe-bidirectional',
     createdAt: device.createdAt || null,
     lastSeenAt: device.lastSeenAt || null,
@@ -4083,7 +4090,7 @@ router.post('/devices/agent/heartbeat', express.json(), (req, res) => {
     const device = getAgentDeviceByToken(deviceId, agentToken);
     if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
     const requestedState = String(req.body?.syncState || 'idle');
-    const allowedState = ['idle', 'connecting', 'syncing', 'up-to-date', 'paused', 'offline', 'error'].includes(requestedState) ? requestedState : 'idle';
+    const allowedState = ['idle', 'connecting', 'syncing', 'up-to-date', 'paused', 'offline', 'updating', 'error'].includes(requestedState) ? requestedState : 'idle';
     const now = new Date().toISOString();
     const updated = advanceDeviceState(device, {
       lastSeenAt: now,
