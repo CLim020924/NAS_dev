@@ -54,6 +54,13 @@ assert.match(windowsLauncherSource, /RegisterProcessOwner\(WebPickerPidFile\)/);
 assert.match(windowsLauncherSource, /SupersedeRegisteredLauncherRole\(WebPickerPidFile\)/);
 assert.match(windowsLauncherSource, /StartBackgroundLauncher\(\);[\s\S]{0,180}HasUsableProfile\(\)/);
 assert.match(windowsLauncherSource, /Process\.Start\(new ProcessStartInfo\(launcher, "--background"\)[\s\S]{0,260}SignalNativeTrayRefresh\(\)/);
+assert.match(windowsLauncherSource, /--restart-background/);
+assert.match(windowsLauncherSource, /NAS Drive 재시작/);
+assert.match(windowsLauncherSource, /CleanupRuntimeStateFiles\(/);
+assert.match(windowsLauncherSource, /DeletePidFileWhenOwnerIsGone\(NativeUiPidFile, launcherExe\)/);
+assert.match(windowsLauncherSource, /DeletePidFileWhenOwnerIsGone\(WebPickerPidFile, launcherExe\)/);
+assert.match(windowsLauncherSource, /RegisterWindowMessage\("TaskbarCreated"\)/);
+assert.match(windowsLauncherSource, /startupRestoreTick == 1 \|\| startupRestoreTick == 3 \|\| startupRestoreTick == 6/);
 
 assert.strictEqual(hasConcurrentFileChange(10_000, 10_000), false);
 assert.strictEqual(hasConcurrentFileChange(11_500, 10_000), false);
