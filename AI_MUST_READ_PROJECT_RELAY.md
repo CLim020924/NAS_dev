@@ -983,3 +983,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 배포 산출물: NAS와 로컬 Agent SHA-256은 `480419249d0cef1a9e749cfc4ddb5fe2019563e23832791c406a5852c5755924`, Setup SHA-256은 `688f338244b27dcac3ea15b73952d89780e8ebdadeea018a4b4e76b0e271aff4`로 일치한다. 서버 배포 버전은 1.10.32다.
 - 프로젝트 메모리: `WIN-INSTALL-WEB-OPEN-116`, `WIN-INSTALL-WEB-DRIVE-OPEN`과 Relation/Code/Patch/Request 기록을 `docs/NAS_PROJECT_LOG.xlsx`에 추가했다. formula error 0, 기존 설명용 `??` 문자열 외 신규 모지바케 없음, 전체 14개 시트 렌더와 변경 범위 시각 검사를 통과했다.
 - 남은 경계: 운영 브라우저의 현재 세션은 로그인되지 않아 실제 사용자 계정의 PC 연동 대화상자 클릭은 자동화하지 않았다. production bundle과 버튼 회귀 gate, native protocol·탐색기 전면 표시를 각각 검증했다. 사용자는 새 1.10.32를 설치한 뒤 설치 직후 탐색기 전면 표시와 웹의 `설치된 NAS Drive 열기`를 한 번 체감 확인하면 된다.
+
+## 2026-09-04 NAS 재부팅 뒤 Drive 빠른 자동 복구·1.10.33
+
+- 사용자 요청: NAS 전원을 껐다 켠 뒤 설정과 Drive 연결이 바로 적용되어야 하며, 컴퓨터 재부팅이나 수동 로그아웃 없이 자동으로 복구되어야 한다.
+- 확인한 직접 원인: Windows Agent가 시작할 때 최초 heartbeat가 실패하면 오류 종류와 무관하게 `authenticated=false`와 `nextAuthRetryAt=현재+5분`을 기록했다. NAS가 꺼져 있거나 OS·네트워크가 부팅 중인 정상적인 timeout·HTTP 503도 인증 거절처럼 처리되어, NAS가 먼저 살아나더라도 첫 자동 복구가 최대 5분 늦어질 수 있었다. 이후 background 연결 실패는 이미 3초 tick 재시도를 사용하므로 초기 경로만 계약이 달랐다.
+- 1.10.33 구현: `initialConnectionRetryDelayMs`가 `HTTP 403`, `Agent 인증 실패`, `WEB_PAIRING_REQUIRED`처럼 확정된 인증 오류에만 5분 지연을 반환한다. NAS 오프라인·timeout·503은 지연 0으로 profile job에 들어가 정상 3초 background tick에서 heartbeat, watcher 준비, pull을 다시 시도한다. NAS가 실제로 네트워크에 돌아오면 Windows를 재부팅하지 않아도 자동 수렴한다.
+- 검증: Agent self-test에 503은 즉시 재시도, 403은 인증 지연이라는 고장 주입을 추가했다. Agent build, Setup C# build/self-test, backend syntax, device sync 보안 회귀, 전체 backend tests 22/22가 통과했다. 문서 변환 통합 2건은 기존 Windows 환경 조건으로 skip됐으며 실패는 0이다.
+- 배포물: 기능 commit은 `67fc02f`다. Agent/Setup 공개 버전은 1.10.33이며 Agent SHA-256은 `76c94c3d1a701d49d271df83df97bf4a667492035e1ff2b14fa87b24561f8855`, Setup SHA-256은 `18231e574b2f84e8dc9fe59509f6876ad07bd50f19108190f2a523044a7609eb`다. Setup FileVersion/ProductVersion은 `1.10.33.0`이다.
+- 현재 서버 경계: 이 작업 시점에 Tailscale `100.80.39.112 chanyoung`은 `offline, last seen 2d ago`이고 ping과 SSH가 실패했으며 공개 사이트는 HTTP 530이다. 이는 Drive의 늦은 재시도와 별개로 NAS OS·전원·유선 네트워크 또는 Tailscale이 실제로 올라오지 않은 상태다. SSH가 복구되기 전에는 systemd 부팅 로그와 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`의 이번 부팅 enabled/active 상태를 확인하거나 운영 파일을 fast-forward할 수 없다. 서버 설정을 추측으로 변경하지 않는다.
+- 프로젝트 메모리: workbook에 `WIN-NAS-REBOOT-RECOVERY-119`, `WIN-NAS-REBOOT-FAST-RECOVERY`와 Relation/Code/Patch/Request를 추가했다. formula error 0, 기존 설명용 `??` 외 신규 인코딩 이상 없음, 관련 6개 시트를 렌더하고 변경 범위를 시각 확인했다. 운영 배포 전까지 상태는 정확히 `부분 확인`으로 둔다.
