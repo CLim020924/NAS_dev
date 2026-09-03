@@ -18,7 +18,7 @@ const {
 } = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.32';
+const AGENT_VERSION = '1.10.33';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -26,6 +26,7 @@ const DIRECT_UPLOAD_MAX_BYTES = 32 * 1024 * 1024;
 const AGENT_CHUNK_SIZE = 8 * 1024 * 1024;
 const PULL_INTERVAL_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 5_000;
+const AUTH_RETRY_DELAY_MS = 5 * 60 * 1000;
 const STATE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'NAS-Sync-Agent');
 const CONFIG_FILE = path.join(STATE_DIR, 'agent-config.json');
 const LEGACY_TOKEN_FILE = path.join(STATE_DIR, 'agent-token.dpapi');
@@ -1111,6 +1112,13 @@ function setProfileHealth(profile, state, message = '') {
     setAgentHealth(state, friendlyMessage, { accountKey: profile?.accountKey || '' });
   }
   setExplorerStatus(profile, state, friendlyMessage);
+}
+
+function initialConnectionRetryDelayMs(error) {
+  // A powered-off/rebooting NAS is not an authentication failure. Retry it on
+  // the normal 3-second background tick so the Drive heals as soon as the NAS
+  // is reachable. Only a definitive credential rejection gets the long pause.
+  return isAgentAuthError(error) ? AUTH_RETRY_DELAY_MS : 0;
 }
 
 function agentStageError(error, stage) {
@@ -3409,6 +3417,7 @@ async function runBackground() {
     const roots = getRoots(profile).filter(root => root.localPath && fs.existsSync(root.localPath));
     let heartbeat = { commands: { paused: false } };
     let authenticated = true;
+    let initialConnectionError = null;
     try {
       setProfileHealth(profile, 'connecting');
       heartbeat = await sendHeartbeat(profile, 'connecting');
@@ -3418,6 +3427,7 @@ async function runBackground() {
       }
     } catch (err) {
       authenticated = false;
+      initialConnectionError = err;
       log('[heartbeat failed]', profile.accountKey, err.message);
       const state = classifyAgentError(err);
       setProfileHealth(profile, state, state === 'offline' ? 'NAS 서버가 꺼져 있거나 인터넷에 연결할 수 없습니다.' : err.message);
@@ -3456,7 +3466,7 @@ async function runBackground() {
       roots,
       authenticated,
       watchersStarted,
-      nextAuthRetryAt: authenticated ? 0 : Date.now() + 5 * 60 * 1000
+      nextAuthRetryAt: authenticated ? 0 : Date.now() + initialConnectionRetryDelayMs(initialConnectionError)
     });
   }
   clearInterval(startupHeartbeatTimer);
@@ -3517,7 +3527,7 @@ async function runBackground() {
         log('[pull failed]', job.profile.accountKey, err.agentStage || 'unknown-stage', err.agentRelPath || '', err.code || '', err.message);
         if (isAgentAuthError(err)) {
           job.authenticated = false;
-          job.nextAuthRetryAt = Date.now() + 5 * 60 * 1000;
+          job.nextAuthRetryAt = Date.now() + AUTH_RETRY_DELAY_MS;
         }
         const state = classifyAgentError(err);
         setProfileHealth(job.profile, state, state === 'offline' ? 'NAS 서버가 꺼져 있거나 인터넷에 연결할 수 없습니다.' : err.message);
@@ -3556,6 +3566,8 @@ function runSelfTest() {
   if (safeAccountKey('a/b') !== 'a_b') throw new Error('Account key sanitization test failed.');
   if (classifyAgentError(new Error('HTTP 503: tunnel unavailable')) !== 'offline') throw new Error('NAS offline classification test failed.');
   if (classifyAgentError(new Error('HTTP 403: Agent 인증 실패')) !== 'needs-relink') throw new Error('Agent relink classification test failed.');
+  if (initialConnectionRetryDelayMs(new Error('HTTP 503: tunnel unavailable')) !== 0) throw new Error('NAS reboot immediate retry test failed.');
+  if (initialConnectionRetryDelayMs(new Error('HTTP 403: Agent 인증 실패')) !== AUTH_RETRY_DELAY_MS) throw new Error('Agent auth retry delay test failed.');
   const iconProbe = createStatusIconBuffer('offline', EXPLORER_STATUS_COLORS.offline);
   if (iconProbe.readUInt16LE(2) !== 1 || iconProbe.readUInt16LE(4) !== 1 || iconProbe.length < 1000) throw new Error('Explorer status icon generation test failed.');
   if (!explorerStatusLabel('needs-relink').includes('다시 연결')) throw new Error('Explorer relink status label test failed.');

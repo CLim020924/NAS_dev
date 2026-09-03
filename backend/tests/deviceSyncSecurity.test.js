@@ -62,6 +62,8 @@ assert.match(windowsAgentSource, /if \(!profile\?\.deviceId\) \{[\s\S]{0,900}pro
 assert.match(windowsAgentSource, /Persist the local[\s\S]{0,420}saveConfig\(nextConfig\);[\s\S]{0,300}devices\/agent\/logout/);
 assert.match(windowsAgentSource, /restartBackground\(\);[\s\S]{0,180}await sendHeartbeat\(profile, 'connecting'\);[\s\S]{0,300}first heartbeat deferred to background/);
 assert.match(windowsAgentSource, /post-registration provider setup deferred/);
+assert.match(windowsAgentSource, /initialConnectionRetryDelayMs\(initialConnectionError\)/);
+assert.match(windowsAgentSource, /return isAgentAuthError\(error\) \? AUTH_RETRY_DELAY_MS : 0/);
 assert.match(windowsAgentSource, /unprotectAgentToken\(profile\.accountKey\) !== profile\.agentToken/);
 assert.match(windowsAgentSource, /연결 생성을 취소했습니다/);
 assert.match(windowsLauncherSource, /AcquireNativeUiMutexWithPriority\(\)/);
