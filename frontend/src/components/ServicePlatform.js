@@ -16,7 +16,8 @@ import socket from '../socket';
 import MeetingApp from './MeetingApp';
 import DocumentStudio from './DocumentStudio/DocumentStudio';
 import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
-import NoteStudio from './NoteStudio/NoteStudio';
+
+const NoteStudio = React.lazy(() => import('./NoteStudio/NoteStudio'));
 
 const appOpenMode = () => localStorage.getItem('platform_app_open_mode') || 'window';
 const DEVICE_OFFLINE_AFTER_MS = 30000;
@@ -451,7 +452,7 @@ function ServicePlatform() {
                 setInlineApp(null);
               }}
             />
-          ) : inlineApp.id === 'document-workspace' ? <DocumentWorkspace /> : inlineApp.id === 'document-studio' ? <DocumentStudio /> : inlineApp.id === 'note-studio' ? <NoteStudio /> : null}
+          ) : inlineApp.id === 'document-workspace' ? <DocumentWorkspace /> : inlineApp.id === 'document-studio' ? <DocumentStudio /> : inlineApp.id === 'note-studio' ? <React.Suspense fallback={<Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress size={30} /></Box>}><NoteStudio /></React.Suspense> : null}
         </Box>
       </Box>
     );

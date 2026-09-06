@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Box, Button, IconButton, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, IconButton, Paper, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CropSquareIcon from '@mui/icons-material/CropSquare';
 import RemoveIcon from '@mui/icons-material/Remove';
@@ -11,8 +11,9 @@ import { useWindows } from '../contexts/WindowContext';
 import MeetingApp from './MeetingApp';
 import DocumentStudio from './DocumentStudio/DocumentStudio';
 import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
-import NoteStudio from './NoteStudio/NoteStudio';
 import { getAppWindowLayerZIndex } from './windowLayerPolicy';
+
+const NoteStudio = React.lazy(() => import('./NoteStudio/NoteStudio'));
 
 class AppWindowErrorBoundary extends React.Component {
   constructor(props) {
@@ -79,7 +80,7 @@ const GlobalAppWindowLayer = () => {
       return <DocumentWorkspace />;
     }
     if (win.appId === 'note-studio') {
-      return <NoteStudio />;
+      return <React.Suspense fallback={<Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress size={30} /></Box>}><NoteStudio /></React.Suspense>;
     }
     return null;
   };
