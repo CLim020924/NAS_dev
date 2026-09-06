@@ -72,6 +72,9 @@ The current workbook uses these key sheets:
 - `Patch_Log`: problem/request/cause/solution/verification/risk records.
 - `Request_Archive`: original user requests.
 - `Generated_Check`: workbook generation and verification details.
+- `보류 작업`: explicitly deferred or blocked work, its restart condition, and
+  the next safe action. Update the existing row when work resumes; do not erase
+  its history.
 
 ## How Much To Read
 
@@ -140,6 +143,9 @@ operational diagnosis:
 3. If a new feature area appears, add a Feature ID to `Feature_Index`.
 4. If dependencies changed, update `Relation_Map`.
 5. If a new operational safety rule appears, update `Do_Not_Break`.
+6. If work is intentionally deferred or cannot be completed in the current
+   request, add it to `보류 작업`. When it resumes, update that same row with
+   the new status and latest evidence instead of creating an unrelated duplicate.
 
 ## Per-Request Relay And Git Record
 

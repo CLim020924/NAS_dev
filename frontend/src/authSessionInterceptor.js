@@ -38,6 +38,7 @@ axios.interceptors.response.use(
           'last_logout_reason',
           isSessionReplaced ? 'SESSION_REPLACED' : 'SESSION_EXPIRED'
         );
+        window.dispatchEvent(new Event('nas:user-updated'));
       } catch (e) {}
 
       if (isSessionReplaced) {

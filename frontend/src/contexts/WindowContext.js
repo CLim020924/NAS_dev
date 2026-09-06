@@ -1,6 +1,13 @@
-import React, { createContext, useState, useContext, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { BINARY_VIEWER_EXTENSIONS } from '../utils/officeFormats';
+import {
+  LEGACY_FILE_MANAGER_PATH_KEY,
+  getFileManagerPathStorageKey,
+  getWorkspaceIdentityTransition,
+  readStoredWorkspaceIdentity,
+  readWorkspaceFileManagerPath,
+} from './windowWorkspaceIdentity';
 
 const WindowContext = createContext();
 
@@ -31,10 +38,15 @@ const fitWindowToViewport = (win) => {
 };
 
 export const WindowProvider = ({ children }) => {
+  const initialWorkspaceIdentity = readStoredWorkspaceIdentity(localStorage);
   const [openWindows, setOpenWindows] = useState([]);
   const [topZIndex, setTopZIndex] = useState(100);
   const [taskbarOrder, setTaskbarOrder] = useState([]);
-  const [fileManagerPath, setFileManagerPath] = useState(() => localStorage.getItem('nas_file_manager_path') || '/');
+  const [workspaceIdentity, setWorkspaceIdentity] = useState(initialWorkspaceIdentity);
+  const workspaceIdentityRef = useRef(initialWorkspaceIdentity);
+  const [fileManagerPath, setFileManagerPath] = useState(() => (
+    readWorkspaceFileManagerPath(localStorage, initialWorkspaceIdentity)
+  ));
   
   // [추가] 현재 선택된(포커스된) 대상을 추적합니다. 기본값은 바탕화면('desktop')
   const [focusedContext, setFocusedContext] = useState('desktop');
@@ -66,8 +78,42 @@ export const WindowProvider = ({ children }) => {
   }, [fitOpenWindows]);
 
   useEffect(() => {
-    localStorage.setItem('nas_file_manager_path', fileManagerPath || '/');
-  }, [fileManagerPath]);
+    localStorage.removeItem(LEGACY_FILE_MANAGER_PATH_KEY);
+  }, []);
+
+  useEffect(() => {
+    const key = getFileManagerPathStorageKey(workspaceIdentity);
+    if (key) localStorage.setItem(key, fileManagerPath || '/');
+  }, [fileManagerPath, workspaceIdentity]);
+
+  useEffect(() => {
+    const synchronizeWorkspaceIdentity = () => {
+      const nextIdentity = readStoredWorkspaceIdentity(localStorage);
+      const transition = getWorkspaceIdentityTransition(
+        localStorage,
+        workspaceIdentityRef.current,
+        nextIdentity
+      );
+      if (!transition) return;
+
+      workspaceIdentityRef.current = transition.identity;
+      setWorkspaceIdentity(transition.identity);
+      setOpenWindows(transition.openWindows);
+      setTaskbarOrder(transition.taskbarOrder);
+      setFocusedContext(transition.focusedContext);
+      setTopZIndex(transition.topZIndex);
+      setFileManagerPath(transition.fileManagerPath);
+    };
+
+    window.addEventListener('storage', synchronizeWorkspaceIdentity);
+    window.addEventListener('nas:user-updated', synchronizeWorkspaceIdentity);
+    const identityTimer = window.setInterval(synchronizeWorkspaceIdentity, 500);
+    return () => {
+      window.removeEventListener('storage', synchronizeWorkspaceIdentity);
+      window.removeEventListener('nas:user-updated', synchronizeWorkspaceIdentity);
+      window.clearInterval(identityTimer);
+    };
+  }, []);
 
   useEffect(() => {
     setTaskbarOrder(prev => {

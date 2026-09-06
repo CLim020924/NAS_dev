@@ -80,6 +80,7 @@ const TopBar = ({
     }
     localStorage.removeItem('user');
     localStorage.removeItem('nas_session_left_at');
+    window.dispatchEvent(new Event('nas:user-updated'));
     window.location.replace('/login');
   };
 

@@ -59,6 +59,9 @@ NAS_PROJECT_LOG.xlsx
 - `Patch_Log`: 요청/문제/원인/해결/검증/잔여 위험 기록.
 - `Request_Archive`: 사용자 요청 원문 기록.
 - `Generated_Check`: workbook 생성 및 검증 근거.
+- `보류 작업`: 명시적으로 미룬 작업, 현재 확인 범위, 재개 조건, 다음 안전
+  작업을 추적하는 원장. 작업을 재개하거나 완료해도 행을 삭제하지 않고 같은
+  행의 상태와 최근 갱신일을 변경합니다.
 
 ## Required Start Procedure
 
@@ -78,6 +81,10 @@ NAS_PROJECT_LOG.xlsx
 5. `Feature_Index`
 6. `Relation_Map`
 7. 관련 기능별 `Code_Map`, `API_Routes`, `Socket_Events`, topic sheet
+
+현재 요청에서 끝내지 못하거나 사용자가 나중으로 미룬 작업이 있으면 완료 전에
+`보류 작업` 시트에 등록합니다. 기존 보류 작업을 재개하는 경우 새 항목을
+중복으로 만들지 않고 기존 보류 ID의 상태, 검증 결과, 최근 갱신일을 갱신합니다.
 
 ## Reading Strategy
 
