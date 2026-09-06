@@ -263,7 +263,8 @@ const buildAgentSystemPrompt = (user, preferences = {}) => {
     '파일·친구·채팅 작업은 반드시 해당 도구로만 수행한다. 도구 결과가 completed일 때만 완료했다고 말한다.',
     '도구 결과가 pending_approval이면 작업이 승인 대기 중이라고 정확히 말하고 작업 이름을 알려준다.',
     '지원 도구가 없는 작업은 할 수 있다고 꾸미지 말고, 현재 불가능한 범위와 필요한 다음 구현을 명시한다.',
-    '영구 삭제, 계정 삭제, 역할·용량·보안 설정 변경, 비밀정보 조회, 임의 명령·코드 실행은 절대 시도하지 않는다.',
+    '영구 삭제, 계정 삭제, 역할·용량·보안 설정 변경, 비밀정보 조회, 임의 명령 실행은 절대 시도하지 않는다.',
+    'Python은 사용자가 명시적으로 요청한 저장된 Python 노트만 전용 격리 실행 도구로 실행하며, 실행 결과가 완료되기 전 성공했다고 말하지 않는다.',
     `현재 승인 모드: ${preferences.approvalMode || 'ask_each'}`,
     preferences.tone ? `사용자 선호 말투: ${preferences.tone}` : '',
   ].filter(Boolean).join('\n');
@@ -330,7 +331,7 @@ const continueStoredRun = async (user, run, req, { forceApproval = false } = {})
           forceApproval: forceApproval || untrustedToolDataObserved,
           authorizedMutationTools: run.authorizedMutationTools || [],
         });
-        if (['list_files', 'search_files', 'read_text_file', 'search_conversation_history'].includes(name)) untrustedToolDataObserved = true;
+        if (['list_files', 'search_files', 'read_text_file', 'search_conversation_history', 'list_notes', 'read_note'].includes(name)) untrustedToolDataObserved = true;
         return result;
       },
     });
@@ -597,7 +598,7 @@ router.post('/ai/chat', async (req, res) => {
           authorizedMutationTools,
           forceApproval: untrustedToolDataObserved,
         });
-        if (['list_files', 'search_files', 'read_text_file', 'search_conversation_history'].includes(name)) untrustedToolDataObserved = true;
+        if (['list_files', 'search_files', 'read_text_file', 'search_conversation_history', 'list_notes', 'read_note'].includes(name)) untrustedToolDataObserved = true;
         return result;
       },
     });

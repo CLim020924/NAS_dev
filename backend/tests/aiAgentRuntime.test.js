@@ -41,6 +41,42 @@ test('조회한 파일의 지시만으로 변경 도구를 실행할 수 없고 
   assert.ok(_test.deriveAuthorizedMutationTools('보고서를 날짜별로 정리해줘').includes('organize_files_by_modified_date'));
   assert.ok(_test.deriveAuthorizedMutationTools('민수에게 보고서 파일을 보내줘').includes('send_file_to_user'));
   assert.ok(_test.deriveAuthorizedMutationTools('오래된 파일을 휴지통으로 삭제해줘').includes('trash_item'));
+  assert.ok(_test.deriveAuthorizedMutationTools('파이썬 노트를 실행해줘').includes('run_python_note'));
+  assert.ok(_test.deriveAuthorizedMutationTools('회의 노트를 만들어줘').includes('create_note'));
+});
+
+test('노트와 Python 도구는 기존 승인 위험 등급을 우회하지 않는다', () => {
+  assert.equal(_test.actionSpec('create_note', { title: 'x', type: 'text', content: '', language: 'plaintext', notebook_id: null, parent_id: null }).risk, 'safe');
+  assert.equal(_test.actionSpec('trash_note', { note_id: 'n', expected_revision: 1 }).risk, 'reversible');
+  assert.equal(_test.actionSpec('run_python_note', { note_id: 'n', expected_revision: 1 }).risk, 'compute');
+  assert.equal(_test.mayAutoExecute('compute', 'auto_all'), false);
+});
+
+test('노트 생성은 명시적 의도와 정책을 거치고 Python 실행은 auto_all에서도 승인 대기한다', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-ai-note-tools-'));
+  const runtimePath = path.resolve(__dirname, '..', 'aiAgentRuntime.js');
+  const storePath = path.resolve(__dirname, '..', 'aiAgentStore.js');
+  const script = `
+    const runtime = require(${JSON.stringify(runtimePath)});
+    const store = require(${JSON.stringify(storePath)});
+    const user = { loginId: 'note-tool-test', userUid: 'note-tool-test', role: 'USER' };
+    (async () => {
+      store.setPreferences(user, { approvalMode: 'auto_safe' });
+      const calls = [];
+      const context = { authorizedMutationTools: ['create_note'], platformCall: async (method, apiPath, body) => { calls.push({ method, apiPath, body }); return { success: true, note: { id: 'note-1' } }; } };
+      const created = await runtime.runTool(user, 'create_note', { title: '회의', type: 'text', content: '내용', language: 'plaintext', notebook_id: null, parent_id: null }, context);
+      if (created.status !== 'completed' || calls[0].apiPath !== '/note-studio/notes') process.exit(2);
+      store.setPreferences(user, { approvalMode: 'auto_all' });
+      const run = await runtime.runTool(user, 'run_python_note', { note_id: 'note-1', expected_revision: 1 }, { authorizedMutationTools: ['run_python_note'], platformCall: context.platformCall });
+      if (run.status !== 'pending_approval') process.exit(3);
+    })().catch((error) => { console.error(error); process.exit(4); });
+  `;
+  try {
+    const result = spawnSync(process.execPath, ['-e', script], { env: { ...process.env, AI_AGENT_DATA_ROOT: tempRoot }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('날짜별 정리는 승인 후 원본이 바뀌면 실행 계획을 거부한다', () => {

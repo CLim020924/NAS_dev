@@ -34,6 +34,11 @@ const MUTATION_INTENT_RULES = {
   set_user_blocked: /차단|차단.*해제|차단해제/i,
   send_chat_message: /(?:채팅|메시지|말).*(?:보내|전송)|(?:보내|전송).*(?:채팅|메시지|말)|에게.*(?:알려|말해)/i,
   send_file_to_user: /(?:파일|폴더|문서).*(?:보내|전송|공유)|(?:보내|전송|공유).*(?:파일|폴더|문서)/i,
+  create_note: /(?:노트|페이지).*(?:생성|만들|작성)|(?:생성|만들|작성).*(?:노트|페이지)/i,
+  update_note: /(?:노트|페이지).*(?:수정|편집|저장|바꿔)|(?:수정|편집|저장|바꿔).*(?:노트|페이지)/i,
+  trash_note: /(?:노트|페이지).*(?:삭제|휴지통)|(?:삭제|휴지통).*(?:노트|페이지)/i,
+  create_office_document: /(?:문서|워드|엑셀|파워포인트|한글|docx|xlsx|pptx|hwpx).*(?:생성|만들)|(?:생성|만들).*(?:문서|워드|엑셀|파워포인트|한글|docx|xlsx|pptx|hwpx)/i,
+  run_python_note: /(?:파이썬|python).*(?:실행|돌려)|(?:실행|돌려).*(?:파이썬|python)/i,
 };
 
 const schema = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -44,6 +49,8 @@ const TOOL_DEFINITIONS = [
   { type: 'function', name: 'search_files', description: '로그인 사용자의 NAS 범위에서 이름으로 파일과 폴더를 검색한다.', strict: true, parameters: schema({ query: stringProp('검색어'), path: stringProp('검색 시작 경로') }, ['query', 'path']) },
   { type: 'function', name: 'read_text_file', description: '권한 범위의 텍스트 또는 코드 파일을 읽는다.', strict: true, parameters: schema({ path: stringProp('읽을 파일 경로') }, ['path']) },
   { type: 'function', name: 'search_conversation_history', description: '이 AI 대화창에 실제 저장된 이전 대화를 정확한 키워드로 검색한다. 기억을 추측하지 않는다.', strict: true, parameters: schema({ query: stringProp('찾을 문장 또는 키워드') }, ['query']) },
+  { type: 'function', name: 'list_notes', description: '현재 계정의 Note Studio 노트를 제목과 내용 검색어로 조회한다. 전체 목록은 빈 문자열을 사용한다.', strict: true, parameters: schema({ query: stringProp('검색어. 전체 목록은 빈 문자열') }, ['query']) },
+  { type: 'function', name: 'read_note', description: 'Note Studio 노트 ID로 저장된 최신 제목, 형식, 내용, revision을 읽는다.', strict: true, parameters: schema({ note_id: stringProp('조회할 노트 ID') }, ['note_id']) },
   { type: 'function', name: 'create_folder', description: 'NAS에 폴더를 만든다. 승인 정책에 따라 즉시 실행하거나 승인 대기한다.', strict: true, parameters: schema({ path: stringProp('생성할 폴더 경로') }, ['path']) },
   { type: 'function', name: 'write_text_file', description: '텍스트 파일을 새로 만들거나 안전 백업 후 덮어쓴다.', strict: true, parameters: schema({ path: stringProp('저장 경로'), content: stringProp('UTF-8 내용') }, ['path', 'content']) },
   { type: 'function', name: 'append_text_file', description: '텍스트 파일 끝에 내용을 추가한다.', strict: true, parameters: schema({ path: stringProp('대상 경로'), content: stringProp('추가할 UTF-8 내용') }, ['path', 'content']) },
@@ -55,6 +62,11 @@ const TOOL_DEFINITIONS = [
   { type: 'function', name: 'set_user_blocked', description: '정확히 식별된 다른 사용자를 차단하거나 차단 해제한다.', strict: true, parameters: schema({ user: stringProp('로그인 ID 또는 표시 이름'), blocked: { type: 'boolean', description: 'true면 차단, false면 해제' } }, ['user', 'blocked']) },
   { type: 'function', name: 'send_chat_message', description: '친구인 정확한 사용자에게 NAS 채팅 메시지를 보낸다.', strict: true, parameters: schema({ user: stringProp('로그인 ID 또는 표시 이름'), text: stringProp('보낼 메시지') }, ['user', 'text']) },
   { type: 'function', name: 'send_file_to_user', description: '권한 범위의 NAS 파일 또는 폴더를 친구인 정확한 사용자에게 채팅 첨부로 보낸다.', strict: true, parameters: schema({ user: stringProp('로그인 ID 또는 표시 이름'), path: stringProp('보낼 NAS 파일 또는 폴더 경로'), message: stringProp('첨부와 함께 보낼 메시지. 없으면 빈 문자열') }, ['user', 'path', 'message']) },
+  { type: 'function', name: 'create_note', description: '현재 계정 Note Studio에 Markdown, TXT 또는 코드 노트를 만든다.', strict: true, parameters: schema({ title: stringProp('노트 제목'), type: { type: 'string', enum: ['markdown', 'text', 'code'] }, content: stringProp('노트 내용'), language: stringProp('코드 언어. 코드가 아니면 plaintext'), notebook_id: { type: ['string', 'null'] }, parent_id: { type: ['string', 'null'] } }, ['title', 'type', 'content', 'language', 'notebook_id', 'parent_id']) },
+  { type: 'function', name: 'update_note', description: '최신 revision과 정확히 일치할 때 Note Studio 노트 제목이나 내용을 새 버전으로 저장한다.', strict: true, parameters: schema({ note_id: stringProp('수정할 노트 ID'), expected_revision: { type: 'integer' }, title: stringProp('새 제목'), content: stringProp('새 내용') }, ['note_id', 'expected_revision', 'title', 'content']) },
+  { type: 'function', name: 'trash_note', description: 'Note Studio 노트를 복구 가능한 휴지통으로 이동한다.', strict: true, parameters: schema({ note_id: stringProp('휴지통으로 옮길 노트 ID'), expected_revision: { type: 'integer' } }, ['note_id', 'expected_revision']) },
+  { type: 'function', name: 'create_office_document', description: '실제 노트북 페이지 폴더에 빈 Office 또는 HWPX 문서를 만들고 해당 노트에 연결한다.', strict: true, parameters: schema({ note_id: stringProp('문서를 연결할 노트 ID'), expected_revision: { type: 'integer' }, format: { type: 'string', enum: ['docx', 'xlsx', 'pptx', 'hwpx'] }, file_name: stringProp('확장자를 제외한 파일 이름') }, ['note_id', 'expected_revision', 'format', 'file_name']) },
+  { type: 'function', name: 'run_python_note', description: '저장된 Python 코드 노트를 네트워크 없는 제한 컨테이너에서 실행한다.', strict: true, parameters: schema({ note_id: stringProp('Python 코드 노트 ID'), expected_revision: { type: 'integer' } }, ['note_id', 'expected_revision']) },
 ];
 
 const defaults = () => ({ approvalMode: 'ask_each', dailyTokenLimit: config.AI_DEFAULT_DAILY_TOKEN_LIMIT });
@@ -172,6 +184,11 @@ const actionSpec = (name, args) => {
     set_user_blocked: { title: args.blocked ? '사용자 차단' : '차단 해제', risk: 'external', actionType: name, targetUser: args.user, blocked: args.blocked },
     send_chat_message: { title: '채팅 메시지 보내기', risk: 'external', actionType: name, targetUser: args.user, text: args.text },
     send_file_to_user: { title: '파일/폴더 전송', risk: 'external', actionType: name, targetUser: args.user, targetPath: args.path, text: args.message },
+    create_note: { title: '노트 생성', risk: 'safe', actionType: name, notePayload: { title: args.title, type: args.type, content: args.content, language: args.language, notebookId: args.notebook_id, parentId: args.parent_id } },
+    update_note: { title: '노트 수정', risk: 'safe', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision, notePayload: { title: args.title, content: args.content, reason: 'ai-agent' } },
+    trash_note: { title: '노트를 휴지통으로 이동', risk: 'reversible', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision },
+    create_office_document: { title: `${String(args.format || '').toUpperCase()} 문서 생성`, risk: 'safe', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision, format: args.format, fileName: args.file_name },
+    run_python_note: { title: 'Python 노트 격리 실행', risk: 'compute', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision },
   };
   return map[name];
 };
@@ -320,6 +337,23 @@ const executeAction = async (user, actionId, { platformCall }) => {
         throw err;
       }
       result = { movedCount: moved.length, destinationFolder: action.destinationFolder, granularity: action.granularity };
+    } else if (action.actionType === 'create_note') {
+      result = await platformCall('POST', '/note-studio/notes', action.notePayload);
+    } else if (action.actionType === 'update_note') {
+      result = await platformCall('PATCH', `/note-studio/notes/${encodeURIComponent(action.noteId)}`, {
+        expectedRevision: action.expectedRevision,
+        ...action.notePayload,
+      });
+    } else if (action.actionType === 'trash_note') {
+      result = await platformCall('DELETE', `/note-studio/notes/${encodeURIComponent(action.noteId)}`, { expectedRevision: action.expectedRevision });
+    } else if (action.actionType === 'create_office_document') {
+      result = await platformCall('POST', `/note-studio/notes/${encodeURIComponent(action.noteId)}/office-documents`, {
+        expectedRevision: action.expectedRevision,
+        format: action.format,
+        fileName: action.fileName,
+      });
+    } else if (action.actionType === 'run_python_note') {
+      result = await platformCall('POST', `/note-studio/notes/${encodeURIComponent(action.noteId)}/python/run`, { expectedRevision: action.expectedRevision });
     } else {
       const target = await resolveExactUser(platformCall, action.targetUserLoginId || action.targetUser);
       if (action.targetUserUid && target.userUid !== action.targetUserUid) {
@@ -356,6 +390,8 @@ const runTool = async (user, name, args, context) => {
   if (name === 'search_files') return searchFiles(user, args.query, args.path);
   if (name === 'read_text_file') return readTextFile(user, args.path);
   if (name === 'search_conversation_history') return searchMessages(user, args.query, 20);
+  if (name === 'list_notes') return context.platformCall('GET', `/note-studio/notes?q=${encodeURIComponent(args.query || '')}`);
+  if (name === 'read_note') return context.platformCall('GET', `/note-studio/notes/${encodeURIComponent(args.note_id)}`);
   const spec = actionSpec(name, args);
   if (!spec) throw new Error('허용되지 않은 도구입니다.');
   if (!new Set(context.authorizedMutationTools || []).has(name)) {
