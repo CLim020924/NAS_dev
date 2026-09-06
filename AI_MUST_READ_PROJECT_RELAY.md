@@ -1177,3 +1177,8 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 사용자 교정: 직전 기록의 `현재 페이지의 문서 경로` 고정 해석은 너무 좁다. 사용자가 노트북 내부 트리의 특정 폴더를 우클릭하거나, 파일 영역에서 현재 보고 있는 경로 또는 다른 노트북 기능을 통해 Office 문서 생성을 시작했다면 그 **명령 발생 경로**가 새 문서의 기본 저장 위치다.
 - 교정된 동작: 문서 생성 command는 `notebookId`, `invocationDirectory`, 선택된 page/block ID와 당시 directory revision을 draft context에 저장한다. 작성 후 첫 저장 위치 선택기는 `invocationDirectory`를 기본으로 열고, 사용자가 계정 내 다른 NAS 위치를 선택할 수 있다. 명시적 폴더 없이 page 본문에서 호출했을 때만 해당 page의 backing directory를 fallback으로 사용하고, 그것도 없으면 notebook root를 사용한다.
 - 경계 변화: 작성 중 원래 폴더가 이동·삭제되거나 권한이 바뀌면 오래된 문자열 경로에 자동 저장하지 않고 stable directory identity로 현재 위치를 다시 해석한다. 해석 실패 시 notebook root로 몰래 바꾸지 않고 위치 선택을 요구한다. 다른 위치에 저장해도 호출 지점에는 문서 reference block/항목을 유지하며 실제 최종 위치를 표시한다.
+
+## 2026-09-06 본문 내 Office 문서 링크 블록 UX 확정
+
+- 사용자 확인: Notion 본문에서 글을 쓰다가 새 하위 페이지를 만들면 현재 문장 아래에 페이지 링크가 생기는 것처럼, 노트 본문의 현재 caret/block 위치에서 Office 문서를 생성하면 작성·첫 저장이 끝난 뒤 바로 그 위치에 클릭 가능한 문서 reference block이 생성되어야 한다.
+- 확정 동작: reference block은 실제 파일을 내장하거나 복제하지 않고 stable document ID, 표시 이름, 형식, 현재 NAS 위치, 최신 저장 상태를 가진다. 클릭하면 DOCX/XLSX/PPTX는 OnlyOffice, HWP/HWPX는 RHWP 편집 창을 전면에 연다. 파일을 다른 NAS 경로에 저장하거나 이후 이동·이름 변경해도 block은 같은 문서를 계속 가리키며, 삭제·권한 상실이면 명확한 연결 끊김 상태와 다시 연결을 제공한다.
