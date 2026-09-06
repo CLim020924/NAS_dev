@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.11.0.0")]
-[assembly: AssemblyFileVersion("1.11.0.0")]
+[assembly: AssemblyVersion("1.11.1.0")]
+[assembly: AssemblyFileVersion("1.11.1.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.11.0";
+        internal const string ProductVersion = "1.11.1";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
