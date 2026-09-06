@@ -61,7 +61,7 @@ const {
   sanitizeFileName: sanitizeDocumentStudioFileName
 } = require('./documentStudioService');
 const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankDocumentService');
-const { createNoteStudioStore } = require('./noteStudioService');
+const { createNoteStudioStore, getFilesystemIdentity, sameFilesystemIdentity, findPathByFilesystemIdentity } = require('./noteStudioService');
 const { createManagedPythonWorker } = require('./managedPythonWorker');
 const {
   SHARED_ROOT_NAME,
@@ -1256,9 +1256,39 @@ router.post('/note-studio/notes/:noteId/attachments', verifyToken, express.json(
     const result = getNoteStudioStore(req.user).addAttachment(req.params.noteId, {
       name: path.basename(targetPath),
       path: relativePath ? `/${relativePath}` : '/',
-      kind: stat.isDirectory() ? 'folder' : 'file'
+      kind: stat.isDirectory() ? 'folder' : 'file',
+      identity: getFilesystemIdentity(targetPath)
     }, req.body?.expectedRevision);
     return res.status(201).json({ success: true, ...result });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.get('/note-studio/notes/:noteId/attachments/:attachmentId/resolve', verifyToken, (req, res) => {
+  try {
+    const store = getNoteStudioStore(req.user);
+    const note = store.get(req.params.noteId);
+    const attachment = (note.attachments || []).find((item) => item.id === req.params.attachmentId);
+    if (!attachment) return res.status(404).json({ error: '첨부 항목을 찾을 수 없습니다.' });
+    const { basePath, targetPath } = getValidatedPath(req.user, attachment.path);
+    let resolvedPath = null;
+    let identity = attachment.identity || null;
+
+    if (fs.existsSync(targetPath)) {
+      const currentIdentity = getFilesystemIdentity(targetPath);
+      if (!identity || sameFilesystemIdentity(identity, currentIdentity)) {
+        resolvedPath = targetPath;
+        identity = currentIdentity;
+      }
+    }
+    if (!resolvedPath && identity) resolvedPath = findPathByFilesystemIdentity(basePath, identity);
+    if (!resolvedPath) return res.status(409).json({ error: '연결된 파일이 이동되었거나 삭제되었습니다. NAS 파일을 다시 첨부해 주세요.', code: 'NOTE_ATTACHMENT_MISSING', attachment });
+
+    const relativePath = toNasRelativePath(basePath, resolvedPath);
+    let latestNote = note;
+    if (relativePath !== attachment.path || !attachment.identity) {
+      latestNote = store.updateAttachmentLocation(note.id, attachment.id, { path: relativePath, identity }, req.query.expectedRevision);
+    }
+    return res.json({ success: true, path: relativePath, name: path.basename(resolvedPath), kind: attachment.kind, note: latestNote });
   } catch (error) { return sendNoteStudioError(res, error); }
 });
 
@@ -1315,7 +1345,7 @@ router.post('/note-studio/notes/:noteId/office-documents', verifyToken, express.
     const fullPath = relativePath ? `/${relativePath}` : '/';
     let attached;
     try {
-      attached = store.addAttachment(note.id, { name: path.basename(targetPath), path: fullPath, kind: 'file' }, note.revision);
+      attached = store.addAttachment(note.id, { name: path.basename(targetPath), path: fullPath, kind: 'file', identity: getFilesystemIdentity(targetPath) }, note.revision);
     } catch (error) {
       safeRmSync(targetPath);
       targetPath = '';

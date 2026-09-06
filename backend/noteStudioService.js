@@ -9,6 +9,7 @@ const NOTEBOOK_INDEX_VERSION = 1;
 const MAX_NOTE_BYTES = 5 * 1024 * 1024;
 const MAX_VERSIONS_PER_NOTE = 100;
 const ALLOWED_TYPES = new Set(['block', 'markdown', 'text', 'code']);
+const ATTACHMENT_SCAN_SKIP = new Set(['.note_studio', '.agent_trash', '.agent_versions', '.ai_backups', '.agent_incoming', 'chat_tmp', 'backup']);
 
 const nowIso = () => new Date().toISOString();
 const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
@@ -80,6 +81,51 @@ const validateContent = (type, content) => {
 const normalizeAttachmentPath = (value) => {
   const normalized = path.posix.normalize(`/${String(value || '').replace(/\\/g, '/').replace(/^\/+/, '')}`);
   return normalized === '/.' ? '/' : normalized;
+};
+
+const getFilesystemIdentity = (targetPath) => {
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isSymbolicLink()) return null;
+  return {
+    device: String(stat.dev),
+    inode: String(stat.ino),
+    kind: stat.isDirectory() ? 'folder' : stat.isFile() ? 'file' : 'other',
+    birthtimeMs: String(Math.trunc(stat.birthtimeMs || 0))
+  };
+};
+
+const sameFilesystemIdentity = (left, right) => !!left && !!right
+  && String(left.device) === String(right.device)
+  && String(left.inode) === String(right.inode)
+  && String(left.kind) === String(right.kind)
+  && (!left.birthtimeMs || !right.birthtimeMs || String(left.birthtimeMs) === String(right.birthtimeMs));
+
+const findPathByFilesystemIdentity = (rootPath, identity, { maxVisited = 60000, maxDepth = 12 } = {}) => {
+  if (!identity?.device || !identity?.inode) return null;
+  const root = path.resolve(rootPath);
+  let visited = 0;
+  const visit = (directory, depth) => {
+    if (depth > maxDepth || visited >= maxVisited) return null;
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); }
+    catch { return null; }
+    for (const entry of entries) {
+      if (visited >= maxVisited) return null;
+      visited += 1;
+      if (entry.name.startsWith('.') || ATTACHMENT_SCAN_SKIP.has(entry.name)) continue;
+      const candidate = path.join(directory, entry.name);
+      try {
+        const currentIdentity = getFilesystemIdentity(candidate);
+        if (sameFilesystemIdentity(identity, currentIdentity)) return candidate;
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+          const found = visit(candidate, depth + 1);
+          if (found) return found;
+        }
+      } catch {}
+    }
+    return null;
+  };
+  return visit(root, 0);
 };
 
 const createNoteStudioStore = ({ personalRootPath }) => {
@@ -386,6 +432,12 @@ const createNoteStudioStore = ({ personalRootPath }) => {
       name: String(attachment.name || 'NAS 파일').slice(0, 255),
       path: String(attachment.path || ''),
       kind: attachment.kind === 'folder' ? 'folder' : 'file',
+      identity: attachment.identity && typeof attachment.identity === 'object' ? {
+        device: String(attachment.identity.device || ''),
+        inode: String(attachment.identity.inode || ''),
+        kind: attachment.identity.kind === 'folder' ? 'folder' : 'file',
+        birthtimeMs: String(attachment.identity.birthtimeMs || '')
+      } : null,
       addedAt: nowIso()
     };
     meta.attachments = [...(Array.isArray(meta.attachments) ? meta.attachments : []), nextAttachment];
@@ -454,6 +506,24 @@ const createNoteStudioStore = ({ personalRootPath }) => {
     return { attachmentCount, noteCount };
   };
 
+  const updateAttachmentLocation = (id, attachmentId, location, expectedRevision) => {
+    const index = readIndex();
+    const meta = findMeta(index, id);
+    if (Number(expectedRevision) !== meta.revision) throw Object.assign(new Error('연결 복구 전에 노트가 변경되었습니다.'), { status: 409, code: 'NOTE_REVISION_CONFLICT' });
+    const attachments = Array.isArray(meta.attachments) ? meta.attachments : [];
+    const target = attachments.find((item) => item.id === attachmentId);
+    if (!target) throw Object.assign(new Error('첨부 항목을 찾을 수 없습니다.'), { status: 404 });
+    const rewrittenPath = normalizeAttachmentPath(location.path);
+    target.path = rewrittenPath;
+    target.name = path.posix.basename(rewrittenPath) || target.name;
+    target.identity = location.identity || target.identity || null;
+    target.movedAt = nowIso();
+    meta.revision += 1;
+    meta.updatedAt = target.movedAt;
+    writeIndex(index);
+    return { ...meta };
+  };
+
   const restore = (id) => {
     const index = readIndex();
     const meta = findMeta(index, id, { includeDeleted: true });
@@ -494,7 +564,7 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   };
 
   ensureStore();
-  return { listNotebooks, createNotebook, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment, rewriteAttachmentPaths };
+  return { listNotebooks, createNotebook, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment, rewriteAttachmentPaths, updateAttachmentLocation };
 };
 
 module.exports = {
@@ -503,5 +573,8 @@ module.exports = {
   MAX_NOTE_BYTES,
   MAX_VERSIONS_PER_NOTE,
   createNoteStudioStore,
+  getFilesystemIdentity,
+  sameFilesystemIdentity,
+  findPathByFilesystemIdentity,
   _test: { normalizeTitle, normalizeDirectoryName, normalizeType, validateContent, normalizeAttachmentPath, atomicWriteJson }
 };

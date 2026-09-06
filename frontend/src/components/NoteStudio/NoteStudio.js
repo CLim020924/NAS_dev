@@ -416,9 +416,29 @@ const NoteStudio = () => {
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '첨부를 제거하지 못했습니다.') }); }
   };
 
-  const openAttachment = (attachment) => attachment.kind === 'folder'
-    ? openFolderWindowByPath(attachment.path)
-    : openFileWindowByPath(attachment.path, attachment.name, true);
+  const openAttachment = async (attachment) => {
+    const current = selectedRef.current;
+    if (!current) return;
+    if (savingState === 'dirty' || savingState === 'saving') {
+      setMessage({ severity: 'info', text: '페이지 저장이 끝난 뒤 연결 파일을 열어 주세요.' });
+      return;
+    }
+    try {
+      const { data } = await axios.get(`/api/note-studio/notes/${encodeURIComponent(current.id)}/attachments/${encodeURIComponent(attachment.id)}/resolve`, {
+        withCredentials: true,
+        params: { expectedRevision: current.revision }
+      });
+      if (data.note?.revision !== current.revision) {
+        selectedRef.current = { ...current, ...data.note };
+        setSelected(selectedRef.current);
+        setNotes((items) => items.map((note) => note.id === current.id ? { ...note, ...data.note } : note));
+      }
+      if (data.kind === 'folder') openFolderWindowByPath(data.path);
+      else openFileWindowByPath(data.path, data.name, true);
+    } catch (error) {
+      setMessage({ severity: 'error', text: errorMessage(error, '연결된 NAS 항목을 열지 못했습니다.') });
+    }
+  };
 
   const createOfficeDocument = async (format, label, directoryPath = '') => {
     const current = selectedRef.current;

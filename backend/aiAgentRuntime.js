@@ -298,16 +298,27 @@ const executeAction = async (user, actionId, { platformCall }) => {
       const plans = resolveOrganizationPlans(user, action.plannedItems);
       const moved = [];
       try {
-        plans.forEach((plan) => {
+        for (const plan of plans) {
           fs.mkdirSync(plan.folder, { recursive: true, mode: 0o700 });
-          fs.renameSync(plan.from, plan.to);
+          await platformCall('PUT', '/file', {
+            oldPath: toRelative(user, plan.from),
+            newPath: toRelative(user, plan.to),
+          });
           moved.push(plan);
-        });
+        }
       } catch (err) {
-        moved.reverse().forEach((plan) => { try { if (fs.existsSync(plan.to) && !fs.existsSync(plan.from)) fs.renameSync(plan.to, plan.from); } catch (rollbackErr) {} });
+        for (const plan of moved.reverse()) {
+          try {
+            if (fs.existsSync(plan.to) && !fs.existsSync(plan.from)) {
+              await platformCall('PUT', '/file', {
+                oldPath: toRelative(user, plan.to),
+                newPath: toRelative(user, plan.from),
+              });
+            }
+          } catch (rollbackErr) {}
+        }
         throw err;
       }
-      moved.forEach((plan) => { invalidateUsageCache(plan.from); invalidateUsageCache(plan.to); });
       result = { movedCount: moved.length, destinationFolder: action.destinationFolder, granularity: action.granularity };
     } else {
       const target = await resolveExactUser(platformCall, action.targetUserLoginId || action.targetUser);

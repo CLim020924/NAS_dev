@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { createNoteStudioStore, MAX_VERSIONS_PER_NOTE, NOTE_MANAGER_ROOT } = require('../noteStudioService');
+const { createNoteStudioStore, getFilesystemIdentity, findPathByFilesystemIdentity, MAX_VERSIONS_PER_NOTE, NOTE_MANAGER_ROOT } = require('../noteStudioService');
 
 const withStore = (run) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-note-studio-'));
@@ -105,6 +105,21 @@ test('rewrites descendant attachment paths when a NAS folder moves', () => withS
   assert.deepEqual(result, { attachmentCount: 1, noteCount: 1 });
   assert.equal(store.get(first.id).attachments[0].path, '/보관/프로젝트/문서/a.pdf');
   assert.equal(store.get(second.id).attachments[0].path, '/다른곳/other.pdf');
+}));
+
+test('recovers an externally renamed attachment by stable filesystem identity', () => withStore((store, root) => {
+  const original = path.join(root, 'original.txt');
+  const renamed = path.join(root, 'renamed.txt');
+  fs.writeFileSync(original, 'stable');
+  const identity = getFilesystemIdentity(original);
+  fs.renameSync(original, renamed);
+  assert.equal(findPathByFilesystemIdentity(root, identity), renamed);
+
+  const note = store.create({ title: '외부 이동', type: 'text' });
+  const added = store.addAttachment(note.id, { name: 'original.txt', path: '/original.txt', kind: 'file', identity }, note.revision);
+  const updated = store.updateAttachmentLocation(note.id, added.attachment.id, { path: '/renamed.txt', identity }, added.note.revision);
+  assert.equal(updated.attachments[0].path, '/renamed.txt');
+  assert.equal(updated.attachments[0].name, 'renamed.txt');
 }));
 
 test('allows hierarchy changes but rejects parent cycles', () => withStore((store) => {
