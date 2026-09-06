@@ -1121,3 +1121,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 순차 구현: M1 핵심 저장/API의 운영 smoke가 통과한 뒤에만 다음 묶음을 시작했다. 노트 `parentId`를 트리 순서와 들여쓰기로 표시하고 목록 우클릭에서 하위 노트를 만들거나 최상위로 이동할 수 있게 했다. 서버는 자기 자신뿐 아니라 모든 자손 아래로 이동하는 순환 구조를 추적해 409 `NOTE_TREE_CYCLE`로 차단한다.
 - 공통 명령: 블록 편집기에서 `/` 또는 Ctrl/Cmd+K로 같은 명령 목록을 열고 본문, 제목 1/2, 글머리표·번호 목록, 인용, 코드 블록, 구분선을 실행한다. 명령 정의·검색과 트리 평탄화는 `noteStudioCommands.js`의 순수 registry로 분리해 마우스·키보드 UI가 같은 동작을 사용한다.
 - 검증·배포: backend 계층/순환 회귀를 포함한 note service 8/8, command 검색·부모 우선 트리·legacy orphan/cycle 가시성 3/3, NAS frontend production/PDF.js build가 통과했다. commit `7e8caaa`를 GitHub와 NAS clean branch에 반영하고 live `main.4dc2a7ae.js`, 내부·공개 HTTP 200, 필수 서비스 6개 active, PM2 online을 확인했다. 로그인된 실화면의 우클릭·한글 IME·slash 위치 검증은 사용자의 브라우저 세션이 필요해 남은 육안 gate다.
+
+## 2026-09-06 노트북 NAS 원격 실행의 동적 자원 제어 요구
+
+- 사용자 요청: 성능이 높지 않은 NAS에서 여러 사용자가 동시에 Python을 실행해도 오류 없이 대기·실행되게 하고, RAM·CPU·디스크·GPU 등 장치를 업그레이드하면 운영체제가 인식한 자원을 서버 설정과 실행 허용량에 자동 반영한다. GPU/CUDA·머신러닝·임베딩 같은 고부하 권한은 관리자에게도 맡기지 않고 MASTER만 계정별로 허용한다.
+- 실장비 재확인: 논리 CPU 8개, RAM 6,094,794,752 bytes, 확인 시점 MemAvailable 3,420,602,368 bytes, swap 1,024,454,656 bytes 중 1,023,729,664 bytes 사용, load average 0.04/0.04/0.00, cgroup v2의 cpu/io/memory/pids/cpuset controller, AMD Vega 내장 GPU를 확인했다. 시스템 `/` 가용 1,700,667,736,064 bytes, NAS `/mnt/nas` 가용 1,780,552,544,256 bytes다.
+- 설계 결정: Python 실행은 backend 프로세스나 NAS host에서 직접 수행하지 않는다. 공통 admission controller가 현재 MemAvailable·CPU load·swap pressure·디스크 보호 여유·온도·활성 작업·예약량을 검사하고, 허용된 작업만 사용자별 non-root 격리 worker에 배정한다. 나머지는 공정한 계정별 대기열에 넣으며 자원 부족을 실패로 처리하지 않는다. 초기 안전값은 전역 active kernel 1개, 계정당 1개이며 실제 측정 뒤 가벼운 작업만 전역 2개로 확장한다.
+- 업그레이드 반영: 서버 설정의 실제 장치·사용량 표시는 기존 5초 metrics 수집으로 갱신하고, 실행 scheduler는 고정 사양값이 아니라 매 admission 시 실제 OS/cgroup 값을 다시 계산한다. 자원 감소·온도·메모리 압박은 즉시 신규 배정을 줄이고 실행 중 작업을 순차 중단한다. 증설 자원은 OS가 인식하면 용량 계산에 반영하되, GPU/CUDA와 새 실행 capability는 자동 허용하지 않고 self-test·benchmark·MASTER 활성화 뒤에만 사용자에게 부여한다. 일반 RAM/CPU 교체는 대부분 재부팅이 필요한 하드웨어이므로 OS가 인식하기 전까지 실시간 반영을 보장하지 않는다.
+- 상태: 이번 요청에서는 실제 자원과 기존 cgroup/metrics 기반을 읽기 전용으로 확인하고 실행 서비스는 아직 활성화하지 않았다. Python 원격 실행은 노트 스튜디오 M2에서 격리 worker, 예약형 scheduler, 취소/timeout/OOM 복구, 장치 재감지, MASTER 전용 capability 정책과 회귀·부하 테스트를 함께 구현하기 전까지 계속 차단한다.
