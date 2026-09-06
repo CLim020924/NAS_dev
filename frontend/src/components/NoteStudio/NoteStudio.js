@@ -30,6 +30,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import { alpha, useTheme } from '@mui/material/styles';
@@ -100,6 +101,8 @@ const NoteStudio = () => {
   const [officeLocationDialogOpen, setOfficeLocationDialogOpen] = useState(false);
   const [officeLocationPickerOpen, setOfficeLocationPickerOpen] = useState(false);
   const [officeLocationFormat, setOfficeLocationFormat] = useState('docx');
+  const [pythonRunning, setPythonRunning] = useState(false);
+  const [pythonResult, setPythonResult] = useState(null);
   const selectedRef = useRef(null);
   const saveTimerRef = useRef(null);
   const pendingContentRef = useRef(null);
@@ -454,6 +457,24 @@ const NoteStudio = () => {
     createOfficeDocument(option[0], option[1], item.fullPath);
   };
 
+  const runPython = async () => {
+    const current = selectedRef.current;
+    if (!current || pythonRunning) return;
+    if (savingState === 'dirty' || savingState === 'saving') {
+      setMessage({ severity: 'info', text: '최신 코드 저장이 끝난 뒤 실행해 주세요.' });
+      return;
+    }
+    setPythonRunning(true);
+    setPythonResult(null);
+    try {
+      const { data } = await axios.post(`/api/note-studio/notes/${encodeURIComponent(current.id)}/python/run`, { expectedRevision: current.revision }, { withCredentials: true });
+      setPythonResult({ ...data.result, sandbox: data.sandbox });
+    } catch (error) {
+      const response = error.response?.data;
+      setPythonResult({ ...(response?.result || {}), error: response?.error || error.message || 'Python 실행에 실패했습니다.' });
+    } finally { setPythonRunning(false); }
+  };
+
   const importFile = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -564,6 +585,7 @@ const NoteStudio = () => {
             <TextField variant="standard" value={selected.title} onChange={(event) => updateMeta({ title: event.target.value })} disabled={!!selected.deletedAt} fullWidth inputProps={{ 'aria-label': '노트 제목' }} InputProps={{ disableUnderline: true, sx: { fontWeight: 900, fontSize: 18 } }} />
             {selected.type === 'code' && <Select size="small" value={selected.language || 'plaintext'} onChange={(event) => updateMeta({ language: event.target.value })} sx={{ minWidth: 118 }}>{languageOptions.map((language) => <MenuItem key={language} value={language}>{language}</MenuItem>)}</Select>}
             <Chip size="small" label={saveLabel} color={savingState === 'error' || savingState === 'conflict' ? 'warning' : savingState === 'saved' || savingState === 'idle' ? 'success' : 'default'} variant="outlined" />
+            {selected.type === 'code' && selected.language === 'python' && !selected.deletedAt && <Button size="small" variant="contained" startIcon={pythonRunning ? <CircularProgress size={15} color="inherit" /> : <PlayArrowIcon />} disabled={pythonRunning || savingState === 'dirty' || savingState === 'saving'} onClick={runPython}>{pythonRunning ? '실행 중' : '격리 실행'}</Button>}
             {!selected.deletedAt && <Button size="small" variant="outlined" startIcon={<DescriptionIcon />} disabled={officeCreating || savingState === 'dirty' || savingState === 'saving'} onClick={(event) => setOfficeMenu({ anchorEl: event.currentTarget })}>문서 만들기</Button>}
             {!selected.deletedAt && <Tooltip title="버전 기록"><IconButton onClick={openVersions}><HistoryIcon /></IconButton></Tooltip>}
             {!selected.deletedAt && <Tooltip title="파일로 내보내기"><IconButton onClick={exportSelected}><DownloadIcon /></IconButton></Tooltip>}
@@ -640,6 +662,16 @@ const NoteStudio = () => {
           <Button color="inherit" onClick={() => setOfficeLocationDialogOpen(false)}>취소</Button>
           <Button variant="contained" onClick={() => { setOfficeLocationDialogOpen(false); setOfficeLocationPickerOpen(true); }}>저장 폴더 선택</Button>
         </DialogActions>
+      </Dialog>
+      <Dialog open={!!pythonResult} onClose={() => setPythonResult(null)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>Python 격리 실행 결과</DialogTitle>
+        <DialogContent dividers>
+          {pythonResult?.error && <Alert severity="error" sx={{ mb: 1.5 }}>{pythonResult.error}</Alert>}
+          <Typography variant="caption" color="text.secondary">네트워크 차단 · non-root · 읽기 전용 · 15초 · RAM 256MiB · PID 64</Typography>
+          <Box component="pre" sx={{ mt: 1.5, p: 1.5, minHeight: 120, maxHeight: 420, overflow: 'auto', bgcolor: 'grey.950', color: 'grey.100', borderRadius: 1, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{pythonResult?.stdout || pythonResult?.stderr || (pythonResult?.error ? '' : '(출력 없음)')}</Box>
+          {pythonResult?.stdout && pythonResult?.stderr && <Box component="pre" sx={{ mt: 1, p: 1.5, maxHeight: 180, overflow: 'auto', bgcolor: 'warning.light', color: 'warning.contrastText', borderRadius: 1, whiteSpace: 'pre-wrap' }}>{pythonResult.stderr}</Box>}
+        </DialogContent>
+        <DialogActions><Button onClick={() => setPythonResult(null)}>닫기</Button></DialogActions>
       </Dialog>
       <NasItemPickerDialog open={attachmentPickerOpen} onClose={() => setAttachmentPickerOpen(false)} onSelect={addAttachment} title="노트에 NAS 항목 첨부" confirmLabel="첨부" allowCurrentFolder />
       <NasItemPickerDialog open={officeLocationPickerOpen} onClose={() => setOfficeLocationPickerOpen(false)} onSelect={chooseOfficeDestination} title="새 문서를 저장할 NAS 폴더" confirmLabel="여기에 만들기" folderOnly allowCurrentFolder />

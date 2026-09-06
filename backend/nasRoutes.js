@@ -62,6 +62,7 @@ const {
 } = require('./documentStudioService');
 const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankDocumentService');
 const { createNoteStudioStore } = require('./noteStudioService');
+const { createManagedPythonWorker } = require('./managedPythonWorker');
 const {
   SHARED_ROOT_NAME,
   normalizeRelativePath: normalizeAccountShareRelPath,
@@ -74,6 +75,7 @@ const {
 } = require('./accountDriveShares');
 
 const router = express.Router();
+const managedPythonWorker = createManagedPythonWorker();
 
 // 🔥 [최종 방어선] 403 에러 강제 세탁 미들웨어 (프론트엔드 폭파 방지)
 router.use('/files', (req, res, next) => {
@@ -1325,6 +1327,29 @@ router.post('/note-studio/notes/:noteId/office-documents', verifyToken, express.
   } catch (error) {
     safeRmSync(temporaryPath);
     return sendNoteStudioError(res, error);
+  }
+});
+
+router.post('/note-studio/notes/:noteId/python/run', verifyToken, express.json({ limit: '8kb' }), async (req, res) => {
+  let reservationId = '';
+  try {
+    const note = getNoteStudioStore(req.user).get(req.params.noteId);
+    if (note.deletedAt) return res.status(409).json({ error: '휴지통의 코드는 실행할 수 없습니다.' });
+    if (note.type !== 'code' || String(note.language || '').toLowerCase() !== 'python') return res.status(400).json({ error: 'Python 코드 노트만 실행할 수 있습니다.' });
+    if (Number(req.body?.expectedRevision) !== note.revision) return res.status(409).json({ error: '실행 전에 페이지가 변경되었습니다. 최신 저장본을 다시 여세요.' });
+    const resourceControl = req.app.get('resourceControl');
+    if (!resourceControl) return res.status(503).json({ error: '서버 자원 보호 정책이 준비되지 않았습니다.' });
+    const requested = { cpuPercent: 12.5, memoryBytes: 256 * 1024 * 1024 };
+    const admission = resourceControl.reserve({ jobId: `python:${crypto.randomUUID()}`, user: req.user, requested });
+    if (admission.state !== 'available') return res.status(429).json({ error: admission.state === 'queued' ? '서버가 바빠 잠시 뒤 다시 실행해 주세요.' : '현재 사용자 또는 서버 자원 제한으로 실행할 수 없습니다.', state: admission.state, reasons: admission.reasons || [] });
+    reservationId = admission.jobId;
+    const result = await managedPythonWorker.run({ code: note.content, cpuCores: 0.5, memoryBytes: requested.memoryBytes, pids: 64 });
+    return res.json({ success: true, result, sandbox: { network: 'none', timeoutSeconds: 15, memoryMiB: 256, pids: 64, readOnly: true, user: 'non-root' } });
+  } catch (error) {
+    if (error.result) return res.status(error.status || 422).json({ error: error.message, code: error.code, result: error.result });
+    return sendNoteStudioError(res, error);
+  } finally {
+    if (reservationId) req.app.get('resourceControl')?.release(reservationId);
   }
 });
 
