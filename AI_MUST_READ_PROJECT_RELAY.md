@@ -1080,3 +1080,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: 로컬과 NAS Linux에서 legacy 전역 경로 비상속, A→K 계정 전환, A→로그아웃 루트 초기화 회귀 3/3을 통과했다. 양쪽 production build와 PDF.js API/Worker 4.8.69 검사를 통과했다. workbook은 artifact-tool로 import/edit/export했고 신규·변경 시트를 렌더해 표와 줄바꿈을 확인했으며 formula error 0, replacement character와 `????` 0건, xlsx ZIP 무결성, 상태 validation을 확인했다.
 - 운영 배포: 기능 commit `b0beba1`을 GitHub와 NAS live branch에 clean fast-forward하고 NAS에서 frontend를 다시 빌드했다. PM2 restart/save 뒤 `msp-backend`는 online이며 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다. 내부 3030과 공개 HTTPS는 200이다.
 - 남은 확인: 실제 사용자 자격 증명과 파일은 테스트에 사용하지 않았다. 다음 실제 A→K 전환 때 A의 열린 창과 경로가 사라지고 K의 루트 또는 K 전용 저장 경로만 표시되는지 화면에서 한 번 체감 확인한다. 서버 경계와 자동 회귀·build·운영 배포는 완료됐다.
+
+## 2026-09-06 관리자 서버 설정·자원 모니터링
+
+- 사용자 요청: 관리자 또는 마스터의 시스템 설정에 `서버 설정` 페이지를 추가해 NAS 컴퓨터의 CPU, RAM, 디스크 등 자원 종류와 현재 사용량을 표시한다. 사용자 관리에 있는 NAS 저장공간 원장은 두 페이지에 모두 유지한다. 전력 등은 실제 측정 가능할 때만 표시한다.
+- 실장비 확인: Ryzen 5 3400G 4코어/8스레드, 현재 인식 메모리 약 5.7GiB와 스왑 약 977MiB, 시스템 Seagate FireCuda 520 2TB NVMe와 NAS 데이터 Crucial CT2000P3PSSD8 2TB NVMe를 확인했다. `/sys/class/hwmon`에서 CPU `Tctl`, AMD GPU edge, 두 NVMe 온도는 읽을 수 있다. `fan*_input`, `power*_input`, powercap은 없어서 팬·전력은 추정하지 않고 화면에서 숨긴다.
+- 구현: `backend/serverMetrics.js`가 `os`, `/proc`, `statfs`, 인수 배열 `lsblk`, hwmon을 읽어 CPU 사용률·1/5/15분 부하, 물리/논리 코어, 메모리·스왑, 시스템/NAS 볼륨, 물리 디스크와 유효 센서 값을 집계한다. 장치 일련번호, 환경 변수, 프로세스 목록, 사용자 파일은 응답하지 않는다. `GET /api/system/metrics`는 `requireManager`를 거치는 MASTER/MANAGER 전용 no-store API이며 기존 `getStorageCapacitySummary`도 같은 응답에 넣는다.
+- 화면: 시스템 설정의 네 번째 관리자 전용 탭 `서버 설정`에 CPU·메모리 카드, 시스템/NAS 디스크 사용률, 물리 디스크 모델·종류·크기, 온도 센서, 지원될 때만 팬, NAS 저장공간 할당 원장을 표시한다. 5초 자동 갱신과 수동 새로고침을 제공한다. 기존 사용자 관리의 NAS 저장공간 영역은 `StorageCapacityOverview` 공용 컴포넌트로 바꿔 두 화면이 같은 계산값과 문구를 사용한다.
+- 검증: `serverMetrics` 단위 테스트와 NAS 실센서 수집이 통과했다. NAS 전체 backend 테스트 15개 파일이 통과했고 문서 변환 통합 2건도 실제 성공했다. frontend production build와 react-pdf/PDF.js API·Worker 4.8.69 gate가 통과했으며 기존 unrelated lint warning만 남았다. 무인증 `/api/system/metrics`는 403으로 차단된다.
+- 운영 배포: 기능 commit `6c8d5a5`를 GitHub와 NAS live branch에 clean fast-forward했다. 새 `main.e7023c95.js`를 `/var/www/html`에 원자 반영하고 내부·공개 index bundle 일치를 확인했다. PM2 restart/save 뒤 `msp-backend`는 online, `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 enabled+active, 내부 3030과 공개 HTTPS는 HTTP 200이다.
+- 프로젝트 메모리: `ADMIN-SERVER-MONITORING`, `ADMIN-METRICS-001`과 Feature/Relation/Code/API/Network/Patch/Request/Generated 기록을 `docs/NAS_PROJECT_LOG.xlsx`에 추가했다. 기존 20GiB quota 전환 보류 행에는 두 관리자 화면의 용량 원장 공용화 완료만 보강하고 quota 정책 자체는 보류로 유지했다. artifact-tool formula error 0과 변경 범위 렌더를 확인했다.
+- 남은 경계: 현재 자동화 브라우저는 로그인 화면이라 실제 관리자 계정으로 탭을 클릭하지 않았다. 사용자 자격 증명을 사용하거나 임의 관리자 계정을 만들지 않았으며, 배포 bundle·실센서 응답·권한 차단·운영 서비스 검증은 완료했다. 로그인된 관리자 화면을 새로고침하면 새 탭이 표시된다.
