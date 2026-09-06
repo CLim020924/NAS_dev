@@ -4165,7 +4165,7 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdV
   resolveInside(ownerBasePath, path.relative(ownerBasePath, linkedRoot));
   assertRealPathInside(ownerBasePath, linkedRoot);
   const relPath = normalizeAgentRelPath(relPathValue);
-  if (relPath === SHARED_ROOT_NAME || relPath.startsWith(SHARED_ROOT_NAME + '/')) {
+  if (syncRoot.kind === 'personal-drive' && (relPath === SHARED_ROOT_NAME || relPath.startsWith(SHARED_ROOT_NAME + '/'))) {
     const err = new Error('공유받은 항목은 읽기 전용입니다. 원본 계정에서 변경해 주세요.');
     err.status = 403;
     throw err;
@@ -4776,13 +4776,15 @@ router.get('/devices/agent/changes', (req, res) => {
     const deviceId = String(req.query.deviceId || '');
     const syncRootId = String(req.query.syncRootId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const { device, linkedRoot } = getValidatedAgentRoot(deviceId, agentToken, syncRootId);
+    const { device, syncRoot, linkedRoot } = getValidatedAgentRoot(deviceId, agentToken, syncRootId);
     const monitor = ensureAgentRootMonitor(linkedRoot);
     const ownerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
-    const accountShares = sharesForRecipient(readAccountDriveShares(), ownerKey);
-    const revision = combineAccountShareRevision(monitor.revision, accountShares, share => {
-      try { return ensureAgentRootMonitor(getAccountShareSourceRoot(share)).revision; } catch { return 'unavailable'; }
-    });
+    const accountShares = syncRoot.kind === 'personal-drive' ? sharesForRecipient(readAccountDriveShares(), ownerKey) : [];
+    const revision = syncRoot.kind === 'personal-drive'
+      ? combineAccountShareRevision(monitor.revision, accountShares, share => {
+        try { return ensureAgentRootMonitor(getAccountShareSourceRoot(share)).revision; } catch { return 'unavailable'; }
+      })
+      : monitor.revision;
     touchLinkedDevice(device, linkedRoot);
     return res.json({
       success: true,
@@ -4803,12 +4805,17 @@ router.get('/devices/agent/manifest', (req, res) => {
     const { device, syncRoot, linkedRoot } = getValidatedAgentRoot(deviceId, agentToken, syncRootId);
     const monitor = ensureAgentRootMonitor(linkedRoot);
     const ownerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
-    const accountShares = sharesForRecipient(readAccountDriveShares(), ownerKey);
-    const revision = combineAccountShareRevision(monitor.revision, accountShares, share => {
-      try { return ensureAgentRootMonitor(getAccountShareSourceRoot(share)).revision; } catch { return 'unavailable'; }
-    });
-    const localEntries = listAgentManifestEntries(linkedRoot)
-      .filter(entry => entry.relPath !== SHARED_ROOT_NAME && !entry.relPath.startsWith(SHARED_ROOT_NAME + '/'));
+    const isPersonalDrive = syncRoot.kind === 'personal-drive';
+    const accountShares = isPersonalDrive ? sharesForRecipient(readAccountDriveShares(), ownerKey) : [];
+    const revision = isPersonalDrive
+      ? combineAccountShareRevision(monitor.revision, accountShares, share => {
+        try { return ensureAgentRootMonitor(getAccountShareSourceRoot(share)).revision; } catch { return 'unavailable'; }
+      })
+      : monitor.revision;
+    const manifestEntries = listAgentManifestEntries(linkedRoot);
+    const localEntries = isPersonalDrive
+      ? manifestEntries.filter(entry => entry.relPath !== SHARED_ROOT_NAME && !entry.relPath.startsWith(SHARED_ROOT_NAME + '/'))
+      : manifestEntries;
     const sharedEntries = accountShares.flatMap(share => {
       try { return buildSharedManifestEntries(share, getAccountShareSourceRoot(share), listAgentManifestEntries); } catch { return []; }
     });
@@ -4837,21 +4844,28 @@ router.get('/devices/agent/file', (req, res) => {
   try {
     const deviceId = String(req.query.deviceId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const device = getAgentDeviceByToken(deviceId, agentToken);
-    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
     const requestedRelPath = String(req.query.relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    let device;
     let linkedRoot;
     let relPath;
     let finalPath;
     if (requestedRelPath === SHARED_ROOT_NAME || requestedRelPath.startsWith(SHARED_ROOT_NAME + '/')) {
+      const recipientTarget = getValidatedAgentRoot(deviceId, agentToken, String(req.query.syncRootId || ''));
+      if (recipientTarget.syncRoot.kind !== 'personal-drive') {
+        return res.status(403).json({ error: '계정 간 공유는 개인 NAS Drive에서만 열 수 있습니다.' });
+      }
+      device = recipientTarget.device;
+      linkedRoot = recipientTarget.linkedRoot;
       const recipientOwnerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
       const resolved = resolveSharedFile(readAccountDriveShares(), recipientOwnerKey, requestedRelPath, getAccountShareSourceRoot);
-      linkedRoot = resolved.sourceRoot;
       relPath = resolved.relPath;
       finalPath = resolved.finalPath;
-      assertRealPathInside(linkedRoot, finalPath);
+      // The real path must remain inside the exact shared item, not merely
+      // somewhere else in the source account root through a nested symlink.
+      assertRealPathInside(resolved.selectedRoot, finalPath);
     } else {
       const target = getValidatedAgentTarget(deviceId, agentToken, requestedRelPath, req.query.syncRootId);
+      device = target.device;
       linkedRoot = target.linkedRoot;
       relPath = target.relPath;
       finalPath = target.finalPath;

@@ -12,6 +12,7 @@ const {
   buildSharedManifestEntries,
   resolveSharedFile
 } = require('../accountDriveShares');
+const { assertRealPathInside } = require('../deviceSyncSecurity');
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-account-share-'));
 try {
@@ -34,7 +35,18 @@ try {
   assert(entries.some(entry => entry.relPath === virtualFile && entry.type === 'file'));
   const resolved = resolveSharedFile([share], 'owner-b', virtualFile, () => temp);
   assert.strictEqual(resolved.finalPath, path.join(temp, 'docs', 'report.txt'));
+  assert.strictEqual(resolved.selectedRoot, path.join(temp, 'docs'));
   assert.throws(() => resolveSharedFile([share], 'owner-c', virtualFile, () => temp), /권한/);
+  fs.mkdirSync(path.join(temp, 'private'));
+  fs.writeFileSync(path.join(temp, 'private', 'secret.txt'), 'private data');
+  try {
+    fs.symlinkSync(path.join(temp, 'private'), path.join(temp, 'docs', 'internal-link'), 'dir');
+    const escaped = resolveSharedFile([share], 'owner-b', `${shareVirtualBase(share)}/docs/internal-link/secret.txt`, () => temp);
+    assert.throws(() => assertRealPathInside(escaped.selectedRoot, escaped.finalPath), /경계 밖/);
+  } catch (error) {
+    if (error?.code !== 'EPERM') throw error;
+    console.log('Account share symlink scope test skipped: Windows Developer Mode or elevation is required');
+  }
   assert.notStrictEqual(combineRevision('base', [share], () => 'r1'), combineRevision('base', [share], () => 'r2'));
   console.log('Account Drive share security tests passed');
 } finally {

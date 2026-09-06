@@ -92,10 +92,12 @@ const resolveSharedFile = (shares, recipientOwnerKey, requestedRelPath, resolveS
     const sourceRel = [selectedRel, suffix].filter(Boolean).join('/');
     const finalPath = path.resolve(sourceRoot, ...sourceRel.split('/').filter(Boolean));
     const root = path.resolve(sourceRoot);
-    if (finalPath !== root && !finalPath.startsWith(root + path.sep)) {
+    const selectedRoot = selectedRel ? path.resolve(root, ...selectedRel.split('/')) : root;
+    if ((selectedRoot !== root && !selectedRoot.startsWith(root + path.sep))
+      || (finalPath !== selectedRoot && !finalPath.startsWith(selectedRoot + path.sep))) {
       throw Object.assign(new Error('공유 범위를 벗어난 경로입니다.'), { status: 403 });
     }
-    return { share, sourceRoot: root, finalPath, relPath: sourceRel };
+    return { share, sourceRoot: root, selectedRoot, finalPath, relPath: sourceRel };
   }
   throw Object.assign(new Error('공유가 해제되었거나 접근 권한이 없습니다.'), { status: 403 });
 };

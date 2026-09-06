@@ -3636,6 +3636,10 @@ function runSelfTest() {
   if (!isReadOnlyAccountSharePath({ kind: 'personal-drive', localPath: defaultPath }, path.join(defaultPath, ACCOUNT_SHARED_ROOT_NAME, 'sample.txt'))) {
     throw new Error('Account-shared read-only path test failed.');
   }
+  const profileSelectionFixture = { activeAccountKey: 'account-a', profiles: [{ accountKey: 'account-a', deviceId: 'device-a' }, { accountKey: 'account-b', deviceId: 'device-b' }] };
+  if (profileByDeviceId(profileSelectionFixture, 'device-b')?.deviceId !== 'device-b' || profileByDeviceId(profileSelectionFixture, 'missing') !== null) {
+    throw new Error('Account-share exact profile selection test failed.');
+  }
   const overlapTestRoot = path.join(os.tmpdir(), 'nas-drive-overlap-test');
   if (!isSameOrChildLocalPath(overlapTestRoot, path.join(overlapTestRoot, 'Agent.exe'))) throw new Error('Install overlap detection test failed.');
   if (MAX_FILE_BYTES !== 250 * 1024 * 1024 * 1024) throw new Error('250GB file limit test failed.');
@@ -3646,10 +3650,9 @@ function runSelfTest() {
 
 function profileByDeviceId(config, deviceId) {
   const profiles = getProfiles(config);
-  return profiles.find(profile => profile.deviceId === deviceId)
-    || profiles.find(profile => profile.accountKey === config?.activeAccountKey)
-    || profiles[0]
-    || null;
+  const requestedDeviceId = String(deviceId || '').trim();
+  if (!requestedDeviceId) return null;
+  return profiles.find(profile => profile.deviceId === requestedDeviceId) || null;
 }
 
 function publicAccountProfile(profile) {

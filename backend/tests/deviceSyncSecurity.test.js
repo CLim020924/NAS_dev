@@ -86,6 +86,10 @@ assert.match(windowsLauncherSource, /try \{ exitCode = await Task\.Run\(\(\) => 
 assert.match(windowsLauncherSource, /AllAccounts\(\)\.Count == 0/);
 assert.match(windowsLauncherSource, /계정 간 공유/);
 assert.match(windowsAgentSource, /isReadOnlyAccountSharePath/);
+assert.match(windowsAgentSource, /if \(!requestedDeviceId\) return null;[\s\S]{0,120}profile\.deviceId === requestedDeviceId\) \|\| null/);
+assert.match(nasRoutesSource, /syncRoot\.kind === 'personal-drive' \? sharesForRecipient/);
+assert.match(nasRoutesSource, /recipientTarget\.syncRoot\.kind !== 'personal-drive'/);
+assert.match(nasRoutesSource, /assertRealPathInside\(resolved\.selectedRoot, finalPath\)/);
 assert.match(windowsLauncherSource, /--open-drive-after-install/);
 assert.match(windowsLauncherSource, /OpenDriveForegroundWhenReady\(openDriveDeviceId\)/);
 assert.match(windowsLauncherSource, /DrivePathForDeviceId\(deviceId\)/);

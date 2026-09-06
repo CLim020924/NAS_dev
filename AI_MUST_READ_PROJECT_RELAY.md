@@ -1009,3 +1009,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 운영 배포: 기능 commit `c89fc78`을 GitHub와 NAS live branch에 clean fast-forward했다. NAS에서 Agent self-test와 backend 전체 14개 테스트 파일을 통과했으며, Linux에서만 실행되는 문서 변환 통합 2건도 실제 변환에 성공했다. `msp-backend` restart/save 뒤 online이고 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다. 내부 3030과 공개 HTTPS는 200, 미인증 Agent 업데이트와 공유 browse는 각각 403이다.
 - 배포 산출물: NAS와 로컬 Agent SHA-256은 `d9b8f934baa4698b47c99a992d28e057b541850ec80b340bc76a219874d0e606`, Setup SHA-256은 `73f4af26992b7c0acaceab1db7f75404d8da622dfa77e9d00d0c7b3f2bbdbd0e`로 일치한다. 서버 배포 버전과 workbook 상태는 1.11.0 운영 배포 완료로 맞췄다.
 - 남은 체감 검증: 실제 사용자 계정 token과 파일은 테스트에 사용하지 않았다. 사용자가 1.11.0 Setup을 설치한 뒤 같은 PC에 계정 2개 이상을 연결하고 작은 테스트 파일 하나를 공유해 탐색기 목록 표시·첫 열기 hydration·공유 해제를 체감 확인하면 된다. 실패 시 기존 계정·원본 파일을 훼손하지 않도록 read-only/권한 재검증 계약은 자동 테스트와 서버에서 검증됐다.
+
+## 2026-09-06 다중 계정 공유 2차 논리 경계 검토
+
+- 사용자 요청: 구현이 너무 빨리 끝난 것은 아닌지, 다중 계정·공유 로직에 논리 오류가 없는지 재검토한다.
+- 발견 1: recipient 공유 manifest와 composite revision이 `personal-drive`가 아닌 일반 추가 동기화 root에도 합쳐질 수 있었다. 일반 root에서는 Agent의 read-only 공유 경로 보호도 적용되지 않으므로 잘못된 placeholder가 업로드 대상으로 해석될 여지가 있었다. 서버 changes·manifest·file과 mutation 예약 경로를 syncRoot kind에 맞게 분리했다.
+- 발견 2: native 공유 CLI의 deviceId 조회가 실패하면 활성 profile 또는 첫 profile로 fallback했다. 오래된 UI snapshot이나 잘못된 인자가 다른 계정의 browse/list/revoke로 이어지지 않도록 요청 deviceId exact-match만 허용하고 없으면 즉시 실패하도록 변경했다.
+- 발견 3: 공유 폴더 안의 중간 symlink가 같은 source 계정 root의 공유 범위 밖을 가리킬 때, 기존 다운로드 검증은 계정 root 안이라는 사실만 확인했다. 이제 lexical path와 realpath가 모두 선택한 파일·폴더 자체의 root 안에 남는지 확인한다.
+- 검증: exact profile self-test, personal-drive-only route 회귀 gate, 선택 공유 root realpath gate와 helper 단위 검사를 추가했다. Agent/Setup을 다시 빌드하고 패키지 self-test, 로컬 backend 전체 14개 테스트 파일을 통과했다. Windows 비관리자 환경의 symlink 생성 1건과 문서 변환 통합 2건만 환경 조건상 skip이며 해당 검사는 NAS Linux 배포 단계에서 실행한다.
+- 프로젝트 메모리: `WIN-MULTI-ACCOUNT-ONDEMAND-SHARE` 상태와 `WIN-ACCOUNT-SHARE-BOUNDARY`에 personal-drive 전용, exact deviceId, 선택 공유 root realpath 규칙을 보강했다. formula error 0과 관련 범위 렌더를 확인했다.
+- 현재 상태: 수정·재빌드·로컬 검증 완료. GitHub push와 NAS fast-forward, Linux symlink/전체 회귀, PM2·내부/공개 상태 재검증이 남아 있다.
