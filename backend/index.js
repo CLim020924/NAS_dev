@@ -34,6 +34,7 @@ const { getAiStatus } = require('./services/aiService');
 const { hashPassword, verifyPassword } = require('./passwordSecurity');
 const { consumeDesktopWebSession } = require('./desktopWebSession');
 const { collectServerMetrics } = require('./serverMetrics');
+const { createResourceControlService } = require('./resourceControlService');
 
 const app = express();
 const server = http.createServer(app);
@@ -479,6 +480,15 @@ function loadData() {
   });
 }
 loadData();
+
+const resourceControl = createResourceControlService({
+  dataDir: path.join(__dirname, 'data'),
+  collectMetrics: () => collectServerMetrics({ nasRoot: nasPath }),
+  getUsers: () => approvedUsers,
+  getStorageSummary: (user) => getUserStorageSummary(normalizeQuotaFields(user))
+});
+resourceControl.start();
+app.set('resourceControl', resourceControl);
 
 const runChatRetentionSafely = (reason = 'manual') => {
   try {
@@ -1029,14 +1039,38 @@ app.get('/api/users/data', requireManager, (req, res) => {
 app.get('/api/system/metrics', requireManager, async (req, res) => {
   try {
     const metrics = await collectServerMetrics({ nasRoot: nasPath });
+    const resourceControlState = await resourceControl.dashboard(metrics);
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       ...metrics,
-      storageCapacity: getStorageCapacitySummary(approvedUsers, signupRequests)
+      storageCapacity: getStorageCapacitySummary(approvedUsers, signupRequests),
+      resourceControl: resourceControlState
     });
   } catch (err) {
     console.error('[system/metrics] failed', err.message);
     res.status(503).json({ error: '서버 자원 정보를 수집하지 못했습니다.' });
+  }
+});
+
+app.get('/api/system/resource-history', requireManager, (req, res) => {
+  try {
+    const userUid = String(req.query.userUid || '').trim();
+    if (userUid && !findApprovedUserByAnyId(userUid)) return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+    const rows = resourceControl.readHistory({ from: req.query.from, to: req.query.to, userUid, limit: req.query.limit });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ rows, measurementScope: userUid ? 'managed-jobs-and-storage-samples' : 'system' });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '자원 사용 기록을 읽지 못했습니다.' });
+  }
+});
+
+app.put('/api/system/resource-policy', requireManager, (req, res) => {
+  try {
+    const actor = req.authUser?.userUid || getUserLoginId(req.authUser || {}) || 'manager';
+    const result = resourceControl.updatePolicy(req.body || {}, actor);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '자원 보호 정책을 저장하지 못했습니다.' });
   }
 });
 

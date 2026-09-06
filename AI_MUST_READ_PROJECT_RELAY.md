@@ -1201,3 +1201,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 운영 배포: commit `5160dfb`를 GitHub와 NAS live branch에 clean fast-forward했다. live bundle은 `main.3a1e3abc.js`, 내부 3030과 공개 HTTPS는 200, 무인증 notebook API는 401, PM2 `msp-backend`는 online이며 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다.
 - 1차 gap 감사: 운영 자동 검증과 배포는 완료됐고 로그인 실계정 화면 검증은 남았다. 외부에서 노트북 경로가 사라지면 500 대신 `NOTE_PATH_MISSING` 상태·409로 복구 안내하고, 활성 하위 페이지가 있는 부모 삭제는 `NOTE_HAS_CHILDREN`으로 차단한다. 명시적인 page/notebook 이름 변경·이동 transaction, 일반 파일이 들어 있는 페이지의 휴지통·영구 삭제 정책, `.msp-page.json` 기반 PC 투영, 파일 관리자와 stable directory ID 통합, note 쓰기 quota admission, 기존 노트의 선택적 이관, 다중 프로세스 잠금은 다음 M1-F 묶음이다. 현재는 사용자 파일을 암묵 삭제하지 않기 위해 페이지 휴지통/영구 삭제가 실제 폴더를 제거하지 않는다.
 - 다음 순서: M1-F 2차 transaction과 quota/file-manager 연계를 먼저 구현한다. M1-G Office reference, M1.5 댓글, M2 Python 실행은 이 저장 경계가 안정화되기 전 활성화하지 않는다.
+
+## 2026-09-06 사용자별 서버 자원 보호 정책 1차 구현
+
+- 사용자 요청: 사용자별 저장공간·CPU·RAM 등 현재값과 과거 기록을 관리자가 확인하고, 관리자 수동 기준 또는 감지된 서버 사양으로 자동 계산한 기준을 넘는 작업을 안전하게 차단한다. 장치 업그레이드 뒤에도 새 사양을 자동 반영해야 한다.
+- 측정 경계: 저장공간은 각 계정 personal root의 실제 사용량과 quota를 기록한다. 하나의 Node 프로세스가 처리하는 일반 HTTP 요청의 CPU·RAM을 요청 수로 나눠 사용자별 실제 사용량처럼 표시하지 않는다. CPU·RAM·동시 작업은 userUid/jobId를 가진 Python·AI·문서 변환 같은 서버 관리 작업의 예약량과 향후 격리 worker 실제값만 귀속한다.
+- 정책 엔진: `backend/resourceControlService.js`가 논리 CPU, RAM, load, swap, 온도와 NAS 여유 공간으로 자동 soft/hard 안전선을 매 수집 시 다시 계산한다. auto/manual, 정책 적용/측정 전용, 1~365일 보존, 사용자별 CPU·RAM·동시 작업 override를 원자 JSON으로 저장한다. soft는 신규 관리 작업을 대기시키고 hard 또는 사용자 한도는 신규 작업을 차단하며, 이미 처리 중인 웹 저장 요청을 죽이지 않는다.
+- 이력과 보안: 30초마다 시스템 기록을 날짜별 JSONL에 쓰고 약 2분마다 사용자 storage/관리 작업 snapshot을 포함한다. 관리자 API는 최대 31일·5000점으로 제한하며 일반 사용자에게 공개하지 않는다. 비밀번호·token·파일 경로·환경 변수·프로세스 목록·디스크 일련번호는 기록이나 응답에 넣지 않는다. 사용자 storage 스캔은 매 5초 UI 갱신마다 반복하지 않고 snapshot cache를 사용한다.
+- 첫 실제 적용: 기존 문서 변환 background job을 공통 reserve/release admission에 연결했다. 25% CPU·512MiB 예약을 기준으로 시스템 soft 시 10초 간격으로 대기 후 재평가하고, hard/사용자 한도 시 새 작업을 실패 상태로 명확히 차단한다. 완료·실패·취소 모두 finally에서 예약을 해제한다. 레거시 동기 실행 API도 정책을 통과하지 못하면 429와 상태/이유를 반환한다.
+- 관리자 UI: 서버 설정에서 현재 허용·대기·차단 상태와 한국어 이유, auto/manual 임계값, 정책 적용 스위치, 기록 보존일, 사용자별 실제 storage와 관리 작업 예약/제한, 1시간·24시간·7일 기록 표를 제공한다. CPU·RAM 사용자값의 범위를 화면에 명시한다.
+- 로컬 검증: 정책 자동 계산, soft/hard, 여유 RAM 회복 뒤 높은 swap 잔류 오탐 방지, 저장/검증, 사용자 CPU·RAM·동시 작업, monitor-only, 이력 비밀/경로 비노출을 포함해 backend 전체 45개 중 43 pass, 외부 변환 도구 조건부 2 skip이다. frontend production build와 PDF.js API/Worker 4.8.69, `git diff --check`를 통과했다.
+- 미완료 안전 gate: 정책/이력과 문서 작업 예약 admission은 구현했지만 Python·AI의 실제 프로세스별 CPU/RAM 강제 계측은 아직 활성화하지 않는다. M2에서 non-root cgroup v2 worker, CPU/RAM/PID/time/disk/output/network 제한, 공정 대기열, 취소·재시작 orphan 정리를 함께 통과해야 한다. 이 항목은 master workbook `보류 작업`과 Note Studio 전용 원장에 구현 완료 항목과 분리해 기록했다.

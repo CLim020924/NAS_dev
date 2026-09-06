@@ -1396,6 +1396,8 @@ const publishDocumentStudioResult = (sourcePath, targetPath) => {
 
 const documentStudioJobs = new Map();
 const DOCUMENT_STUDIO_JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const DOCUMENT_STUDIO_RESOURCE_REQUEST = { cpuPercent: 25, memoryBytes: 512 * 1024 * 1024 };
+const RESOURCE_RETRY_DELAY_MS = 10 * 1000;
 const DOCUMENT_STUDIO_JOB_STORE = path.join(WEB_INCOMING_ROOT, 'document-studio-jobs.json');
 let documentStudioPersistTimer = null;
 
@@ -1453,6 +1455,16 @@ const serializeDocumentStudioJob = (job) => ({
   canRetry: ['failed', 'cancelled'].includes(job.status),
 });
 
+const resourceReasonMessage = (reasons = []) => {
+  const labels = {
+    USER_CPU_LIMIT: '사용자 CPU 작업 한도', USER_MEMORY_LIMIT: '사용자 메모리 작업 한도',
+    USER_CONCURRENCY_LIMIT: '사용자 동시 작업 한도', CPU_HARD: '서버 CPU', LOAD_HARD: '서버 부하',
+    MEMORY_HARD: '서버 가용 메모리', SWAP_HARD: '서버 스왑', TEMPERATURE_HARD: '서버 온도',
+    DISK_RESERVE: 'NAS 여유 공간'
+  };
+  return reasons.map((reason) => labels[reason] || reason).join(', ');
+};
+
 const resolveDocumentStudioRequest = (user, body) => {
   const sourceRows = Array.isArray(body?.sources) ? body.sources : [];
   const { basePath } = getValidatedPath(user, '/');
@@ -1469,11 +1481,31 @@ const resolveDocumentStudioRequest = (user, body) => {
   return { basePath, sources, outputDir, requestedOutputPath };
 };
 
-const executeDocumentStudioJob = async (job, user) => {
+const executeDocumentStudioJob = async (job, user, resourceControl) => {
   let workspaceDir = '';
+  let reservationId = '';
   try {
+    if (job.controller.signal.aborted) return;
+    if (resourceControl) {
+      const admission = resourceControl.reserve({ jobId: `document:${job.id}`, user, requested: DOCUMENT_STUDIO_RESOURCE_REQUEST });
+      if (admission.state === 'queued') {
+        job.status = 'queued';
+        job.stage = 'waiting-resources';
+        job.error = '서버 자원이 주의 기준을 넘어 안전해질 때까지 기다리는 중입니다.';
+        job.updatedAt = new Date().toISOString();
+        scheduleDocumentStudioPersist();
+        const retryTimer = setTimeout(() => executeDocumentStudioJob(job, user, resourceControl), RESOURCE_RETRY_DELAY_MS);
+        retryTimer.unref();
+        return;
+      }
+      if (admission.state === 'blocked') {
+        throw Object.assign(new Error(`새 문서 작업이 자원 보호 정책으로 차단되었습니다: ${resourceReasonMessage(admission.reasons)}`), { status: 429 });
+      }
+      reservationId = admission.jobId;
+    }
     job.status = 'running';
     job.stage = 'preparing';
+    job.error = null;
     job.updatedAt = new Date().toISOString();
     scheduleDocumentStudioPersist();
     const resolved = resolveDocumentStudioRequest(user, job.request);
@@ -1529,6 +1561,7 @@ const executeDocumentStudioJob = async (job, user) => {
     job.updatedAt = new Date().toISOString();
     scheduleDocumentStudioPersist();
     if (workspaceDir) safeRmSync(workspaceDir);
+    if (reservationId && resourceControl) resourceControl.release(reservationId);
   }
 };
 
@@ -1672,7 +1705,7 @@ router.post('/document-studio/jobs', verifyToken, (req, res) => {
     };
     documentStudioJobs.set(id, job);
     scheduleDocumentStudioPersist();
-    setImmediate(() => executeDocumentStudioJob(job, req.user));
+    setImmediate(() => executeDocumentStudioJob(job, req.user, req.app.get('resourceControl')));
     return res.status(202).json(serializeDocumentStudioJob(job));
   } catch (error) {
     return res.status(error.status || 500).json({ error: error.message || '문서 작업을 시작하지 못했습니다.' });
@@ -1708,13 +1741,28 @@ router.post('/document-studio/jobs/:jobId/retry', verifyToken, (req, res) => {
   const job = { ...previous, id, status: 'queued', progress: 0, stage: 'queued', createdAt: now, updatedAt: now, results: [], error: null, controller: new AbortController() };
   documentStudioJobs.set(id, job);
   scheduleDocumentStudioPersist();
-  setImmediate(() => executeDocumentStudioJob(job, req.user));
+  setImmediate(() => executeDocumentStudioJob(job, req.user, req.app.get('resourceControl')));
   return res.status(202).json(serializeDocumentStudioJob(job));
 });
 
 router.post('/document-studio/run', verifyToken, async (req, res) => {
   let workspaceDir = '';
+  let reservationId = '';
   try {
+    const resourceControl = req.app.get('resourceControl');
+    if (resourceControl) {
+      const admission = resourceControl.reserve({ user: req.user, requested: DOCUMENT_STUDIO_RESOURCE_REQUEST });
+      if (admission.state !== 'available') {
+        return res.status(429).json({
+          error: admission.state === 'queued'
+            ? '서버 자원이 주의 기준을 넘어 새 문서 작업을 잠시 대기시켰습니다. 작업 목록 방식을 이용해 다시 시도해주세요.'
+            : `새 문서 작업이 자원 보호 정책으로 차단되었습니다: ${resourceReasonMessage(admission.reasons)}`,
+          resourceState: admission.state,
+          reasons: admission.reasons
+        });
+      }
+      reservationId = admission.jobId;
+    }
     const sourceRows = Array.isArray(req.body?.sources) ? req.body.sources : [];
     const { basePath } = getValidatedPath(req.user, '/');
     const sources = sourceRows.map((source) => {
@@ -1771,6 +1819,8 @@ router.post('/document-studio/run', verifyToken, async (req, res) => {
     return res.status(error.status || 500).json({ error: error.message || '문서 작업에 실패했습니다.' });
   } finally {
     if (workspaceDir) safeRmSync(workspaceDir);
+    const resourceControl = req.app.get('resourceControl');
+    if (reservationId && resourceControl) resourceControl.release(reservationId);
   }
 });
 
