@@ -2623,9 +2623,24 @@ router.put('/file', verifyToken, (req, res) => {
       return res.status(403).json({ error: '시스템 백업 보관소는 건드릴 수 없습니다.' });
     }
 
-    // 파일 이동(이름 변경) 실행
+    // 파일 이동(이름 변경)과 Note Studio 첨부 경로 갱신을 함께 처리한다.
+    // 인덱스 갱신이 실패하면 물리 이동도 되돌려 끊어진 링크를 남기지 않는다.
     if (fs.existsSync(fullOldPath)) {
+      const wasDirectory = fs.statSync(fullOldPath).isDirectory();
       fs.renameSync(fullOldPath, fullNewPath);
+      try {
+        getNoteStudioStore(req.user).rewriteAttachmentPaths(
+          toNasRelativePath(basePath, fullOldPath),
+          toNasRelativePath(basePath, fullNewPath),
+          { directory: wasDirectory }
+        );
+      } catch (indexError) {
+        try { fs.renameSync(fullNewPath, fullOldPath); }
+        catch (rollbackError) {
+          indexError.message = `${indexError.message} (파일 이동 원복도 실패했습니다: ${rollbackError.message})`;
+        }
+        throw indexError;
+      }
       invalidateUsageCache(fullOldPath);
       invalidateUsageCache(fullNewPath);
       appendActivity(basePath, { type: 'item-moved', path: toNasRelativePath(basePath, fullNewPath), previousPath: toNasRelativePath(basePath, fullOldPath), actor: getActivityActor(req.user), source: 'web' });

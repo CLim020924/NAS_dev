@@ -82,6 +82,31 @@ test('adds and removes opaque attachment records with revision checks', () => wi
   assert.deepEqual(removed.attachments, []);
 }));
 
+test('rewrites exact attachment paths after a NAS file rename', () => withStore((store) => {
+  const note = store.create({ title: '문서 링크', type: 'block' });
+  store.addAttachment(note.id, { name: '초안.docx', path: '/업무/초안.docx', kind: 'file' }, note.revision);
+  const result = store.rewriteAttachmentPaths('/업무/초안.docx', '/업무/최종.docx');
+  const refreshed = store.get(note.id);
+
+  assert.deepEqual(result, { attachmentCount: 1, noteCount: 1 });
+  assert.equal(refreshed.revision, 3);
+  assert.equal(refreshed.attachments[0].path, '/업무/최종.docx');
+  assert.equal(refreshed.attachments[0].name, '최종.docx');
+  assert.ok(refreshed.attachments[0].movedAt);
+}));
+
+test('rewrites descendant attachment paths when a NAS folder moves', () => withStore((store) => {
+  const first = store.create({ title: '첫 문서', type: 'text' });
+  const second = store.create({ title: '둘째 문서', type: 'text' });
+  store.addAttachment(first.id, { name: 'a.pdf', path: '/프로젝트/문서/a.pdf', kind: 'file' }, first.revision);
+  store.addAttachment(second.id, { name: 'other.pdf', path: '/다른곳/other.pdf', kind: 'file' }, second.revision);
+
+  const result = store.rewriteAttachmentPaths('/프로젝트', '/보관/프로젝트', { directory: true });
+  assert.deepEqual(result, { attachmentCount: 1, noteCount: 1 });
+  assert.equal(store.get(first.id).attachments[0].path, '/보관/프로젝트/문서/a.pdf');
+  assert.equal(store.get(second.id).attachments[0].path, '/다른곳/other.pdf');
+}));
+
 test('allows hierarchy changes but rejects parent cycles', () => withStore((store) => {
   const root = store.create({ title: 'root', type: 'text' });
   const child = store.create({ title: 'child', type: 'text', parentId: root.id });

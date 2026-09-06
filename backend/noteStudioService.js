@@ -77,6 +77,11 @@ const validateContent = (type, content) => {
   return normalized;
 };
 
+const normalizeAttachmentPath = (value) => {
+  const normalized = path.posix.normalize(`/${String(value || '').replace(/\\/g, '/').replace(/^\/+/, '')}`);
+  return normalized === '/.' ? '/' : normalized;
+};
+
 const createNoteStudioStore = ({ personalRootPath }) => {
   if (!personalRootPath) throw new Error('personalRootPath is required');
   const root = path.join(path.resolve(personalRootPath), NOTE_STUDIO_ROOT);
@@ -403,6 +408,52 @@ const createNoteStudioStore = ({ personalRootPath }) => {
     return { ...meta };
   };
 
+  // Keep Note Studio references consistent with moves performed by the NAS file
+  // manager. The caller couples this index rewrite with the physical rename and
+  // rolls the rename back if this atomic index update cannot be committed.
+  const rewriteAttachmentPaths = (oldPath, newPath, { directory = false } = {}) => {
+    const from = normalizeAttachmentPath(oldPath);
+    const to = normalizeAttachmentPath(newPath);
+    if (from === '/' || to === '/') {
+      throw Object.assign(new Error('NAS 루트 경로 자체는 첨부 경로로 이동할 수 없습니다.'), { status: 400, code: 'ATTACHMENT_ROOT_MOVE' });
+    }
+
+    const prefix = `${from}/`;
+    const index = readIndex();
+    let attachmentCount = 0;
+    let noteCount = 0;
+    const changedAt = nowIso();
+
+    index.notes.forEach((meta) => {
+      let changed = false;
+      meta.attachments = (Array.isArray(meta.attachments) ? meta.attachments : []).map((attachment) => {
+        const current = normalizeAttachmentPath(attachment.path);
+        const exact = current === from;
+        const descendant = directory && current.startsWith(prefix);
+        if (!exact && !descendant) return attachment;
+
+        const suffix = exact ? '' : current.slice(from.length);
+        const rewrittenPath = normalizeAttachmentPath(`${to}${suffix}`);
+        changed = true;
+        attachmentCount += 1;
+        return {
+          ...attachment,
+          name: path.posix.basename(rewrittenPath) || attachment.name,
+          path: rewrittenPath,
+          movedAt: changedAt
+        };
+      });
+      if (changed) {
+        meta.revision += 1;
+        meta.updatedAt = changedAt;
+        noteCount += 1;
+      }
+    });
+
+    if (attachmentCount > 0) writeIndex(index);
+    return { attachmentCount, noteCount };
+  };
+
   const restore = (id) => {
     const index = readIndex();
     const meta = findMeta(index, id, { includeDeleted: true });
@@ -443,7 +494,7 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   };
 
   ensureStore();
-  return { listNotebooks, createNotebook, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment };
+  return { listNotebooks, createNotebook, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment, rewriteAttachmentPaths };
 };
 
 module.exports = {
@@ -452,5 +503,5 @@ module.exports = {
   MAX_NOTE_BYTES,
   MAX_VERSIONS_PER_NOTE,
   createNoteStudioStore,
-  _test: { normalizeTitle, normalizeDirectoryName, normalizeType, validateContent, atomicWriteJson }
+  _test: { normalizeTitle, normalizeDirectoryName, normalizeType, validateContent, normalizeAttachmentPath, atomicWriteJson }
 };
