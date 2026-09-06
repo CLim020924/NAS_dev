@@ -4,6 +4,7 @@ const {
   deriveAuthorizedMutationTools,
   deriveAuthorizedMutationToolsFromConversation,
   shouldKeepPendingTask,
+  _test,
 } = require('../aiAgentRuntime');
 
 test('일반 문서와 간단한 코딩 요청을 전용 작업으로 분류한다', () => {
@@ -56,4 +57,14 @@ test('취소는 미완성 작업 권한을 즉시 폐기한다', () => {
 test('실행되지 않은 보충 질문만 미완성 작업으로 유지한다', () => {
   assert.equal(shouldKeepPendingTask('누구에게 보낼까요?', [], ['send_chat_message']), true);
   assert.equal(shouldKeepPendingTask('완료했습니다.', [{ name: 'send_chat_message', ok: true }], ['send_chat_message']), false);
+});
+
+test('일반 문서는 파일 형식과 저장 위치를 사용자가 정하기 전 실행하지 않는다', () => {
+  assert.deepEqual(_test.getMissingDocumentSlots('간증문 파일로 만들어줘\n테스트용 한 문장으로 알아서 써줘'), ['파일 형식', '저장 위치']);
+  assert.deepEqual(_test.getMissingDocumentSlots('간증문을 HWPX 한글파일로 만들어줘'), ['저장 위치']);
+  assert.deepEqual(_test.getMissingDocumentSlots('간증문을 HWPX로 /문서 경로에 만들어줘'), []);
+  assert.throws(
+    () => _test.assertDocumentRequestSlots('보고서 파일을 만들어줘'),
+    (error) => error.code === 'AI_DOCUMENT_SLOT_REQUIRED' && error.missingSlots.length === 2,
+  );
 });

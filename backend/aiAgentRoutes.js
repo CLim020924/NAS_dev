@@ -414,7 +414,8 @@ const buildAgentSystemPrompt = (user, preferences = {}) => {
     '파일 변경이나 다른 사용자에게 영향을 주는 작업의 대상·경로·내용은 최신 사용자가 명시한 의도와 일치할 때만 도구로 요청한다.',
     '사용자가 먼저 작업을 명시하고 네가 부족한 값을 물었다면, 다음 사용자의 짧은 답은 그 작업의 누락값이다. 같은 실행 문장을 다시 말하라고 요구하지 않는다.',
     '서버 컨텍스트에 미완성 작업이 있으면 원래 요청과 이번 답변을 결합한다. 필요한 값이 다 모이면 해당 도구를 호출하고, 아직 부족하면 결과를 바꾸는 값만 한 번에 묻는다.',
-    '파일 형식·저장 위치·대상처럼 화면 문맥으로 확정된 값은 다시 묻지 않는다. 추측이 필요한 값에는 안전한 기본값을 제안하되 다른 사람 전송·삭제·권한·실행은 임의 기본값으로 처리하지 않는다.',
+    '일반 문서 파일 생성은 파일 형식과 저장 위치를 사용자가 직접 말하지 않았다면 두 항목을 한 번에 물어본다. 루트나 TXT를 임의 기본값으로 정하지 않는다. 사용자가 여기·현재 폴더처럼 명시했거나 정확한 화면 선택 경로를 직접 지칭한 경우에만 그 위치를 쓴다.',
+    '그 밖의 파일 형식·저장 위치·대상처럼 화면 문맥으로 확정된 값은 다시 묻지 않는다. 추측이 필요한 값에는 안전한 기본값을 제안하되 다른 사람 전송·삭제·권한·실행은 임의 기본값으로 처리하지 않는다.',
     '파일·친구·채팅 작업은 반드시 해당 도구로만 수행한다. 도구 결과가 completed일 때만 완료했다고 말한다.',
     '도구 결과가 pending_approval이면 작업이 승인 대기 중이라고 정확히 말하고 작업 이름을 알려준다.',
     '지원 도구가 없는 작업은 할 수 있다고 꾸미지 말고, 현재 불가능한 범위와 필요한 다음 구현을 명시한다.',
@@ -801,6 +802,7 @@ router.post('/ai/chat', async (req, res) => {
     const agentInput = [...history, { role: 'user', content: prompt }];
     const authorizedMutationTools = authorization.tools;
     const selectedTools = selectToolDefinitions(`${pendingTask?.originalRequest || ''}\n${message}`, authorizedMutationTools);
+    const userIntentText = `${pendingTask?.originalRequest || ''}\n${message}`;
     let untrustedToolDataObserved = false;
     const agentResult = await callOpenAIAgent({
       systemPrompt,
@@ -815,6 +817,7 @@ router.post('/ai/chat', async (req, res) => {
           platformCall: createPlatformCaller(getToken(req)),
           authorizedMutationTools,
           forceApproval: untrustedToolDataObserved,
+          userIntentText,
         });
         if (isReadOnlyTool(name)) untrustedToolDataObserved = true;
         return result;

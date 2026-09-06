@@ -27,6 +27,23 @@ const INTERNAL_PATH_PARTS = new Set(['.nas_trash', '.agent_trash', '.agent_versi
 const SENSITIVE_NAMES = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|credentials?(?:\.[^.]+)?|secrets?(?:\.[^.]+)?|.*\.(?:pem|key|pfx|p12))$/i;
 let serverRhwpPromise = null;
 
+const getMissingDocumentSlots = (intentText = '') => {
+  const text = String(intentText || '');
+  const hasFormat = /(?:^|[^a-z0-9])(txt|text|텍스트|md|markdown|마크다운|docx|word|워드|hwp|hwpx|한글)(?![a-z0-9])/i.test(text);
+  const hasLocation = /(?:^|\s)\/(?:[^\s]*)|(?:루트|현재|이곳|여기|선택한)\s*(?:폴더|경로|위치)?|(?:폴더|경로|위치)\s*(?:에|로|에서|:)/i.test(text);
+  return [!hasFormat && '파일 형식', !hasLocation && '저장 위치'].filter(Boolean);
+};
+
+const assertDocumentRequestSlots = (intentText) => {
+  const missing = getMissingDocumentSlots(intentText);
+  if (missing.length === 0) return;
+  const err = new Error(`문서 생성에 필요한 ${missing.join('과 ')}를 사용자가 아직 정하지 않았습니다. 임의 기본값으로 도구를 호출하지 말고 두 항목을 한 번에 물어보세요.`);
+  err.status = 409;
+  err.code = 'AI_DOCUMENT_SLOT_REQUIRED';
+  err.missingSlots = missing;
+  throw err;
+};
+
 const ensureServerRhwp = async () => {
   if (!serverRhwpPromise) {
     serverRhwpPromise = (async () => {
@@ -894,6 +911,7 @@ const runTool = async (user, name, args, context) => {
     err.code = 'AI_MUTATION_INTENT_REQUIRED';
     throw err;
   }
+  if (name === 'create_document') assertDocumentRequestSlots(context.userIntentText);
   if (name === 'move_item' && String(args.source_path || '').trim() === '/') throw new Error('계정 루트 자체는 이동할 수 없습니다.');
   if (name === 'organize_files_by_modified_date' && !['day', 'month'].includes(args.granularity)) throw new Error('정리 단위는 day 또는 month여야 합니다.');
   if (name === 'organize_files_by_modified_date') {
@@ -944,5 +962,5 @@ module.exports = {
   searchFiles,
   readTextFile,
   assertToolPathAllowed,
-  _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans, deriveAuthorizedMutationTools, deriveAuthorizedMutationToolsFromConversation, shouldKeepPendingTask, MUTATION_TOOL_NAMES },
+  _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans, deriveAuthorizedMutationTools, deriveAuthorizedMutationToolsFromConversation, shouldKeepPendingTask, getMissingDocumentSlots, assertDocumentRequestSlots, MUTATION_TOOL_NAMES },
 };
