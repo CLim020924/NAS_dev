@@ -1150,3 +1150,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 사용자 확인사항: 로컬에 분리되는 Markdown 파일이 NAS 웹에서는 Notion처럼 여러 이미지, 클릭 가능한 링크, 목록·구분점, emoji, 글꼴 등 풍부한 표현을 지원할 수 있는지 확인한다.
 - 지원 경계: 표준 Markdown/GFM으로 제목, 문단, 굵게·기울임·취소선, 목록·번호·체크박스, 인용, 구분선, 코드, 표, 여러 이미지, 일반/NAS 페이지 링크와 Unicode emoji를 양방향 보존한다. 글꼴 family·크기·색상, 자유 배치, column, callout 세부 스타일, button/action, database view, 접기 상태, 권한, 실행 output은 표준 Markdown만으로 무손실 표현할 수 없다.
 - 설계 결정: NAS 웹의 기준 원본은 type과 attrs를 가진 rich block schema로 유지하고 Markdown은 표준 기능의 편집·교환용 투영본으로 사용한다. 고급 블록은 `.msp-page.json`과 assets에 보존하고 MD에는 사람이 읽을 수 있는 fallback 링크·표·텍스트를 둔다. 허용된 제한적 extension을 도입할 수 있지만 raw HTML/MDX의 임의 script 실행은 금지하고 sanitizer와 scheme/URL 검증을 강제한다. 외부 Markdown 편집기가 이해하지 못한 고급 블록을 삭제한 것으로 오인하지 않는다.
+
+## 2026-09-06 미인지 Notion 기능의 지속 조사와 주석 모델
+
+- 사용자 요청: 사용자가 Notion을 많이 사용하지 않아 직접 열거하지 못한 페이지 형식·편의 기능도 조사해 누락 없이 추가하고, 문서와 코드의 주석 처리까지 구현한다.
+- 공식 기능 재대조: Notion 공식 도움말 기준으로 page/subpage, text·heading·table·list·toggle·media·file·code·bookmark·embed·equation·button·breadcrumb·목차·mention·reminder·emoji, synced block, page/block/inline comment와 resolve/reopen, database property/view/relation/rollup/formula/template/sub-item/dependency, 권한·version·trash·export를 제품 backlog의 상위 범주로 유지한다. 외부 제품을 그대로 복제하지 않고 NAS 계정 경계·파일·실행 모델에 필요한 기능을 선별 구현한다.
+- 주석 구분: `코드 자체 주석`은 `.py`의 실제 `#` 등 언어 문법으로 round-trip하고, `검토 댓글`은 source를 바꾸지 않는 block/cell ID와 선택 범위 anchor 기반 thread로 저장한다. `페이지 토론`, `블록 댓글`, `선택 텍스트 inline 댓글`, `코드 줄 댓글`을 구분하고 답글, @mention, 알림, 해결·재열기, 편집·삭제, 작성자·시간·권한·감사 기록을 가진다. 본문 편집으로 범위가 이동할 때 block ID와 앞뒤 문맥으로 anchor를 복구하며 불확실하면 임의 위치에 붙이지 않고 `위치 변경됨`으로 표시한다.
+- 누락 방지 방식: block type, command, context menu, shortcut, importer/exporter, permission, offline/conflict, accessibility, test case를 registry와 전용 `NAS_NOTE_STUDIO_SPEC.xlsx`의 기능 원장으로 관리한다. 각 구현 묶음 뒤 공식 기능·조사 제품과 gap audit를 다시 수행하되, 모든 기능을 한 번에 활성화하지 않고 저장 호환성과 회귀 검증이 끝난 기능만 순차 공개한다.
