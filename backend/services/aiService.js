@@ -94,6 +94,7 @@ const callOpenAIAgent = async ({
   resumeOutputs = [],
   tools = [],
   onToolCall,
+  onProgress,
   maxTurns = config.AI_MAX_AGENT_TURNS,
   maxOutputTokens = config.AI_MAX_OUTPUT_TOKENS,
   fetchImpl = fetch,
@@ -119,8 +120,13 @@ const callOpenAIAgent = async ({
   const events = [];
   let toolCallCount = Number(resumeState?.toolCallCount || 0);
   const firstTurn = Number(resumeState?.nextTurn || 0);
+  const notifyProgress = async (event) => {
+    if (typeof onProgress !== 'function') return;
+    try { await onProgress(event); } catch (err) {}
+  };
 
   for (let turn = firstTurn; turn < maxTurns; turn += 1) {
+    await notifyProgress({ type: 'model_request', turn: turn + 1, toolCallCount });
     let data;
     try {
       data = await fetchJson('https://api.openai.com/v1/responses', {
@@ -140,6 +146,7 @@ const callOpenAIAgent = async ({
 
     const calls = (data.output || []).filter((item) => item.type === 'function_call');
     if (calls.length === 0) {
+      await notifyProgress({ type: 'model_response', turn: turn + 1, toolCallCount });
       const text = extractResponsesText(data);
       if (!text) {
         const error = new Error('AI 응답이 비어 있습니다.');
@@ -172,8 +179,10 @@ const callOpenAIAgent = async ({
         continue;
       }
       try {
+        await notifyProgress({ type: 'tool_start', name: call.name, callId: call.call_id, toolCallCount });
         const result = await onToolCall(call.name, args, call.call_id);
         events.push({ callId: call.call_id, name: call.name, ok: true, result });
+        await notifyProgress({ type: 'tool_complete', name: call.name, callId: call.call_id, toolCallCount, resultStatus: result?.status || 'completed' });
         if (result?.status === 'pending_approval' && result?.actionId) {
           interruptions.push({
             callId: call.call_id,
@@ -187,6 +196,7 @@ const callOpenAIAgent = async ({
       } catch (err) {
         const failure = { error: err.message || '도구 실행에 실패했습니다.', code: err.code || null };
         events.push({ callId: call.call_id, name: call.name, ok: false, result: failure });
+        await notifyProgress({ type: 'tool_complete', name: call.name, callId: call.call_id, toolCallCount, ok: false });
         outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: false, ...failure }) });
       }
     }

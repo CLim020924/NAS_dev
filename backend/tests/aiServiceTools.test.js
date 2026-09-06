@@ -35,6 +35,35 @@ test('Responses function call을 실행하고 결과를 다음 응답에 전달�
   }
 });
 
+test('Responses agent가 모델·도구·최종 답변의 실제 진행 단계를 알린다', async () => {
+  const previousKey = config.OPENAI_API_KEY;
+  config.OPENAI_API_KEY = 'test-only-key';
+  let count = 0;
+  const progress = [];
+  const fetchImpl = async () => {
+    count += 1;
+    return {
+      ok: true,
+      json: async () => count === 1
+        ? { output: [{ type: 'function_call', name: 'search_files', call_id: 'p1', arguments: '{"query":"a"}' }], usage: {} }
+        : { output_text: '완료', output: [], usage: {} },
+    };
+  };
+  try {
+    await callOpenAIAgent({
+      systemPrompt: 'test', input: 'test', tools: [], fetchImpl,
+      onToolCall: async () => ({ count: 1 }),
+      onProgress: async (event) => progress.push(`${event.type}:${event.name || event.turn}`),
+    });
+    assert.deepEqual(progress, [
+      'model_request:1', 'tool_start:search_files', 'tool_complete:search_files',
+      'model_request:2', 'model_response:2',
+    ]);
+  } finally {
+    config.OPENAI_API_KEY = previousKey;
+  }
+});
+
 test('형식이 깨진 도구 인자는 실행하지 않고 실패 결과로 모델에 돌려준다', async () => {
   const previousKey = config.OPENAI_API_KEY;
   config.OPENAI_API_KEY = 'test-only-key';

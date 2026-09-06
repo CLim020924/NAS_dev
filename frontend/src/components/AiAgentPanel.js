@@ -23,6 +23,15 @@ import axios from 'axios';
 
 const DEFAULT_PREFERENCES = { approvalMode: 'ask_each', dailyTokenLimit: 50000 };
 const ACTIVE_ACTION_STATUSES = new Set(['pending', 'recovery_required']);
+const AI_PANEL_Z_INDEX = 2147483100;
+
+const newRequestId = () => {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16);
+    return (char === 'x' ? value : ((value & 0x3) | 0x8)).toString(16);
+  });
+};
 
 const AiAgentPanel = ({ open, onClose }) => {
   const [status, setStatus] = useState(null);
@@ -35,10 +44,17 @@ const AiAgentPanel = ({ open, onClose }) => {
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [usage, setUsage] = useState({ days: {} });
   const [toolEvents, setToolEvents] = useState([]);
+  const [activity, setActivity] = useState(null);
   const [showLatestButton, setShowLatestButton] = useState(false);
   const scrollRef = useRef(null);
   const endRef = useRef(null);
   const followLatestRef = useRef(true);
+  const activityClearTimerRef = useRef(null);
+
+  const clearActivityLater = (delay = 1800) => {
+    if (activityClearTimerRef.current) window.clearTimeout(activityClearTimerRef.current);
+    activityClearTimerRef.current = window.setTimeout(() => setActivity(null), delay);
+  };
 
   const scrollToLatest = (behavior = 'smooth') => {
     followLatestRef.current = true;
@@ -79,15 +95,43 @@ const AiAgentPanel = ({ open, onClose }) => {
     requestAnimationFrame(() => scrollToLatest(loading ? 'smooth' : 'auto'));
   }, [open, loading, messages.length, actions.length, toolEvents.length]);
 
-  const run = async (fn) => {
+  useEffect(() => {
+    if (!open || !loading || !activity?.requestId) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      try {
+        const res = await axios.get(`/api/ai/progress/${encodeURIComponent(activity.requestId)}`, { withCredentials: true });
+        if (!cancelled && res.data?.progress) setActivity(res.data.progress);
+      } catch (err) {
+        if (!cancelled && err.response?.status !== 404) {
+          setActivity((prev) => prev ? { ...prev, detail: '진행 상태 연결을 다시 확인하고 있습니다.' } : prev);
+        }
+      }
+      if (!cancelled) timer = window.setTimeout(poll, 350);
+    };
+    timer = window.setTimeout(poll, 120);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [open, loading, activity?.requestId]);
+
+  useEffect(() => () => {
+    if (activityClearTimerRef.current) window.clearTimeout(activityClearTimerRef.current);
+  }, []);
+
+  const run = async (fn, options = {}) => {
     setLoading(true);
     setError('');
     try {
       await fn();
     } catch (err) {
       setError(err.response?.data?.error || err.message || '요청에 실패했습니다.');
+      options.onError?.(err);
     } finally {
       setLoading(false);
+      options.onFinally?.();
     }
   };
 
@@ -96,17 +140,22 @@ const AiAgentPanel = ({ open, onClose }) => {
     if (!text || loading) return;
     followLatestRef.current = true;
     setShowLatestButton(false);
+    const requestId = newRequestId();
+    setActivity({
+      requestId, state: 'running', phase: 'sending', title: '요청을 서버에 전달하고 있습니다',
+      detail: '잠시 후 실제 처리 단계가 여기에 표시됩니다.', progress: 3, steps: [],
+    });
     run(async () => {
       setMessage('');
       const now = new Date().toISOString();
       setMessages((prev) => [
         ...prev,
         { role: 'user', content: text, createdAt: now },
-        { role: 'assistant', content: '요청을 확인하고 있습니다…', createdAt: now, pending: true },
       ]);
       const res = await axios.post('/api/ai/chat', {
         message: text,
         context: { currentPath: '/' },
+        requestId,
       }, { withCredentials: true });
       const nextMessages = res.data?.messages || [];
       if (nextMessages.length) {
@@ -119,6 +168,25 @@ const AiAgentPanel = ({ open, onClose }) => {
       setActions(res.data?.actions || []);
       setToolEvents(res.data?.toolEvents || []);
       if (res.data?.usage) setUsage(res.data.usage);
+      const waiting = res.data?.continuation?.status === 'waiting_approval';
+      setActivity((prev) => ({
+        ...(prev || {}), requestId, progress: 100,
+        state: waiting ? 'waiting_approval' : 'completed',
+        phase: waiting ? 'waiting_approval' : 'completed',
+        title: waiting ? '사용자 승인을 기다리고 있습니다' : '요청 처리가 끝났습니다',
+        detail: waiting ? '아래 승인 카드에서 실행 여부를 선택해 주세요.' : '확인된 결과를 대화에 표시했습니다.',
+      }));
+      clearActivityLater(waiting ? 3200 : 1800);
+    }, {
+      onError: (err) => {
+        setMessages((prev) => prev.filter((item) => !item.pending));
+        setActivity((prev) => ({
+          ...(prev || {}), requestId, state: 'failed', phase: 'failed', progress: 100,
+          title: '요청 처리를 마치지 못했습니다',
+          detail: err.response?.data?.error || err.message || '오류 내용을 확인해 주세요.',
+        }));
+        clearActivityLater(5000);
+      },
     });
   };
 
@@ -168,7 +236,8 @@ const AiAgentPanel = ({ open, onClose }) => {
       anchor="right"
       open={open}
       onClose={onClose}
-      PaperProps={{ sx: { width: { xs: '100%', sm: 480 }, maxWidth: '100vw' } }}
+      sx={{ zIndex: AI_PANEL_Z_INDEX }}
+      PaperProps={{ sx: { width: { xs: '100%', sm: 480 }, maxWidth: '100vw', zIndex: AI_PANEL_Z_INDEX } }}
     >
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
@@ -187,7 +256,30 @@ const AiAgentPanel = ({ open, onClose }) => {
           </Tooltip>
           <IconButton size="small" aria-label="AI 에이전트 닫기" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
         </Box>
-        {loading && <LinearProgress aria-label="AI 요청 처리 중" />}
+        {activity && (
+          <Box aria-live="polite" sx={{ borderBottom: (theme) => `1px solid ${theme.palette.divider}`, bgcolor: 'background.default' }}>
+            <LinearProgress
+              aria-label="AI 요청 처리 진행도"
+              variant="determinate"
+              value={Number(activity.progress || 0)}
+              color={activity.state === 'failed' ? 'error' : 'primary'}
+            />
+            <Box sx={{ px: 2, py: 1.15 }}>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                <Typography variant="body2" sx={{ fontWeight: 900 }}>{activity.title}</Typography>
+                <Typography variant="caption" color="text.secondary">{Math.round(Number(activity.progress || 0))}%</Typography>
+              </Stack>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                {activity.detail}
+              </Typography>
+              {activity.steps?.length > 0 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.65, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {activity.steps.slice(-4).map((step) => `${step.status === 'done' ? '✓' : step.status === 'failed' ? '!' : '•'} ${step.title}`).join('  ·  ')}
+                </Typography>
+              )}
+            </Box>
+          </Box>
+        )}
         {error && <Alert severity="error" sx={{ borderRadius: 0 }}>{error}</Alert>}
 
         <Collapse in={settingsOpen} unmountOnExit>
