@@ -103,6 +103,19 @@ const createNoteStudioStore = ({ personalRootPath }) => {
     return meta;
   };
 
+  const assertValidParent = (index, id, parentId) => {
+    if (!parentId) return;
+    if (parentId === id) throw Object.assign(new Error('노트를 자기 자신 아래로 이동할 수 없습니다.'), { status: 400 });
+    let cursor = findMeta(index, parentId);
+    const visited = new Set();
+    while (cursor) {
+      if (cursor.id === id) throw Object.assign(new Error('하위 노트 아래로 이동하면 순환 구조가 생깁니다.'), { status: 409, code: 'NOTE_TREE_CYCLE' });
+      if (!cursor.parentId || visited.has(cursor.id)) break;
+      visited.add(cursor.id);
+      cursor = findMeta(index, cursor.parentId);
+    }
+  };
+
   const readContent = (meta) => {
     const stored = readJson(contentPath(meta.id), null);
     if (!stored) throw Object.assign(new Error('노트 내용 파일이 없습니다.'), { status: 500 });
@@ -190,8 +203,7 @@ const createNoteStudioStore = ({ personalRootPath }) => {
     snapshot(meta, current, String(changes.reason || 'autosave').slice(0, 40));
     if (Object.prototype.hasOwnProperty.call(changes, 'title')) meta.title = normalizeTitle(changes.title);
     if (Object.prototype.hasOwnProperty.call(changes, 'parentId')) {
-      if (changes.parentId === id) throw Object.assign(new Error('노트를 자기 자신 아래로 이동할 수 없습니다.'), { status: 400 });
-      if (changes.parentId) findMeta(index, changes.parentId);
+      assertValidParent(index, id, changes.parentId);
       meta.parentId = changes.parentId || null;
     }
     if (Object.prototype.hasOwnProperty.call(changes, 'language') && meta.type === 'code') meta.language = String(changes.language || 'plaintext').slice(0, 50);

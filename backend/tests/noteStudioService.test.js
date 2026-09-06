@@ -82,6 +82,15 @@ test('adds and removes opaque attachment records with revision checks', () => wi
   assert.deepEqual(removed.attachments, []);
 }));
 
+test('allows hierarchy changes but rejects parent cycles', () => withStore((store) => {
+  const root = store.create({ title: 'root', type: 'text' });
+  const child = store.create({ title: 'child', type: 'text', parentId: root.id });
+  const grandchild = store.create({ title: 'grandchild', type: 'text', parentId: child.id });
+  assert.throws(() => store.update(root.id, { expectedRevision: root.revision, parentId: grandchild.id }), (error) => error.status === 409 && error.code === 'NOTE_TREE_CYCLE');
+  const detached = store.update(child.id, { expectedRevision: child.revision, parentId: null });
+  assert.equal(detached.parentId, null);
+}));
+
 test('rejects oversized notes and bounds retained history', () => withStore((store) => {
   assert.throws(() => store.create({ type: 'text', content: 'x'.repeat(6 * 1024 * 1024) }), (error) => error.status === 413);
   let note = store.create({ type: 'text', content: '0' });
