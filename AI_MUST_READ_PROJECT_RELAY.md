@@ -1182,3 +1182,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 
 - 사용자 확인: Notion 본문에서 글을 쓰다가 새 하위 페이지를 만들면 현재 문장 아래에 페이지 링크가 생기는 것처럼, 노트 본문의 현재 caret/block 위치에서 Office 문서를 생성하면 작성·첫 저장이 끝난 뒤 바로 그 위치에 클릭 가능한 문서 reference block이 생성되어야 한다.
 - 확정 동작: reference block은 실제 파일을 내장하거나 복제하지 않고 stable document ID, 표시 이름, 형식, 현재 NAS 위치, 최신 저장 상태를 가진다. 클릭하면 DOCX/XLSX/PPTX는 OnlyOffice, HWP/HWPX는 RHWP 편집 창을 전면에 연다. 파일을 다른 NAS 경로에 저장하거나 이후 이동·이름 변경해도 block은 같은 문서를 계속 가리키며, 삭제·권한 상실이면 명확한 연결 끊김 상태와 다시 연결을 제공한다.
+
+## 2026-09-06 최근 노트 설계 요구의 전용 원장 동기화 감사
+
+- 사용자 확인 요청: 최근 대화에서 합의한 노트북·Python·Markdown·주석·문서 스튜디오 연계 요구가 모두 영구 기록되고 있는지 확인한다.
+- 감사 결과: 직전 9개 요구는 `AI_MUST_READ_PROJECT_RELAY.md`와 commits `12e28c3`부터 `f27bd79`까지 모두 존재했지만, 프로그램별 상세 기준인 `docs/programs/NAS_NOTE_STUDIO_SPEC.xlsx`에는 아직 반영되지 않은 기록 격차가 있었다. 따라서 당시 상태를 `모두 기록 완료`라고 표현하지 않고 전용 원장을 즉시 동기화했다.
+- 전용 원장 반영: Decisions, User_Flows, Note_Types, Block_Catalog, Slash_Commands, Context_Menus, Python_Notebook, Collaboration, Data_Model, Storage_Interop, Security, API_Contracts, Error_Recovery, Cross_App_Relations, Performance, Test_Matrix, Implementation_Status, Change_Log에 노트북 물리 계층, 혼합 Python 페이지, NAS 원격 실행과 동적 자원 gate, PY/MD 로컬 투영, Markdown 표현 경계, 댓글/소스 주석, Office 문서 생성·호출 경로 기반 첫 저장·stable reference를 연결했다.
+- 검증: artifact-tool로 수정본을 다시 열어 formula error 0, `??`·replacement character·의심 mojibake 0건을 확인했다. 변경된 18개 시트의 관련 범위를 모두 PNG로 렌더해 기존 형식과 줄바꿈·한글 가독성을 확인했고, 출력본과 repo canonical workbook의 SHA-256이 일치한다. 신규 항목은 `설계 확정·구현 전`으로 표시해 구현 완료와 혼동하지 않는다.
