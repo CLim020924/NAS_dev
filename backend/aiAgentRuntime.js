@@ -24,11 +24,11 @@ const INTERNAL_PATH_PARTS = new Set(['.nas_trash', '.agent_trash', '.agent_versi
 const SENSITIVE_NAMES = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|credentials?(?:\.[^.]+)?|secrets?(?:\.[^.]+)?|.*\.(?:pem|key|pfx|p12))$/i;
 const MUTATION_INTENT_RULES = {
   create_folder: /(?:폴더|디렉터리).*(?:생성|만들)|(?:생성|만들).*(?:폴더|디렉터리)/i,
-  write_text_file: /(?:파일|문서|메모|내용).*(?:생성|만들|작성|저장|수정|기록)|(?:생성|만들|작성|저장|수정|기록).*(?:파일|문서|메모|내용)/i,
+  write_text_file: /(?:파일|문서|메모|내용).*(?:생성|만들|작성|저장|수정|기록)/i,
   append_text_file: /(?:파일|문서|메모|내용).*(?:추가|이어|덧붙)|(?:추가|이어|덧붙).*(?:파일|문서|메모|내용)/i,
   copy_item: /복사|복제|사본/i,
-  move_item: /이동|옮기|이름.*(?:변경|바꿔)|(?:변경|바꿔).*이름/i,
-  trash_item: /삭제|지우|휴지통/i,
+  move_item: /이동|옮기|옮겨|이름.*(?:변경|바꾸|바꿔)|(?:변경|바꾸|바꿔).*이름/i,
+  trash_item: /삭제|지우|지워|휴지통/i,
   organize_files_by_modified_date: /정리|분류|날짜별|월별/i,
   send_friend_request: /친구.*(?:추가|요청)|(?:추가|요청).*친구/i,
   set_user_blocked: /차단|차단.*해제|차단해제/i,
@@ -36,7 +36,7 @@ const MUTATION_INTENT_RULES = {
   send_file_to_user: /(?:파일|폴더|문서).*(?:보내|전송|공유)|(?:보내|전송|공유).*(?:파일|폴더|문서)/i,
   create_note: /(?:노트|페이지).*(?:생성|만들|작성)|(?:생성|만들|작성).*(?:노트|페이지)/i,
   update_note: /(?:노트|페이지).*(?:수정|편집|저장|바꿔)|(?:수정|편집|저장|바꿔).*(?:노트|페이지)/i,
-  trash_note: /(?:노트|페이지).*(?:삭제|휴지통)|(?:삭제|휴지통).*(?:노트|페이지)/i,
+  trash_note: /(?:노트|페이지).*(?:삭제|지우|지워|휴지통)|(?:삭제|지우|지워|휴지통).*(?:노트|페이지)/i,
   create_office_document: /(?:문서|워드|엑셀|파워포인트|한글|docx|xlsx|pptx|hwpx).*(?:생성|만들)|(?:생성|만들).*(?:문서|워드|엑셀|파워포인트|한글|docx|xlsx|pptx|hwpx)/i,
   run_python_note: /(?:파이썬|python).*(?:실행|돌려)|(?:실행|돌려).*(?:파이썬|python)/i,
 };
@@ -76,9 +76,36 @@ const normalizePreferences = (value = {}) => ({
   dailyTokenLimit: Math.max(1000, Math.min(Number(value.dailyTokenLimit) || config.AI_DEFAULT_DAILY_TOKEN_LIMIT, 1000000)),
 });
 
-const deriveAuthorizedMutationTools = (userRequest = '') => Object.entries(MUTATION_INTENT_RULES)
-  .filter(([, pattern]) => pattern.test(String(userRequest || '')))
-  .map(([name]) => name);
+const NON_EXECUTION_QUESTION = /(?:방법(?:만)?(?:을)?\s*(?:알려|설명)|어떻게\s*(?:해|하|쓰|사용)|가능한지|(?:할|해\s*줄)\s*수\s*(?:있|없)\s*(?:는지)?|해도\s*(?:돼|되|될)|하면\s*될까|뭐야|무엇이야|차이(?:가|는)?|버튼.*어디|어디.*버튼|여부(?:를)?\s*(?:알려|확인)|기능(?:을)?\s*(?:설명|알려)|안전해\??)/i;
+const RECALL_OR_PAST_QUESTION = /(?:했었|한\s*적|했는지|했지\??|했나\??|말했|요청했|기록.*찾아|대화.*찾아)/i;
+const PROHIBITED_REQUEST = /(?:하지\s*마|하지마|하지\s*말|하지말|하지\s*않|하지않|보내지\s*마|삭제하지|지우지|옮기지|복사하지|실행하지|만들지|생성하지|수정하지|저장하지|추가하지|차단하지|말고)/i;
+const EXPLICIT_EXECUTION_REQUEST = /(?:해\s*줘|해주세요|해\s*주세요|해라|해봐|부탁해|부탁합니다|시작해|실행해|돌려줘|돌려\s*줘|만들어|생성해|작성해|저장해|수정해|편집해|추가해|덧붙여|복사해|복제해|옮겨|이동해|바꿔|변경해|삭제해|지워|정리해|분류해|보내줘|보내\s*줘|전송해|공유해|차단해|해제해|알려줘)/i;
+const FORBIDDEN_ACCOUNT_OR_SECURITY_MUTATION = /(?:영구\s*삭제|(?:계정|사용자|권한|역할|용량|할당량|비밀번호|암호|보안\s*설정).*(?:삭제|지우|변경|바꿔|수정|부여|추가|생성|만들))/i;
+
+const deriveAuthorizedMutationTools = (userRequest = '') => {
+  const text = String(userRequest || '').trim();
+  if (!text || !EXPLICIT_EXECUTION_REQUEST.test(text)) return [];
+  if (NON_EXECUTION_QUESTION.test(text) || RECALL_OR_PAST_QUESTION.test(text) || PROHIBITED_REQUEST.test(text)) return [];
+  if (FORBIDDEN_ACCOUNT_OR_SECURITY_MUTATION.test(text)) return [];
+
+  let candidates = Object.entries(MUTATION_INTENT_RULES)
+    .filter(([, pattern]) => pattern.test(text))
+    .map(([name]) => name);
+
+  // More specific note and Office operations must not inherit broad file-operation permission.
+  if (candidates.includes('create_office_document')) {
+    const separatelyCreatesNote = /(?:노트|페이지)(?:를|을).*(?:생성해|만들어)/i.test(text);
+    candidates = candidates.filter((name) => name !== 'write_text_file' && (name !== 'create_note' || separatelyCreatesNote));
+  }
+  if (candidates.includes('update_note')) candidates = candidates.filter((name) => name !== 'write_text_file');
+  if (candidates.includes('append_text_file')) candidates = candidates.filter((name) => name !== 'write_text_file');
+  if (candidates.includes('trash_note')) candidates = candidates.filter((name) => name !== 'trash_item');
+  if (candidates.includes('run_python_note')) {
+    const separatelyUpdatesNote = /(?:노트|페이지).*(?:수정|편집|저장|바꾸|바꿔)/i.test(text);
+    if (!separatelyUpdatesNote) candidates = candidates.filter((name) => name !== 'update_note');
+  }
+  return [...new Set(candidates)];
+};
 
 const getSafePath = (user, requested = '/') => resolveInside(getAccessBasePath(user), requested || '/');
 const assertToolPathAllowed = (requested, { allowRoot = true } = {}) => {
