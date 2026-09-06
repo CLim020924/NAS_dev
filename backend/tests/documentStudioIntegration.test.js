@@ -30,7 +30,7 @@ test('document studio converts two documents and produces one merged PDF', {
       '--headless', '--nologo', '--nodefault', '--nolockcheck', '--nofirststartwizard',
       `-env:UserInstallation=${new URL(`file://${profileDir}`).href}`,
       '--convert-to', 'odt', '--outdir', sourceDir, firstText, secondText,
-    ], { timeout: 30000, env: { ...process.env, HOME: root } });
+    ], { timeout: 30000, env: { ...process.env, HOME: root, SAL_USE_VCLPLUGIN: 'svp', SAL_DISABLE_OPENCL: '1' } });
 
     const results = await processDocumentStudioJob({
       mode: 'merge-mixed-pdf',
@@ -65,7 +65,7 @@ test('document studio converts an ODT document to DOCX and preserves same-format
       '--headless', '--nologo', '--nodefault', '--nolockcheck', '--nofirststartwizard',
       `-env:UserInstallation=${new URL(`file://${profileDir}`).href}`,
       '--convert-to', 'odt', '--outdir', sourceDir, textPath,
-    ], { timeout: 30000, env: { ...process.env, HOME: root } });
+    ], { timeout: 30000, env: { ...process.env, HOME: root, SAL_USE_VCLPLUGIN: 'svp', SAL_DISABLE_OPENCL: '1' } });
 
     const sourcePath = path.join(sourceDir, 'format-source.odt');
     const converted = await processDocumentStudioJob({

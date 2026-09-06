@@ -269,7 +269,9 @@ const convertSourceToFormat = async (source, outputFormat, workspaceDir, usedNam
     '--convert-to', outputFormat, '--outdir', convertDir, stagedInput,
   ], {
     cwd: workspaceDir,
-    env: { HOME: workspaceDir, SAL_DISABLE_OPENCL: '1' },
+    // Debian 서버가 GUI 세션 없이 부팅된 뒤에도 LibreOffice가 X/Wayland
+    // 백엔드를 기다리지 않도록 headless VCL을 명시한다.
+    env: { HOME: workspaceDir, SAL_DISABLE_OPENCL: '1', SAL_USE_VCLPLUGIN: 'svp' },
     signal,
   });
 
