@@ -17,7 +17,7 @@ app.use(cookieParser()); // 🔹 쿠키 파서 추가
 
 // 🔹 회원 데이터 (실제 서비스에서는 DB 사용)
 let approvedUsers = [
-  { id: 'dntdlzz', password: '001004asAS@', isMaster: true, disabled: false, isOnline: false }
+  { id: 'dntdlzz', password: '', isMaster: true, disabled: false, isOnline: false }
 ];
 let signupRequests = [];
 

@@ -59,7 +59,7 @@ function loadMembers() {
     console.error('회원 정보 로드 실패:', err);
     // 파일이 없거나 형식 오류 시 최초 마스터 계정만 세팅
     approvedUsers = [
-      { id: 'dntdlzz', password: '001004asAS@', isMaster: true, disabled: false, isOnline: false }
+      { id: 'dntdlzz', password: '', isMaster: true, disabled: false, isOnline: false }
     ];
     saveMembers();
   }

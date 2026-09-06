@@ -1,4 +1,6 @@
-import { BLOCK_COMMANDS, filterCommands, flattenNoteTree } from './noteStudioCommands';
+/** @jest-environment node */
+
+import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
 
 test('filters block commands with Korean and English aliases', () => {
   expect(filterCommands(BLOCK_COMMANDS, '제목').map((item) => item.id)).toEqual(['heading-1', 'heading-2']);
@@ -18,4 +20,17 @@ test('keeps orphaned or cyclic legacy rows visible once', () => {
   const flat = flattenNoteTree([{ id: 'a', parentId: 'b' }, { id: 'b', parentId: 'a' }, { id: 'orphan', parentId: 'missing' }]);
   expect(new Set(flat.map((item) => item.id))).toEqual(new Set(['a', 'b', 'orphan']));
   expect(flat).toHaveLength(3);
+});
+
+test('detects only a slash command next to the caret', () => {
+  expect(parseSlashQuery('/제목')).toBe('제목');
+  expect(parseSlashQuery('문단 다음 /code')).toBe('code');
+  expect(parseSlashQuery('https://example.com')).toBeNull();
+});
+
+test('maps explicit Tab patterns without changing normal prose', () => {
+  expect(tabShortcutForParagraph('1')).toBe('ordered-list');
+  expect(tabShortcutForParagraph('-')).toBe('bullet-list');
+  expect(tabShortcutForParagraph('---')).toBe('divider');
+  expect(tabShortcutForParagraph('일반 문장')).toBeNull();
 });

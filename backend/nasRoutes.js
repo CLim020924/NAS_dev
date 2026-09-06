@@ -1267,6 +1267,67 @@ router.delete('/note-studio/notes/:noteId/attachments/:attachmentId', verifyToke
   } catch (error) { return sendNoteStudioError(res, error); }
 });
 
+router.post('/note-studio/notes/:noteId/office-documents', verifyToken, express.json({ limit: '32kb' }), async (req, res) => {
+  let temporaryPath = '';
+  let targetPath = '';
+  try {
+    const format = String(req.body?.format || '').trim().toLowerCase();
+    if (!DOCUMENT_WORKSPACE_FORMATS.has(format)) return res.status(400).json({ error: '지원하지 않는 새 문서 형식입니다.' });
+    const store = getNoteStudioStore(req.user);
+    const note = store.get(req.params.noteId);
+    if (!note.storageRelativePath) return res.status(409).json({ error: '실제 노트북 폴더에 연결된 페이지에서만 문서를 바로 만들 수 있습니다.' });
+    if (Number(req.body?.expectedRevision) !== note.revision) return res.status(409).json({ error: '문서를 만들기 전에 페이지가 다른 창에서 변경되었습니다. 다시 열어주세요.' });
+
+    const normalizedUser = normalizeQuotaFields(req.user);
+    const personalRoot = getQuotaBasePath(normalizedUser);
+    const pageDirectory = resolveInside(personalRoot, note.storageRelativePath);
+    assertRealPathInside(personalRoot, pageDirectory);
+    if (!fs.existsSync(pageDirectory) || !fs.statSync(pageDirectory).isDirectory()) return res.status(409).json({ error: '페이지의 실제 저장 폴더를 찾을 수 없습니다.' });
+
+    let targetDirectory = pageDirectory;
+    if (req.body?.directoryPath) {
+      const validated = getValidatedPath(req.user, req.body.directoryPath);
+      assertRealPathInside(validated.basePath, validated.targetPath);
+      if (!fs.existsSync(validated.targetPath) || !fs.statSync(validated.targetPath).isDirectory()) {
+        return res.status(400).json({ error: '문서를 저장할 NAS 폴더를 찾을 수 없습니다.' });
+      }
+      targetDirectory = validated.targetPath;
+    }
+
+    let bytes;
+    if (format === 'hwp' || format === 'hwpx') {
+      const { HwpDocument } = await ensureServerRhwp();
+      bytes = createBlankRhwpDocument(format, HwpDocument);
+    } else {
+      bytes = await createBlankOfficeDocument(format);
+    }
+    targetPath = getUniqueNewDocumentPath(targetDirectory, req.body?.fileName, format);
+    await assertQuotaAvailable(req.user, bytes.length, targetPath);
+    temporaryPath = path.join(targetDirectory, `.${path.basename(targetPath)}.${process.pid}.${crypto.randomBytes(5).toString('hex')}.tmp`);
+    fs.writeFileSync(temporaryPath, bytes, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporaryPath, targetPath);
+    temporaryPath = '';
+
+    const accessBase = getAccessBasePath(normalizedUser);
+    const relativePath = path.relative(accessBase, targetPath).replace(/\\/g, '/');
+    const fullPath = relativePath ? `/${relativePath}` : '/';
+    let attached;
+    try {
+      attached = store.addAttachment(note.id, { name: path.basename(targetPath), path: fullPath, kind: 'file' }, note.revision);
+    } catch (error) {
+      safeRmSync(targetPath);
+      targetPath = '';
+      throw error;
+    }
+    invalidateUsageCache(targetPath);
+    appendActivity(accessBase, { type: 'file-created', path: fullPath, actor: getActivityActor(req.user), source: 'note-studio' });
+    return res.status(201).json({ success: true, name: path.basename(targetPath), fullPath, format, note: attached.note, attachment: attached.attachment });
+  } catch (error) {
+    safeRmSync(temporaryPath);
+    return sendNoteStudioError(res, error);
+  }
+});
+
 const getOnlyOfficeUser = (req) => {
   const access = verifyOfficeAccessToken(JWT_SECRET, req.query.officeToken);
   const latestOfficeUser = findMemberByAnyId({

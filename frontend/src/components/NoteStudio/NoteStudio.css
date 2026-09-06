@@ -11,7 +11,12 @@
   caret-color: currentColor;
   font-size: 16px;
   line-height: 1.75;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }
+
+.note-studio-editor .tiptap * { cursor: text; }
 
 .note-studio-editor .tiptap > *:first-child { margin-top: 0; }
 .note-studio-editor .tiptap h1 { font-size: 2rem; line-height: 1.25; }

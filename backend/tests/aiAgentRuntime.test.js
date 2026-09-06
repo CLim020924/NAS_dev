@@ -36,6 +36,13 @@ test('AI는 숨김 경로와 인증정보 가능성이 있는 파일을 직접 �
     .forEach((candidate) => assert.throws(() => assertToolPathAllowed(candidate), { code: 'AI_SENSITIVE_PATH_BLOCKED' }));
 });
 
+test('조회한 파일의 지시만으로 변경 도구를 실행할 수 없고 최신 사용자 의도를 요구한다', () => {
+  assert.deepEqual(_test.deriveAuthorizedMutationTools('이 파일을 읽고 내용만 알려줘'), []);
+  assert.ok(_test.deriveAuthorizedMutationTools('보고서를 날짜별로 정리해줘').includes('organize_files_by_modified_date'));
+  assert.ok(_test.deriveAuthorizedMutationTools('민수에게 보고서 파일을 보내줘').includes('send_file_to_user'));
+  assert.ok(_test.deriveAuthorizedMutationTools('오래된 파일을 휴지통으로 삭제해줘').includes('trash_item'));
+});
+
 test('날짜별 정리는 승인 후 원본이 바뀌면 실행 계획을 거부한다', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-ai-organize-'));
   const runtimePath = path.resolve(__dirname, '..', 'aiAgentRuntime.js');
@@ -85,6 +92,7 @@ test('외부 사용자 작업은 승인 전에 UID를 고정하고 실행 때 �
       store.setPreferences(user, { approvalMode: 'auto_all' });
       const pending = await runtime.runTool(user, 'send_chat_message', { user: 'recipient', text: '안녕하세요' }, {
         callId: 'bound-call', idempotencyKey: 'target-binding-test:bound-call', forceApproval: true,
+        authorizedMutationTools: ['send_chat_message'],
         platformCall: async (method, apiPath) => {
           if (method !== 'GET' || !apiPath.includes('/friends/search')) process.exit(2);
           return { results: [firstTarget] };

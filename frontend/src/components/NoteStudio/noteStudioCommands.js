@@ -15,6 +15,19 @@ export const filterCommands = (commands, query = '') => {
   return commands.filter((command) => `${command.label} ${command.keywords || ''}`.toLocaleLowerCase('ko-KR').includes(needle));
 };
 
+export const parseSlashQuery = (textBeforeCaret = '') => {
+  const match = String(textBeforeCaret).match(/(?:^|\s)\/([^\s/]*)$/u);
+  return match ? match[1] : null;
+};
+
+export const tabShortcutForParagraph = (text = '') => {
+  const value = String(text).trim();
+  if (value === '1' || value === '1.') return 'ordered-list';
+  if (value === '-' || value === '*') return 'bullet-list';
+  if (value === '---' || value === '===') return 'divider';
+  return null;
+};
+
 export const flattenNoteTree = (notes = []) => {
   const byParent = new Map();
   const ids = new Set(notes.map((note) => note.id));

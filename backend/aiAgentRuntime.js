@@ -22,6 +22,19 @@ const MAX_READ_BYTES = 180 * 1024;
 const MAX_ORGANIZE_ITEMS = 500;
 const INTERNAL_PATH_PARTS = new Set(['.nas_trash', '.agent_trash', '.agent_versions', '.ai_backups', '.note_studio', '.agent_incoming', 'chat_tmp']);
 const SENSITIVE_NAMES = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|credentials?(?:\.[^.]+)?|secrets?(?:\.[^.]+)?|.*\.(?:pem|key|pfx|p12))$/i;
+const MUTATION_INTENT_RULES = {
+  create_folder: /(?:폴더|디렉터리).*(?:생성|만들)|(?:생성|만들).*(?:폴더|디렉터리)/i,
+  write_text_file: /(?:파일|문서|메모|내용).*(?:생성|만들|작성|저장|수정|기록)|(?:생성|만들|작성|저장|수정|기록).*(?:파일|문서|메모|내용)/i,
+  append_text_file: /(?:파일|문서|메모|내용).*(?:추가|이어|덧붙)|(?:추가|이어|덧붙).*(?:파일|문서|메모|내용)/i,
+  copy_item: /복사|복제|사본/i,
+  move_item: /이동|옮기|이름.*(?:변경|바꿔)|(?:변경|바꿔).*이름/i,
+  trash_item: /삭제|지우|휴지통/i,
+  organize_files_by_modified_date: /정리|분류|날짜별|월별/i,
+  send_friend_request: /친구.*(?:추가|요청)|(?:추가|요청).*친구/i,
+  set_user_blocked: /차단|차단.*해제|차단해제/i,
+  send_chat_message: /(?:채팅|메시지|말).*(?:보내|전송)|(?:보내|전송).*(?:채팅|메시지|말)|에게.*(?:알려|말해)/i,
+  send_file_to_user: /(?:파일|폴더|문서).*(?:보내|전송|공유)|(?:보내|전송|공유).*(?:파일|폴더|문서)/i,
+};
 
 const schema = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const stringProp = (description) => ({ type: 'string', description });
@@ -50,6 +63,10 @@ const normalizePreferences = (value = {}) => ({
   approvalMode: APPROVAL_MODES.has(value.approvalMode) ? value.approvalMode : 'ask_each',
   dailyTokenLimit: Math.max(1000, Math.min(Number(value.dailyTokenLimit) || config.AI_DEFAULT_DAILY_TOKEN_LIMIT, 1000000)),
 });
+
+const deriveAuthorizedMutationTools = (userRequest = '') => Object.entries(MUTATION_INTENT_RULES)
+  .filter(([, pattern]) => pattern.test(String(userRequest || '')))
+  .map(([name]) => name);
 
 const getSafePath = (user, requested = '/') => resolveInside(getAccessBasePath(user), requested || '/');
 const assertToolPathAllowed = (requested, { allowRoot = true } = {}) => {
@@ -330,6 +347,12 @@ const runTool = async (user, name, args, context) => {
   if (name === 'search_conversation_history') return searchMessages(user, args.query, 20);
   const spec = actionSpec(name, args);
   if (!spec) throw new Error('허용되지 않은 도구입니다.');
+  if (!new Set(context.authorizedMutationTools || []).has(name)) {
+    const err = new Error('최신 사용자 요청에서 이 변경 작업을 명시적으로 확인할 수 없어 실행 계획을 만들지 않았습니다. 원하는 작업을 직접 문장으로 요청해주세요.');
+    err.status = 409;
+    err.code = 'AI_MUTATION_INTENT_REQUIRED';
+    throw err;
+  }
   if (name === 'move_item' && String(args.source_path || '').trim() === '/') throw new Error('계정 루트 자체는 이동할 수 없습니다.');
   if (name === 'organize_files_by_modified_date' && !['day', 'month'].includes(args.granularity)) throw new Error('정리 단위는 day 또는 month여야 합니다.');
   if (name === 'organize_files_by_modified_date') {
@@ -355,6 +378,7 @@ module.exports = {
   APPROVAL_MODES,
   defaults,
   normalizePreferences,
+  deriveAuthorizedMutationTools,
   createPlatformCaller,
   executeAction,
   runTool,
@@ -362,5 +386,5 @@ module.exports = {
   searchFiles,
   readTextFile,
   assertToolPathAllowed,
-  _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans },
+  _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans, deriveAuthorizedMutationTools },
 };

@@ -35,7 +35,7 @@ import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutl
 import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
-import { BLOCK_COMMANDS, filterCommands, flattenNoteTree } from './noteStudioCommands';
+import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
 import './NoteStudio.css';
 
 const TYPE_OPTIONS = [
@@ -89,10 +89,17 @@ const NoteStudio = () => {
   const [attachmentPickerOpen, setAttachmentPickerOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [commandPosition, setCommandPosition] = useState({ top: 0, left: 0 });
+  const [commandIndex, setCommandIndex] = useState(0);
   const [pendingParentId, setPendingParentId] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false);
   const [notebookTitle, setNotebookTitle] = useState('');
+  const [officeMenu, setOfficeMenu] = useState(null);
+  const [officeCreating, setOfficeCreating] = useState(false);
+  const [officeLocationDialogOpen, setOfficeLocationDialogOpen] = useState(false);
+  const [officeLocationPickerOpen, setOfficeLocationPickerOpen] = useState(false);
+  const [officeLocationFormat, setOfficeLocationFormat] = useState('docx');
   const selectedRef = useRef(null);
   const saveTimerRef = useRef(null);
   const pendingContentRef = useRef(null);
@@ -100,16 +107,42 @@ const NoteStudio = () => {
   const importInputRef = useRef(null);
   const editGenerationRef = useRef(0);
   const savingRef = useRef(false);
+  const slashFromRef = useRef(null);
+  const commandOpenRef = useRef(false);
 
   const editor = useEditor({
     extensions: [StarterKit, Placeholder.configure({ placeholder: "'/'를 누르거나 내용을 입력하세요." })],
     content: { type: 'doc', content: [{ type: 'paragraph' }] },
     immediatelyRender: false,
     editorProps: {
-      handleKeyDown: (_view, event) => {
+      handleKeyDown: (view, event) => {
+        const { $from, empty } = view.state.selection;
+        if (event.key === 'Tab' && !event.shiftKey && empty && $from.parent.type.name === 'paragraph') {
+          const shortcut = tabShortcutForParagraph($from.parent.textContent);
+          if (shortcut) {
+            event.preventDefault();
+            const from = $from.start();
+            const to = $from.end();
+            setTimeout(() => {
+              let chain = editor.chain().focus().deleteRange({ from, to });
+              if (shortcut === 'ordered-list') chain = chain.toggleOrderedList();
+              if (shortcut === 'bullet-list') chain = chain.toggleBulletList();
+              if (shortcut === 'divider') chain = chain.setHorizontalRule();
+              chain.run();
+            }, 0);
+            return true;
+          }
+        }
         if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          slashFromRef.current = view.state.selection.from;
           setCommandQuery('');
-          setTimeout(() => setCommandOpen(true), 0);
+          setCommandIndex(0);
+          setTimeout(() => {
+            const caret = view.coordsAtPos(view.state.selection.from);
+            setCommandPosition({ top: caret.bottom + 6, left: caret.left });
+            commandOpenRef.current = true;
+            setCommandOpen(true);
+          }, 0);
         }
         return false;
       }
@@ -119,6 +152,21 @@ const NoteStudio = () => {
       pendingContentRef.current = currentEditor.getJSON();
       editGenerationRef.current += 1;
       setSavingState('dirty');
+      if (commandOpenRef.current && slashFromRef.current !== null) {
+        const to = currentEditor.state.selection.from;
+        const text = currentEditor.state.doc.textBetween(slashFromRef.current, to, ' ');
+        const query = parseSlashQuery(text);
+        if (query === null) {
+          commandOpenRef.current = false;
+          slashFromRef.current = null;
+          setCommandOpen(false);
+        } else {
+          setCommandQuery(query);
+          setCommandIndex(0);
+          const caret = currentEditor.view.coordsAtPos(to);
+          setCommandPosition({ top: caret.bottom + 6, left: caret.left });
+        }
+      }
     }
   });
 
@@ -219,12 +267,32 @@ const NoteStudio = () => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && selectedRef.current?.type === 'block') {
         event.preventDefault();
         setCommandQuery('');
+        setCommandIndex(0);
+        slashFromRef.current = null;
+        const caret = editor?.view.coordsAtPos(editor.state.selection.from);
+        if (caret) setCommandPosition({ top: caret.bottom + 6, left: caret.left });
+        commandOpenRef.current = true;
         setCommandOpen(true);
+      }
+      if (commandOpenRef.current && ['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(event.key)) {
+        event.preventDefault();
+        const activeCommands = filterCommands(BLOCK_COMMANDS, commandQuery);
+        if (event.key === 'Escape') {
+          commandOpenRef.current = false;
+          slashFromRef.current = null;
+          setCommandOpen(false);
+        } else if (event.key === 'ArrowDown') {
+          setCommandIndex((index) => (index + 1) % Math.max(activeCommands.length, 1));
+        } else if (event.key === 'ArrowUp') {
+          setCommandIndex((index) => (index - 1 + Math.max(activeCommands.length, 1)) % Math.max(activeCommands.length, 1));
+        } else if (activeCommands[commandIndex]) {
+          runBlockCommand(activeCommands[commandIndex].id);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [saveNow]);
+  }, [commandIndex, commandQuery, editor, saveNow]);
 
   const updatePlain = (value) => {
     setPlainContent(value);
@@ -349,6 +417,43 @@ const NoteStudio = () => {
     ? openFolderWindowByPath(attachment.path)
     : openFileWindowByPath(attachment.path, attachment.name, true);
 
+  const createOfficeDocument = async (format, label, directoryPath = '') => {
+    const current = selectedRef.current;
+    setOfficeMenu(null);
+    if (!current || current.deletedAt || officeCreating) return;
+    if (savingState === 'dirty' || savingState === 'saving') {
+      setMessage({ severity: 'info', text: '페이지 저장이 끝난 뒤 문서를 만들어 주세요. 입력 내용은 자동 저장 중입니다.' });
+      return;
+    }
+    setOfficeCreating(true);
+    try {
+      const { data } = await axios.post(`/api/note-studio/notes/${encodeURIComponent(current.id)}/office-documents`, {
+        format,
+        fileName: `새 ${label}`,
+        expectedRevision: current.revision,
+        ...(directoryPath ? { directoryPath } : {})
+      }, { withCredentials: true });
+      selectedRef.current = { ...current, ...data.note };
+      setSelected(selectedRef.current);
+      setNotes((items) => items.map((note) => note.id === current.id ? { ...note, ...data.note } : note));
+      setMessage({ severity: 'success', text: `${data.name}을(를) ${directoryPath ? '선택한 NAS 폴더' : '이 페이지 폴더'}에 만들고 이 페이지에 연결했습니다.` });
+      await openFileWindowByPath(data.fullPath, data.name, true);
+    } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '페이지에 새 문서를 만들지 못했습니다.') }); }
+    finally { setOfficeCreating(false); }
+  };
+
+  const chooseOfficeDestination = (item) => {
+    setOfficeLocationPickerOpen(false);
+    const option = {
+      docx: ['docx', '글 문서'],
+      xlsx: ['xlsx', '스프레드시트'],
+      pptx: ['pptx', '프레젠테이션'],
+      hwpx: ['hwpx', '한글 문서']
+    }[officeLocationFormat];
+    if (!item?.fullPath || !option) return;
+    createOfficeDocument(option[0], option[1], item.fullPath);
+  };
+
   const importFile = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -397,7 +502,9 @@ const NoteStudio = () => {
     if (!editor) return;
     const { from } = editor.state.selection;
     let chain = editor.chain().focus();
-    if (from > 0 && editor.state.doc.textBetween(from - 1, from) === '/') chain = chain.deleteRange({ from: from - 1, to: from });
+    if (slashFromRef.current !== null && slashFromRef.current < from) {
+      chain = chain.deleteRange({ from: slashFromRef.current, to: from });
+    }
     const actions = {
       paragraph: () => chain.setParagraph().run(),
       'heading-1': () => chain.toggleHeading({ level: 1 }).run(),
@@ -409,6 +516,8 @@ const NoteStudio = () => {
       divider: () => chain.setHorizontalRule().run()
     };
     actions[commandId]?.();
+    commandOpenRef.current = false;
+    slashFromRef.current = null;
     setCommandOpen(false);
   };
 
@@ -455,6 +564,7 @@ const NoteStudio = () => {
             <TextField variant="standard" value={selected.title} onChange={(event) => updateMeta({ title: event.target.value })} disabled={!!selected.deletedAt} fullWidth inputProps={{ 'aria-label': '노트 제목' }} InputProps={{ disableUnderline: true, sx: { fontWeight: 900, fontSize: 18 } }} />
             {selected.type === 'code' && <Select size="small" value={selected.language || 'plaintext'} onChange={(event) => updateMeta({ language: event.target.value })} sx={{ minWidth: 118 }}>{languageOptions.map((language) => <MenuItem key={language} value={language}>{language}</MenuItem>)}</Select>}
             <Chip size="small" label={saveLabel} color={savingState === 'error' || savingState === 'conflict' ? 'warning' : savingState === 'saved' || savingState === 'idle' ? 'success' : 'default'} variant="outlined" />
+            {!selected.deletedAt && <Button size="small" variant="outlined" startIcon={<DescriptionIcon />} disabled={officeCreating || savingState === 'dirty' || savingState === 'saving'} onClick={(event) => setOfficeMenu({ anchorEl: event.currentTarget })}>문서 만들기</Button>}
             {!selected.deletedAt && <Tooltip title="버전 기록"><IconButton onClick={openVersions}><HistoryIcon /></IconButton></Tooltip>}
             {!selected.deletedAt && <Tooltip title="파일로 내보내기"><IconButton onClick={exportSelected}><DownloadIcon /></IconButton></Tooltip>}
             {!selected.deletedAt && <Tooltip title={savingState === 'dirty' || savingState === 'saving' ? '저장이 끝난 뒤 첨부할 수 있습니다.' : 'NAS 파일 또는 폴더 첨부'}><span><IconButton disabled={savingState === 'dirty' || savingState === 'saving'} onClick={() => setAttachmentPickerOpen(true)}><AttachFileIcon /></IconButton></span></Tooltip>}
@@ -462,7 +572,7 @@ const NoteStudio = () => {
           </Stack>
           {selected.type === 'block' && <BlockToolbar editor={editor} />}
           {(selected.attachments || []).length > 0 && <Stack direction="row" spacing={0.75} sx={{ px: 1.25, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', overflowX: 'auto' }}>{selected.attachments.map((attachment) => <Chip key={attachment.id} icon={<AttachFileIcon />} label={attachment.name} onClick={() => openAttachment(attachment)} onDelete={selected.deletedAt ? undefined : () => removeAttachment(attachment)} deleteIcon={<CloseIcon />} sx={{ flex: '0 0 auto' }} />)}</Stack>}
-          <Box sx={{ flex: 1, minHeight: 0, position: 'relative', bgcolor: 'background.paper' }}>
+          <Box onContextMenu={(event) => { if (selected.deletedAt || event.shiftKey) return; event.preventDefault(); setOfficeMenu({ position: { top: event.clientY, left: event.clientX } }); }} sx={{ flex: 1, minHeight: 0, position: 'relative', bgcolor: 'background.paper' }}>
             {selected.deletedAt && <Alert severity="warning" sx={{ borderRadius: 0 }}>휴지통의 노트는 읽기 전용입니다. 편집하려면 먼저 복원하세요.</Alert>}
             {selected.type === 'block' ? <Box className="note-studio-editor" sx={{ height: '100%', pointerEvents: selected.deletedAt ? 'none' : 'auto', opacity: selected.deletedAt ? 0.72 : 1 }}><EditorContent editor={editor} /></Box> : <Editor key={selected.id} height="100%" language={selected.type === 'markdown' ? 'markdown' : selected.type === 'text' ? 'plaintext' : selected.language || 'plaintext'} value={plainContent} onChange={(value) => !selected.deletedAt && updatePlain(value ?? '')} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} options={{ readOnly: !!selected.deletedAt, minimap: { enabled: false }, wordWrap: selected.type === 'code' ? 'off' : 'on', fontSize: 15, padding: { top: 24 }, automaticLayout: true, scrollBeyondLastLine: false }} />}
           </Box>
@@ -470,20 +580,41 @@ const NoteStudio = () => {
       </Box>
 
       <Menu anchorEl={createAnchor} open={!!createAnchor} onClose={() => { setCreateAnchor(null); setPendingParentId(null); }}>{pendingParentId && <MenuItem disabled sx={{ fontSize: 12 }}>“{notes.find((note) => note.id === pendingParentId)?.title || '선택한 노트'}” 아래에 만들기</MenuItem>}{TYPE_OPTIONS.map((option) => <MenuItem key={option.type} onClick={() => createNote(option)} sx={{ py: 1.25, minWidth: 250 }}><ListItemIcon><option.Icon fontSize="small" /></ListItemIcon><ListItemText primary={option.label} secondary={option.detail} /></MenuItem>)}</Menu>
+      <Menu
+        open={!!officeMenu}
+        onClose={() => setOfficeMenu(null)}
+        anchorReference={officeMenu?.position ? 'anchorPosition' : 'anchorEl'}
+        anchorPosition={officeMenu?.position}
+        anchorEl={officeMenu?.anchorEl || null}
+      >
+        <MenuItem disabled><ListItemText primary="이 페이지 폴더에 새 문서" secondary="저장하면 페이지의 연결 항목으로 유지됩니다." /></MenuItem>
+        <MenuItem onClick={() => createOfficeDocument('docx', '글 문서')}><ListItemText primary="글 문서" secondary="DOCX · OnlyOffice" /></MenuItem>
+        <MenuItem onClick={() => createOfficeDocument('xlsx', '스프레드시트')}><ListItemText primary="스프레드시트" secondary="XLSX · OnlyOffice" /></MenuItem>
+        <MenuItem onClick={() => createOfficeDocument('pptx', '프레젠테이션')}><ListItemText primary="프레젠테이션" secondary="PPTX · OnlyOffice" /></MenuItem>
+        <MenuItem onClick={() => createOfficeDocument('hwpx', '한글 문서')}><ListItemText primary="한글 문서" secondary="HWPX · RHWP" /></MenuItem>
+        <Divider />
+        <MenuItem onClick={() => { setOfficeMenu(null); setOfficeLocationDialogOpen(true); }}><ListItemText primary="다른 NAS 위치에 만들기…" secondary="형식과 저장 폴더를 직접 선택" /></MenuItem>
+      </Menu>
       <Menu open={!!contextMenu} onClose={() => setContextMenu(null)} anchorReference="anchorPosition" anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}>
         <MenuItem onClick={() => { const target = contextMenu.note; setContextMenu(null); openNote(target); }}>열기</MenuItem>
         {!trashMode && <MenuItem onClick={() => { const target = contextMenu; setContextMenu(null); setPendingParentId(target.note.id); setCreateAnchor(target.anchorEl); }}>하위 노트 만들기</MenuItem>}
         {!trashMode && contextMenu?.note?.parentId && !contextMenu?.note?.storageRelativePath && <MenuItem onClick={() => moveNoteToRoot(contextMenu.note)}>최상위로 이동</MenuItem>}
       </Menu>
-      <Dialog open={commandOpen} onClose={() => setCommandOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 900 }}>블록 명령</DialogTitle>
-        <DialogContent dividers sx={{ p: 0 }}>
-          <Box sx={{ p: 1.25 }}><TextField autoFocus fullWidth size="small" placeholder="제목, 목록, 인용, 코드…" value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} /></Box>
-          <List dense disablePadding>{visibleCommands.map((command) => <ListItemButton key={command.id} onClick={() => runBlockCommand(command.id)}><ListItemText primary={command.label} secondary={command.keywords} /></ListItemButton>)}</List>
-          {visibleCommands.length === 0 && <Typography color="text.secondary" sx={{ p: 2 }}>일치하는 명령이 없습니다.</Typography>}
-        </DialogContent>
-        <DialogActions><Typography variant="caption" color="text.secondary" sx={{ mr: 'auto', ml: 1 }}>본문에서 / 또는 Ctrl+K</Typography><Button onClick={() => setCommandOpen(false)}>닫기</Button></DialogActions>
-      </Dialog>
+      <Menu
+        open={commandOpen}
+        onClose={() => { commandOpenRef.current = false; slashFromRef.current = null; setCommandOpen(false); editor?.commands.focus(); }}
+        anchorReference="anchorPosition"
+        anchorPosition={commandOpen ? commandPosition : undefined}
+        autoFocus={false}
+        disableAutoFocusItem
+        disableEnforceFocus
+        disableRestoreFocus
+        MenuListProps={{ dense: true, sx: { width: 300, maxHeight: 360, py: 0.75 } }}
+      >
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 1.5, pb: 0.5 }}>블록 명령 · 입력해서 검색 · ↑↓ 선택 · Enter 실행</Typography>
+        {visibleCommands.map((command, index) => <MenuItem key={command.id} selected={index === commandIndex} onMouseEnter={() => setCommandIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => runBlockCommand(command.id)}><ListItemText primary={command.label} secondary={command.keywords} /></MenuItem>)}
+        {visibleCommands.length === 0 && <Typography color="text.secondary" variant="body2" sx={{ p: 2 }}>일치하는 명령이 없습니다.</Typography>}
+      </Menu>
       <Dialog open={versionsOpen} onClose={() => setVersionsOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontWeight: 900 }}>버전 기록</DialogTitle>
         <DialogContent dividers>{versions.length === 0 ? <Typography color="text.secondary">아직 이전 버전이 없습니다. 첫 저장 이후부터 기록됩니다.</Typography> : <List disablePadding>{versions.map((version) => <ListItemButton key={version.versionId} onClick={() => restoreVersion(version)}><ListItemIcon><HistoryIcon /></ListItemIcon><ListItemText primary={`버전 ${version.revision} · ${version.title}`} secondary={`${formatTime(version.createdAt)} · ${version.reason === 'manual' ? '직접 저장' : version.reason === 'version-restore' ? '버전 복원' : '자동 저장'}`} /><RestoreIcon fontSize="small" /></ListItemButton>)}</List>}</DialogContent>
@@ -494,7 +625,24 @@ const NoteStudio = () => {
         <DialogContent><TextField autoFocus fullWidth label="노트북 이름" value={notebookTitle} onChange={(event) => setNotebookTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createNotebook(); }} helperText="계정 루트의 NOTE MANAGER 아래에 실제 폴더로 생성됩니다." sx={{ mt: 1 }} /></DialogContent>
         <DialogActions><Button onClick={() => setNotebookDialogOpen(false)}>취소</Button><Button variant="contained" onClick={createNotebook}>만들기</Button></DialogActions>
       </Dialog>
+      <Dialog open={officeLocationDialogOpen} onClose={() => setOfficeLocationDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>다른 NAS 위치에 문서 만들기</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>선택한 폴더에 파일을 만들고 현재 페이지에는 연결 항목을 남깁니다.</Typography>
+          <Select fullWidth size="small" value={officeLocationFormat} onChange={(event) => setOfficeLocationFormat(event.target.value)}>
+            <MenuItem value="docx">글 문서 · DOCX</MenuItem>
+            <MenuItem value="xlsx">스프레드시트 · XLSX</MenuItem>
+            <MenuItem value="pptx">프레젠테이션 · PPTX</MenuItem>
+            <MenuItem value="hwpx">한글 문서 · HWPX</MenuItem>
+          </Select>
+        </DialogContent>
+        <DialogActions>
+          <Button color="inherit" onClick={() => setOfficeLocationDialogOpen(false)}>취소</Button>
+          <Button variant="contained" onClick={() => { setOfficeLocationDialogOpen(false); setOfficeLocationPickerOpen(true); }}>저장 폴더 선택</Button>
+        </DialogActions>
+      </Dialog>
       <NasItemPickerDialog open={attachmentPickerOpen} onClose={() => setAttachmentPickerOpen(false)} onSelect={addAttachment} title="노트에 NAS 항목 첨부" confirmLabel="첨부" allowCurrentFolder />
+      <NasItemPickerDialog open={officeLocationPickerOpen} onClose={() => setOfficeLocationPickerOpen(false)} onSelect={chooseOfficeDestination} title="새 문서를 저장할 NAS 폴더" confirmLabel="여기에 만들기" folderOnly allowCurrentFolder />
     </Box>
   );
 };

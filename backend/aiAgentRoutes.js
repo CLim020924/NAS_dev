@@ -27,6 +27,7 @@ const {
 const {
   TOOL_DEFINITIONS,
   normalizePreferences,
+  deriveAuthorizedMutationTools,
   createPlatformCaller,
   executeAction: executeRuntimeAction,
   runTool,
@@ -276,7 +277,28 @@ const toolOutput = (callId, payload) => ({
 
 const pendingAnswer = (interruptions = []) => {
   const titles = interruptions.map((item) => item.title || item.name).filter(Boolean);
-  return `승인이 필요한 작업이 ${interruptions.length}개 있습니다${titles.length ? `: ${titles.join(', ')}` : ''}. 작업 탭에서 승인하거나 거절하면 이 요청의 답변을 그대로 이어갑니다.`;
+  return `승인이 필요한 작업이 ${interruptions.length}개 있습니다${titles.length ? `: ${titles.join(', ')}` : ''}. 대화 안의 승인 카드에서 승인하거나 거절하면 이 요청의 답변을 그대로 이어갑니다.`;
+};
+
+const estimateAgentInputTokens = (systemPrompt, input) => Math.max(
+  1,
+  Math.ceil(Buffer.byteLength(`${systemPrompt}\n${JSON.stringify(input)}`, 'utf8') / 3)
+);
+
+const getOutputTokenBudget = (user, systemPrompt, input) => {
+  const preferences = normalizePreferences(getPreferences(user));
+  const today = new Date().toISOString().slice(0, 10);
+  const used = Number(getUsage(user).days?.[today]?.totalTokens || 0);
+  const remaining = Math.max(0, preferences.dailyTokenLimit - used);
+  const estimatedInput = estimateAgentInputTokens(systemPrompt, input);
+  const outputBudget = Math.min(config.AI_MAX_OUTPUT_TOKENS, remaining - estimatedInput);
+  if (outputBudget < 128) {
+    const err = new Error('이 요청은 오늘 남은 AI 토큰 한도를 넘을 가능성이 있어 실행하지 않았습니다. 설정에서 한도를 조정하거나 요청을 더 짧게 나눠주세요.');
+    err.status = 429;
+    err.code = 'AI_DAILY_TOKEN_BUDGET_INSUFFICIENT';
+    throw err;
+  }
+  return Math.floor(outputBudget);
 };
 
 const bindPausedActions = (user, runId, interruptions = []) => interruptions.map((item) => {
@@ -292,17 +314,25 @@ const continueStoredRun = async (user, run, req, { forceApproval = false } = {})
 
   updateAgentRun(user, run.runId, { status: 'resuming', resumeStartedAt: new Date().toISOString() });
   try {
+    const resumeInput = [run.continuation, ...(run.interruptions || []).map((item) => item.output)];
+    let untrustedToolDataObserved = true;
     const agentResult = await callOpenAIAgent({
       systemPrompt: run.systemPrompt,
       resumeState: run.continuation,
       resumeOutputs: (run.interruptions || []).map((item) => toolOutput(item.callId, item.output)),
       tools: TOOL_DEFINITIONS,
-      onToolCall: (name, args, callId) => runTool(user, name, args, {
-        callId,
-        idempotencyKey: `${run.runId}:${callId}`,
-        platformCall: createPlatformCaller(getToken(req)),
-        forceApproval,
-      }),
+      maxOutputTokens: getOutputTokenBudget(user, run.systemPrompt, resumeInput),
+      onToolCall: async (name, args, callId) => {
+        const result = await runTool(user, name, args, {
+          callId,
+          idempotencyKey: `${run.runId}:${callId}`,
+          platformCall: createPlatformCaller(getToken(req)),
+          forceApproval: forceApproval || untrustedToolDataObserved,
+          authorizedMutationTools: run.authorizedMutationTools || [],
+        });
+        if (['list_files', 'search_files', 'read_text_file', 'search_conversation_history'].includes(name)) untrustedToolDataObserved = true;
+        return result;
+      },
     });
     recordUsage(user, agentResult.usage);
 
@@ -551,15 +581,25 @@ router.post('/ai/chat', async (req, res) => {
 
     const agentRunId = crypto.randomUUID();
     const systemPrompt = buildAgentSystemPrompt(user, preferences);
+    const agentInput = [...history, { role: 'user', content: prompt }];
+    const authorizedMutationTools = deriveAuthorizedMutationTools(message);
+    let untrustedToolDataObserved = false;
     const agentResult = await callOpenAIAgent({
       systemPrompt,
-      input: [...history, { role: 'user', content: prompt }],
+      input: agentInput,
       tools: TOOL_DEFINITIONS,
-      onToolCall: (name, args, callId) => runTool(user, name, args, {
-        callId,
-        idempotencyKey: `${agentRunId}:${callId}`,
-        platformCall: createPlatformCaller(getToken(req)),
-      }),
+      maxOutputTokens: getOutputTokenBudget(user, systemPrompt, agentInput),
+      onToolCall: async (name, args, callId) => {
+        const result = await runTool(user, name, args, {
+          callId,
+          idempotencyKey: `${agentRunId}:${callId}`,
+          platformCall: createPlatformCaller(getToken(req)),
+          authorizedMutationTools,
+          forceApproval: untrustedToolDataObserved,
+        });
+        if (['list_files', 'search_files', 'read_text_file', 'search_conversation_history'].includes(name)) untrustedToolDataObserved = true;
+        return result;
+      },
     });
     const answer = agentResult.paused ? pendingAnswer(agentResult.interruptions) : agentResult.text;
     recordUsage(user, agentResult.usage);
@@ -573,11 +613,12 @@ router.post('/ai/chat', async (req, res) => {
         continuation: agentResult.continuation,
         interruptions,
         originalMessageHash: crypto.createHash('sha256').update(message).digest('hex'),
+        authorizedMutationTools,
       });
     }
 
     const saved = appendMessages(user, [
-      { role: 'user', content: message, createdAt: new Date().toISOString(), context },
+      { role: 'user', content: message, createdAt: new Date().toISOString(), context, agentRunId },
       { role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId, pendingApproval: !!agentResult.paused },
     ]);
 

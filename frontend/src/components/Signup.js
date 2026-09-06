@@ -104,10 +104,10 @@ function Signup() {
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}><CircularProgress size={24} /></Box>
       ) : capacity?.signupAvailable === false ? (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          현재 새 계정의 기본 50GB를 확보할 수 없어 회원가입이 잠시 중단되었습니다. 관리자에게 문의해주세요.
+          현재 새 계정의 기본 20GB를 확보할 수 없어 회원가입이 잠시 중단되었습니다. 관리자에게 문의해주세요.
         </Alert>
       ) : (
-        <Alert severity="info" sx={{ mb: 2 }}>승인된 계정에는 기본 개인 저장공간 50GB가 제공됩니다.</Alert>
+        <Alert severity="info" sx={{ mb: 2 }}>승인된 계정에는 기본 개인 저장공간 20GB가 제공됩니다.</Alert>
       )}
       {error && <Typography color="error" align="center">{error}</Typography>}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

@@ -397,7 +397,7 @@ const Settings = () => {
               {userManagementError && <Alert severity="error" onClose={() => setUserManagementError('')} sx={{ mb: 2 }}>{userManagementError}</Alert>}
               <StorageCapacityOverview storageCapacity={storageCapacity} />
               <Typography variant="h6" sx={{ mb: 2 }}>가입 승인 대기자 {pendingUsers.length > 0 && <Chip label={pendingUsers.length} color="error" size="small" />}</Typography>
-              {pendingUsers.length > 0 && <Alert severity="info" sx={{ mb: 2 }}>가입 대기자 한 명마다 기본 50GB가 미리 예약되어 중복 승인을 해도 전체 용량을 초과하지 않습니다.</Alert>}
+              {pendingUsers.length > 0 && <Alert severity="info" sx={{ mb: 2 }}>가입 대기자 한 명마다 기본 20GB가 미리 예약되어 중복 승인을 해도 전체 용량을 초과하지 않습니다.</Alert>}
               <TableContainer component={Paper} sx={{ mb: 5, border: '1px solid #e2e8f0', borderRadius: 2 }} elevation={0}>
                 <Table size="small">
                   <TableHead sx={{ backgroundColor: themeName === 'dark' ? 'rgba(255,255,255,0.06)' : '#f8fafc' }}>

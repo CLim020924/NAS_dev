@@ -9,7 +9,8 @@ app.use(cors());
 
 // 임시 메모리 데이터베이스 (실제 서비스에서는 DB를 사용해야 함)
 let approvedUsers = [
-  { id: 'dntdlzz', password: '001004asAS@', isMaster: true } // 초기 마스터 계정
+  // 실제 계정 정보는 운영 members 저장소에서만 관리한다.
+  { id: 'dntdlzz', password: '', isMaster: true }
 ];
 let signupRequests = [];
 

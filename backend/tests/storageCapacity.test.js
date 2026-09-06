@@ -5,7 +5,9 @@ const path = require('node:path');
 const {
   NAS_ROOT,
   DEFAULT_USER_QUOTA_BYTES,
+  USER_QUOTA_POLICY_VERSION,
   normalizeQuotaFields,
+  migrateDefaultQuotaPolicy,
   getAccessBasePath,
   getQuotaBasePath,
   _test
@@ -30,7 +32,7 @@ test('capacity ledger reserves pending accounts and non-account NAS data', () =>
   assert.equal(summary.signupAvailable, true);
 });
 
-test('capacity ledger blocks signup below the default 50 GiB reservation', () => {
+test('capacity ledger allows signup when at least the default 20 GiB remains', () => {
   const summary = _test.calculateCapacityLedger({
     totalBytes: 1000 * GIB,
     freeBytes: 140 * GIB,
@@ -41,7 +43,19 @@ test('capacity ledger blocks signup below the default 50 GiB reservation', () =>
   });
 
   assert.equal(summary.availableForAllocationBytes, 40 * GIB);
-  assert.equal(summary.signupAvailable, false);
+  assert.equal(summary.signupAvailable, true);
+});
+
+test('quota policy v2 lowers accounts at or below 20 GiB usage exactly once', () => {
+  const migrated = migrateDefaultQuotaPolicy({ storageQuotaBytes: 50 * GIB }, 12 * GIB);
+  assert.equal(migrated.storageQuotaBytes, 20 * GIB);
+  assert.equal(migrated.storageQuotaPolicyVersion, USER_QUOTA_POLICY_VERSION);
+  assert.deepEqual(migrateDefaultQuotaPolicy({ ...migrated, storageQuotaBytes: 80 * GIB }, 12 * GIB), { ...migrated, storageQuotaBytes: 80 * GIB });
+});
+
+test('quota policy v2 never lowers an account already using more than 20 GiB', () => {
+  const migrated = migrateDefaultQuotaPolicy({ storageQuotaBytes: 50 * GIB }, 21.2 * GIB);
+  assert.equal(migrated.storageQuotaBytes, 50 * GIB);
 });
 
 test('master account has a finite personal quota while retaining NAS-root access', () => {

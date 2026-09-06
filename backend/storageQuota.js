@@ -9,7 +9,8 @@ const USAGE_CACHE_FILE = path.join(DATA_DIR, 'storage_usage_cache.json');
 const CHAT_ATTACHMENTS_FILE = path.join(DATA_DIR, 'chatAttachments.json');
 const CHAT_TMP_ROOT = path.join(NAS_ROOT, 'chat_tmp');
 const GIB = 1024 * 1024 * 1024;
-const DEFAULT_USER_QUOTA_BYTES = 50 * GIB;
+const DEFAULT_USER_QUOTA_BYTES = 20 * GIB;
+const USER_QUOTA_POLICY_VERSION = 2;
 const MIN_SYSTEM_RESERVE_BYTES = 10 * GIB;
 const SYSTEM_RESERVE_RATIO = 0.05;
 
@@ -107,6 +108,19 @@ const normalizeQuotaFields = (user = {}) => {
   return next;
 };
 
+const migrateDefaultQuotaPolicy = (user = {}, usedBytes = 0) => {
+  if (Number(user.storageQuotaPolicyVersion || 0) >= USER_QUOTA_POLICY_VERSION) return { ...user };
+  const used = Math.max(0, Number(usedBytes) || 0);
+  const currentQuota = Math.max(0, Number(user.storageQuotaBytes) || 0);
+  return {
+    ...user,
+    storageQuotaBytes: used > DEFAULT_USER_QUOTA_BYTES
+      ? Math.max(currentQuota, Math.ceil(used / GIB) * GIB)
+      : DEFAULT_USER_QUOTA_BYTES,
+    storageQuotaPolicyVersion: USER_QUOTA_POLICY_VERSION,
+  };
+};
+
 const readMembers = () => {
   const rows = readJson(MEMBERS_FILE, []);
   return Array.isArray(rows) ? rows.map(normalizeQuotaFields) : [];
@@ -173,13 +187,13 @@ const getPathMtimeMs = (targetPath) => {
   }
 };
 
-const getCachedPathUsage = (targetPath) => {
+const getCachedPathUsage = (targetPath, forceRefresh = false) => {
   const resolved = path.resolve(targetPath);
   const mtimeMs = getPathMtimeMs(resolved);
   const cache = readUsageCache();
   const cached = cache[resolved];
 
-  if (cached && cached.mtimeMs === mtimeMs && Number.isFinite(Number(cached.sizeBytes))) {
+  if (!forceRefresh && cached && cached.mtimeMs === mtimeMs && Number.isFinite(Number(cached.sizeBytes))) {
     return { sizeBytes: Number(cached.sizeBytes), cached: true, calculatedAt: cached.calculatedAt };
   }
 
@@ -193,7 +207,7 @@ const getCachedPathUsage = (targetPath) => {
   return { sizeBytes, cached: false, calculatedAt: cache[resolved].calculatedAt };
 };
 
-const getChatAttachmentUsage = (user = {}) => {
+const getChatAttachmentUsage = (user = {}, forceRefresh = false) => {
   const loginId = getLoginId(user);
   const userUid = String(user.userUid || '').trim();
   const bundles = readJson(CHAT_ATTACHMENTS_FILE, []);
@@ -206,7 +220,7 @@ const getChatAttachmentUsage = (user = {}) => {
       (loginId && String(bundle.ownerUid || '') === loginId);
 
     if (!ownerMatches || bundle.status === 'canceled') return total;
-    return total + getCachedPathUsage(path.join(CHAT_TMP_ROOT, bundle.bundleId)).sizeBytes;
+    return total + getCachedPathUsage(path.join(CHAT_TMP_ROOT, bundle.bundleId), forceRefresh).sizeBytes;
   }, 0);
 };
 
@@ -316,10 +330,10 @@ const getStorageCapacitySummary = (users = [], pendingRequests = []) => {
   };
 };
 
-const getUserStorageSummary = (user = {}) => {
+const getUserStorageSummary = (user = {}, { forceRefresh = false } = {}) => {
   const basePath = getQuotaBasePath(user);
-  const usage = getCachedPathUsage(basePath);
-  const chatAttachmentBytes = getChatAttachmentUsage(user);
+  const usage = getCachedPathUsage(basePath, forceRefresh);
+  const chatAttachmentBytes = getChatAttachmentUsage(user, forceRefresh);
   const quota = getQuotaInfo(user);
   let totalBytes = null;
   let freeBytes = null;
@@ -392,11 +406,13 @@ const assertQuotaAvailable = (user = {}, incomingBytes = 0, changedPath = '') =>
 module.exports = {
   NAS_ROOT,
   DEFAULT_USER_QUOTA_BYTES,
+  USER_QUOTA_POLICY_VERSION,
   MIN_SYSTEM_RESERVE_BYTES,
   getLoginId,
   getRole,
   isStorageAdmin,
   normalizeQuotaFields,
+  migrateDefaultQuotaPolicy,
   readMembers,
   writeMembers,
   findMemberByAnyId,

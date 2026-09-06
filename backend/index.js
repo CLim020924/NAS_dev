@@ -25,7 +25,9 @@ const {
 } = require('./chatStore');
 const {
   DEFAULT_USER_QUOTA_BYTES,
+  USER_QUOTA_POLICY_VERSION,
   normalizeQuotaFields,
+  migrateDefaultQuotaPolicy,
   getUserStorageSummary,
   getStorageCapacitySummary,
   ensurePersonalStorageRoot
@@ -428,6 +430,17 @@ function loadData() {
     if (fs.existsSync(membersFilePath)) {
       const raw = JSON.parse(fs.readFileSync(membersFilePath, 'utf8'));
       approvedUsers = Array.isArray(raw) ? raw.map(normalizeApprovedUser) : [];
+      approvedUsers = approvedUsers.map((user) => {
+        if (Number(user.storageQuotaPolicyVersion || 0) >= USER_QUOTA_POLICY_VERSION) return user;
+        let usedBytes = 0;
+        try {
+          usedBytes = getUserStorageSummary(user, { forceRefresh: true }).usedBytes;
+        } catch (err) {
+          console.error(`[storage] ${getUserLoginId(user)} 용량 정책 이관 전 사용량 확인 실패:`, err.message);
+          return user;
+        }
+        return migrateDefaultQuotaPolicy(user, usedBytes);
+      });
     } else {
       approvedUsers = [
         normalizeApprovedUser({
@@ -439,7 +452,8 @@ function loadData() {
           globalAccess: true,
           rootPassword: '',
           masterKey: '',
-          role: 'MASTER'
+          role: 'MASTER',
+          storageQuotaPolicyVersion: USER_QUOTA_POLICY_VERSION
         })
       ];
       saveMembers();
@@ -452,7 +466,8 @@ function loadData() {
         Masters: true,
         Managers: true,
         globalAccess: true,
-        role: 'MASTER'
+        role: 'MASTER',
+        storageQuotaPolicyVersion: USER_QUOTA_POLICY_VERSION
       })
     ];
     saveMembers();
@@ -939,7 +954,7 @@ app.post('/api/signup-request', (req, res) => {
   const capacity = getStorageCapacitySummary(approvedUsers, signupRequests);
   if (!capacity.signupAvailable) {
     return res.status(507).json({
-      error: '현재 새 계정에 제공할 50GB 저장공간이 부족해 회원가입을 받을 수 없습니다.',
+      error: '현재 새 계정에 제공할 20GB 저장공간이 부족해 회원가입을 받을 수 없습니다.',
       code: 'SIGNUP_STORAGE_FULL',
       defaultQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
       availableForAllocationBytes: capacity.availableForAllocationBytes
@@ -969,7 +984,7 @@ app.get('/api/signup-capacity', (req, res) => {
     signupAvailable: capacity.signupAvailable,
     defaultQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
     availableForAllocationBytes: capacity.availableForAllocationBytes,
-    reason: capacity.signupAvailable ? null : '새 계정의 기본 50GB를 안전하게 확보할 수 없습니다.'
+    reason: capacity.signupAvailable ? null : '새 계정의 기본 20GB를 안전하게 확보할 수 없습니다.'
   });
 });
 
@@ -1290,7 +1305,7 @@ app.post('/api/users/approve', requireManager, (req, res) => {
   const capacity = getStorageCapacitySummary(approvedUsers, signupRequests);
   if (capacity.overAllocatedBytes > 0) {
     return res.status(507).json({
-      error: '예약된 기본 50GB를 현재 NAS에서 안전하게 제공할 수 없어 승인할 수 없습니다.',
+      error: '예약된 기본 20GB를 현재 NAS에서 안전하게 제공할 수 없어 승인할 수 없습니다.',
       code: 'SIGNUP_STORAGE_FULL'
     });
   }
@@ -1310,6 +1325,7 @@ app.post('/api/users/approve', requireManager, (req, res) => {
     role: 'USER',
     storageQuotaMode: 'limited',
     storageQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
+    storageQuotaPolicyVersion: USER_QUOTA_POLICY_VERSION,
     personalRootPath: `/users/${loginId}`
   }));
 
