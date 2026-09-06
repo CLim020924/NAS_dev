@@ -1164,3 +1164,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 기존 기반: 화면의 `문서 스튜디오`는 내부 app ID `document-workspace`이며 `POST /api/document-workspace/documents`가 계정 root, realpath, quota, 형식 allowlist, 고유 이름, 임시파일+원자 rename을 적용해 실제 빈 Office/HWP 문서를 만든다. `문서 변환`은 내부 `document-studio`로 별도 기능이므로 노트의 새 문서 메뉴에서 혼동하지 않는다. 생성 파일은 기존 `openFileWindowByPath(path, true)` 경로로 OnlyOffice 또는 RHWP 편집 창을 전면 활성화할 수 있다.
 - 통합 설계: editor selection/caret 또는 block 우클릭의 `삽입 > 문서 만들기`에서 실제 지원 형식만 보여주고, 기본 저장 위치는 현재 노트북/페이지의 파일 폴더로 한다. 생성 전에 현재 page revision을 저장하고, 서버의 공통 blank document service를 재사용하는 note 전용 transaction이 파일 생성과 document-reference block 삽입을 하나의 idempotency key로 묶는다. block 저장 실패 시 새 파일을 휴지통/rollback하고, 파일은 생성됐지만 편집 창 열기만 실패하면 파일을 보존한 채 `다시 열기`를 제공한다.
 - 후속 확장: `빈 문서 만들기`, `기존 NAS 문서 연결`, `선택한 글로 문서 만들기`, `현재 페이지를 문서로 내보내기`를 분리한다. 첫 구현은 검증된 빈 문서 생성·연결·전면 열기부터 하고, 선택 내용 변환은 block→OOXML/HWPX fidelity와 되돌리기 검증 뒤 추가한다. 노트는 Office 파일 복사본을 내부에 숨기지 않고 stable file reference만 보유해 파일 관리자·문서 스튜디오·NAS Drive가 같은 실제 파일을 사용한다.
+
+## 2026-09-06 노트에서 만든 Office 문서의 첫 저장 위치와 영속 연결
+
+- 사용자 확인사항: 노트에서 문서 스튜디오의 Office 문서를 만든 경우 첫 저장 때 NAS 위치를 선택한다. 위치 선택기의 기본값은 기능을 호출한 노트북/현재 페이지의 문서 경로이며, 사용자가 계정 내 다른 NAS 폴더를 선택하면 실제 파일은 선택 위치에 저장하되 원래 노트의 문서 블록 연결은 유지한다.
+- 저장 UX: 새 문서는 계정별 복구 가능한 draft로 열고 첫 `Ctrl+S` 또는 저장에서 이름·NAS 위치 선택기를 표시한다. 기본 경로는 호출 context의 notebook/page directory이고 사용자가 바꿀 수 있다. 첫 publish 뒤 일반 `Ctrl+S`는 같은 파일에 저장하며, `다른 이름으로 저장`·`복사본 저장`만 다시 위치를 묻는다. 기존 파일을 열었을 때는 새 위치를 묻지 않는다.
+- 연결 안정성: 노트 블록은 변경 가능한 경로 문자열만 저장하지 않고 server가 발급한 stable document ID와 마지막 알려진 path/revision을 함께 가진다. 파일 관리자·문서 스튜디오·NAS Drive를 통한 이동·이름 변경은 registry와 참조를 원자 갱신한다. 다른 위치 저장 뒤에도 블록 클릭은 현재 경로를 해석해 같은 문서를 열며, 권한 상실·외부 이동·삭제로 해석할 수 없으면 다른 파일을 추측해 열지 않고 `연결 끊김`과 다시 연결 기능을 제공한다.
+- 안전 경계: draft와 최종 위치 모두 계정 personal root, realpath/symlink, quota·물리 여유, 확장자 allowlist와 이름 충돌 정책을 서버가 재검증한다. 블록 삭제는 기본적으로 링크만 제거하고 실제 문서는 보존하며 `링크와 파일 함께 삭제`는 별도 확인 및 휴지통을 사용한다.
