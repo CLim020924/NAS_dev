@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.10.33.0")]
-[assembly: AssemblyFileVersion("1.10.33.0")]
+[assembly: AssemblyVersion("1.11.0.0")]
+[assembly: AssemblyFileVersion("1.11.0.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.10.33";
+        internal const string ProductVersion = "1.11.0";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
@@ -68,6 +68,63 @@ namespace NasDriveSetup
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Environment.Exit(RunSelfTest() && RunDpiLayoutSelfTest() ? 0 : 1);
+                return;
+            }
+            if (Array.Exists(args, item => string.Equals(item, "--ui-preview-multi-account", StringComparison.OrdinalIgnoreCase)))
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new NativeControlCenter("", new List<AccountSnapshot>
+                {
+                    new AccountSnapshot { AccountKey = "preview-a", DisplayName = "개인 계정", LoginId = "user-a", DeviceId = "preview-device-a", DrivePath = @"C:\Users\Preview\NAS Drive - 개인 계정", AccountCount = 3 },
+                    new AccountSnapshot { AccountKey = "preview-b", DisplayName = "업무 계정", LoginId = "user-b", DeviceId = "preview-device-b", DrivePath = @"C:\Users\Preview\NAS Drive - 업무 계정", AccountCount = 3 },
+                    new AccountSnapshot { AccountKey = "preview-c", DisplayName = "보관 계정", LoginId = "user-c", DeviceId = "preview-device-c", DrivePath = @"C:\Users\Preview\NAS Drive - 보관 계정", AccountCount = 3 }
+                }));
+                return;
+            }
+            int renderPreviewIndex = Array.FindIndex(args, item => string.Equals(item, "--render-ui-preview", StringComparison.OrdinalIgnoreCase));
+            if (renderPreviewIndex >= 0 && renderPreviewIndex + 1 < args.Length)
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using (var form = new NativeControlCenter("", new List<AccountSnapshot>
+                {
+                    new AccountSnapshot { AccountKey = "preview-a", DisplayName = "개인 계정", LoginId = "user-a", DeviceId = "preview-device-a", DrivePath = @"C:\Users\Preview\NAS Drive - 개인 계정", AccountCount = 3 },
+                    new AccountSnapshot { AccountKey = "preview-b", DisplayName = "업무 계정", LoginId = "user-b", DeviceId = "preview-device-b", DrivePath = @"C:\Users\Preview\NAS Drive - 업무 계정", AccountCount = 3 },
+                    new AccountSnapshot { AccountKey = "preview-c", DisplayName = "보관 계정", LoginId = "user-c", DeviceId = "preview-device-c", DrivePath = @"C:\Users\Preview\NAS Drive - 보관 계정", AccountCount = 3 }
+                }))
+                using (var bitmap = new Bitmap(form.Width, form.Height))
+                {
+                    form.Show();
+                    form.Refresh();
+                    Application.DoEvents();
+                    form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+                    bitmap.Save(args[renderPreviewIndex + 1], System.Drawing.Imaging.ImageFormat.Png);
+                    form.Close();
+                }
+                return;
+            }
+            int renderSharePreviewIndex = Array.FindIndex(args, item => string.Equals(item, "--render-share-ui-preview", StringComparison.OrdinalIgnoreCase));
+            if (renderSharePreviewIndex >= 0 && renderSharePreviewIndex + 1 < args.Length)
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                var previewAccounts = new List<AccountSnapshot>
+                {
+                    new AccountSnapshot { AccountKey = "preview-a", DisplayName = "개인 계정", LoginId = "user-a", DeviceId = "preview-device-a", AccountCount = 3 },
+                    new AccountSnapshot { AccountKey = "preview-b", DisplayName = "업무 계정", LoginId = "user-b", DeviceId = "preview-device-b", AccountCount = 3 },
+                    new AccountSnapshot { AccountKey = "preview-c", DisplayName = "보관 계정", LoginId = "user-c", DeviceId = "preview-device-c", AccountCount = 3 }
+                };
+                using (var form = new NativeAccountShareForm("", previewAccounts, true))
+                using (var bitmap = new Bitmap(form.Width, form.Height))
+                {
+                    form.Show();
+                    form.Refresh();
+                    Application.DoEvents();
+                    form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+                    bitmap.Save(args[renderSharePreviewIndex + 1], System.Drawing.Imaging.ImageFormat.Png);
+                    form.Close();
+                }
                 return;
             }
             if (RunInstalledAgentCommand(args)) return;
@@ -325,7 +382,6 @@ namespace NasDriveSetup
                 MessageBox.Show("연결된 NAS Drive 폴더를 찾을 수 없습니다. 먼저 이 PC에 NAS 계정을 연결해 주세요.", "NAS Drive", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-
             Thread.Sleep(650);
             Process.Start("explorer.exe", QuoteArgument(drive));
             DateTime windowDeadline = DateTime.UtcNow.AddSeconds(6);
@@ -1697,11 +1753,13 @@ namespace NasDriveSetup
         private readonly Label status = new Label();
         private readonly Button loginButton = new Button();
         private readonly Button signupButton = new Button();
+        private readonly bool openControlCenterAfterLogin;
         private bool customDrivePath;
 
-        internal NativeLoginForm(string installedAgentExe)
+        internal NativeLoginForm(string installedAgentExe, bool openCenterAfterLogin = true)
         {
             agentExe = installedAgentExe;
+            openControlCenterAfterLogin = openCenterAfterLogin;
             BuildUi();
             ApplyInitialDpiScale();
         }
@@ -1820,9 +1878,17 @@ namespace NasDriveSetup
                 string launcher = Application.ExecutablePath;
                 Process.Start(new ProcessStartInfo(launcher, "--background") { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
                 Program.SignalNativeTrayRefresh();
-                Hide();
-                using (var center = new NativeControlCenter(agentExe)) center.ShowDialog(this);
-                Close();
+                if (openControlCenterAfterLogin)
+                {
+                    Hide();
+                    using (var center = new NativeControlCenter(agentExe)) center.ShowDialog(this);
+                    Close();
+                }
+                else
+                {
+                    DialogResult = DialogResult.OK;
+                    Close();
+                }
             }
             catch (Exception error)
             {
@@ -1902,6 +1968,351 @@ namespace NasDriveSetup
         internal string DeviceId = "";
         internal string DrivePath = "";
         internal int AccountCount;
+
+        public override string ToString()
+        {
+            string name = !string.IsNullOrWhiteSpace(DisplayName) ? DisplayName : LoginId;
+            return string.IsNullOrWhiteSpace(LoginId) || string.Equals(name, LoginId, StringComparison.OrdinalIgnoreCase)
+                ? name : name + "  ·  " + LoginId;
+        }
+    }
+
+    internal sealed class ShareBrowseItem
+    {
+        internal string Name = "";
+        internal string RelPath = "";
+        internal string Type = "";
+    }
+
+    internal sealed class AccountShareSnapshot
+    {
+        internal string ShareId = "";
+        internal string SourceOwnerKey = "";
+        internal string RecipientOwnerKey = "";
+        internal string SourceName = "";
+        internal string RecipientName = "";
+        internal string ItemName = "";
+        public override string ToString()
+        {
+            return SourceName + "  →  " + RecipientName + "    " + ItemName;
+        }
+    }
+
+    internal sealed class NativeAccountShareForm : DpiScaledForm
+    {
+        private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
+        private readonly string agentExe;
+        private readonly List<AccountSnapshot> accounts;
+        private readonly ComboBox sourceAccount = new ComboBox();
+        private readonly ComboBox recipientAccount = new ComboBox();
+        private readonly TreeView sourceTree = new TreeView();
+        private readonly Label createStatus = new Label();
+        private readonly Button createButton = new Button();
+        private readonly ComboBox manageAccount = new ComboBox();
+        private readonly ListBox shareList = new ListBox();
+        private readonly Label manageStatus = new Label();
+        private readonly Button revokeButton = new Button();
+        private readonly bool visualPreview;
+
+        internal NativeAccountShareForm(string installedAgentExe, List<AccountSnapshot> linkedAccounts, bool preview = false)
+        {
+            agentExe = installedAgentExe;
+            accounts = linkedAccounts ?? new List<AccountSnapshot>();
+            visualPreview = preview;
+            BuildUi();
+            ApplyInitialDpiScale();
+            if (visualPreview)
+            {
+                if (sourceAccount.Items.Count > 0) sourceAccount.SelectedIndex = 0;
+                if (manageAccount.Items.Count > 0) manageAccount.SelectedIndex = 0;
+                var root = new TreeNode("계정 루트 전체") { Tag = new ShareBrowseItem { Name = "계정 루트 전체", RelPath = "", Type = "folder" } };
+                root.Nodes.Add(new TreeNode("📁  문서") { Tag = new ShareBrowseItem { Name = "문서", RelPath = "문서", Type = "folder" } });
+                root.Nodes.Add(new TreeNode("📄  일정표.xlsx") { Tag = new ShareBrowseItem { Name = "일정표.xlsx", RelPath = "일정표.xlsx", Type = "file" } });
+                sourceTree.Nodes.Add(root);
+                root.Expand();
+                sourceTree.SelectedNode = root.Nodes[0];
+                createStatus.Text = "개인 계정의 문서 폴더를 업무 계정에 읽기 전용으로 공유합니다.";
+            }
+            else Shown += (sender, args) =>
+            {
+                if (sourceAccount.Items.Count > 0) sourceAccount.SelectedIndex = 0;
+                if (manageAccount.Items.Count > 0) manageAccount.SelectedIndex = 0;
+            };
+        }
+
+        private void BuildUi()
+        {
+            AutoScaleMode = AutoScaleMode.None;
+            Text = "NAS 계정 간 공유";
+            ClientSize = new Size(760, 670);
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Color.White;
+            MinimizeBox = false;
+
+            var tabs = new TabControl { Location = new Point(18, 18), Size = new Size(724, 598), Font = Program.UiFont("Segoe UI", 9.5f) };
+            var createPage = new TabPage("새 공유") { BackColor = Color.White };
+            var managePage = new TabPage("공유 관리") { BackColor = Color.White };
+            tabs.TabPages.Add(createPage);
+            tabs.TabPages.Add(managePage);
+            Controls.Add(tabs);
+
+            createPage.Controls.Add(new Label { Text = "1. 공유할 계정", Location = new Point(24, 22), Size = new Size(190, 24), Font = Program.UiFont("Segoe UI Semibold", 10f) });
+            sourceAccount.DropDownStyle = ComboBoxStyle.DropDownList;
+            sourceAccount.Location = new Point(24, 49);
+            sourceAccount.Size = new Size(310, 30);
+            foreach (AccountSnapshot account in accounts) sourceAccount.Items.Add(account);
+            sourceAccount.SelectedIndexChanged += async (sender, args) =>
+            {
+                RebuildRecipients();
+                if (!visualPreview) await LoadSourceRootAsync();
+            };
+            createPage.Controls.Add(sourceAccount);
+
+            createPage.Controls.Add(new Label { Text = "2. 공유받을 계정", Location = new Point(366, 22), Size = new Size(220, 24), Font = Program.UiFont("Segoe UI Semibold", 10f) });
+            recipientAccount.DropDownStyle = ComboBoxStyle.DropDownList;
+            recipientAccount.Location = new Point(366, 49);
+            recipientAccount.Size = new Size(310, 30);
+            createPage.Controls.Add(recipientAccount);
+
+            createPage.Controls.Add(new Label { Text = "3. 공유할 파일 또는 폴더", Location = new Point(24, 101), Size = new Size(300, 24), Font = Program.UiFont("Segoe UI Semibold", 10f) });
+            createPage.Controls.Add(new Label { Text = "목록만 불러오며 파일 내용은 다운로드하지 않습니다.", Location = new Point(315, 103), Size = new Size(360, 22), ForeColor = Color.DimGray, TextAlign = ContentAlignment.TopRight });
+            sourceTree.Location = new Point(24, 132);
+            sourceTree.Size = new Size(652, 315);
+            sourceTree.HideSelection = false;
+            sourceTree.BeforeExpand += async (sender, args) => await ExpandNodeAsync(args.Node);
+            sourceTree.AfterSelect += (sender, args) => UpdateCreateButton();
+            createPage.Controls.Add(sourceTree);
+
+            createStatus.Location = new Point(24, 462);
+            createStatus.Size = new Size(440, 48);
+            createStatus.ForeColor = Color.FromArgb(75, 82, 96);
+            createPage.Controls.Add(createStatus);
+            createButton.Text = "선택한 항목 공유";
+            createButton.Location = new Point(486, 466);
+            createButton.Size = new Size(190, 42);
+            createButton.BackColor = BrandBlue;
+            createButton.ForeColor = Color.White;
+            createButton.FlatStyle = FlatStyle.Flat;
+            createButton.Enabled = false;
+            createButton.Click += async (sender, args) => await CreateShareAsync();
+            createPage.Controls.Add(createButton);
+
+            managePage.Controls.Add(new Label { Text = "확인할 계정", Location = new Point(24, 24), Size = new Size(180, 24), Font = Program.UiFont("Segoe UI Semibold", 10f) });
+            manageAccount.DropDownStyle = ComboBoxStyle.DropDownList;
+            manageAccount.Location = new Point(24, 51);
+            manageAccount.Size = new Size(400, 30);
+            foreach (AccountSnapshot account in accounts) manageAccount.Items.Add(account);
+            manageAccount.SelectedIndexChanged += async (sender, args) => { if (!visualPreview) await LoadSharesAsync(); };
+            managePage.Controls.Add(manageAccount);
+            var refresh = new Button { Text = "새로고침", Location = new Point(438, 49), Size = new Size(110, 34) };
+            refresh.Click += async (sender, args) => await LoadSharesAsync();
+            managePage.Controls.Add(refresh);
+
+            shareList.Location = new Point(24, 104);
+            shareList.Size = new Size(652, 330);
+            shareList.Font = Program.UiFont("Segoe UI", 10f);
+            shareList.SelectedIndexChanged += (sender, args) => revokeButton.Enabled = shareList.SelectedItem != null;
+            managePage.Controls.Add(shareList);
+            manageStatus.Location = new Point(24, 452);
+            manageStatus.Size = new Size(430, 54);
+            manageStatus.ForeColor = Color.FromArgb(75, 82, 96);
+            managePage.Controls.Add(manageStatus);
+            revokeButton.Text = "선택한 공유 해제";
+            revokeButton.Location = new Point(486, 458);
+            revokeButton.Size = new Size(190, 42);
+            revokeButton.Enabled = false;
+            revokeButton.Click += async (sender, args) => await RevokeShareAsync();
+            managePage.Controls.Add(revokeButton);
+
+            var close = new Button { Text = "닫기", Location = new Point(622, 626), Size = new Size(120, 34) };
+            close.Click += (sender, args) => Close();
+            Controls.Add(close);
+        }
+
+        private void RebuildRecipients()
+        {
+            AccountSnapshot selected = sourceAccount.SelectedItem as AccountSnapshot;
+            AccountSnapshot previousAccount = recipientAccount.SelectedItem as AccountSnapshot;
+            string previous = previousAccount == null ? "" : previousAccount.AccountKey;
+            recipientAccount.Items.Clear();
+            foreach (AccountSnapshot account in accounts)
+                if (selected == null || !string.Equals(account.AccountKey, selected.AccountKey, StringComparison.OrdinalIgnoreCase)) recipientAccount.Items.Add(account);
+            for (int index = 0; index < recipientAccount.Items.Count; index++)
+                if (string.Equals(((AccountSnapshot)recipientAccount.Items[index]).AccountKey, previous, StringComparison.OrdinalIgnoreCase)) recipientAccount.SelectedIndex = index;
+            if (recipientAccount.SelectedIndex < 0 && recipientAccount.Items.Count > 0) recipientAccount.SelectedIndex = 0;
+            UpdateCreateButton();
+        }
+
+        private async Task LoadSourceRootAsync()
+        {
+            AccountSnapshot source = sourceAccount.SelectedItem as AccountSnapshot;
+            sourceTree.Nodes.Clear();
+            if (source == null) return;
+            createStatus.Text = "계정 루트 목록을 불러오는 중입니다...";
+            try
+            {
+                var rootItem = new ShareBrowseItem { Name = "계정 루트 전체", RelPath = "", Type = "folder" };
+                var rootNode = new TreeNode(rootItem.Name) { Tag = rootItem };
+                rootNode.Nodes.Add(new TreeNode("불러오는 중..."));
+                sourceTree.Nodes.Add(rootNode);
+                await LoadChildrenAsync(rootNode);
+                rootNode.Expand();
+                sourceTree.SelectedNode = rootNode;
+                createStatus.Text = "계정 루트 전체 또는 아래의 파일·폴더 하나를 선택하세요.";
+            }
+            catch (Exception error)
+            {
+                createStatus.Text = FriendlyAgentError(error.Message);
+            }
+            UpdateCreateButton();
+        }
+
+        private async Task ExpandNodeAsync(TreeNode node)
+        {
+            if (node == null || node.Nodes.Count != 1 || node.Nodes[0].Tag != null) return;
+            await LoadChildrenAsync(node);
+        }
+
+        private async Task LoadChildrenAsync(TreeNode node)
+        {
+            ShareBrowseItem item = node.Tag as ShareBrowseItem;
+            AccountSnapshot source = sourceAccount.SelectedItem as AccountSnapshot;
+            if (item == null || item.Type != "folder" || source == null) return;
+            node.Nodes.Clear();
+            Dictionary<string, object> payload = await Task.Run(() => RunAgentJson("--share-browse-json --device-id " + Program.QuoteArgument(source.DeviceId) + " --share-path " + Program.QuoteArgument(item.RelPath)));
+            object rawItems;
+            object[] rows = payload.TryGetValue("items", out rawItems) ? rawItems as object[] : null;
+            if (rows == null) return;
+            foreach (object raw in rows)
+            {
+                var row = raw as Dictionary<string, object>;
+                if (row == null) continue;
+                var childItem = new ShareBrowseItem { Name = GetString(row, "name"), RelPath = GetString(row, "relPath"), Type = GetString(row, "type") };
+                var child = new TreeNode((childItem.Type == "folder" ? "📁  " : "📄  ") + childItem.Name) { Tag = childItem };
+                if (childItem.Type == "folder") child.Nodes.Add(new TreeNode("불러오는 중..."));
+                node.Nodes.Add(child);
+            }
+        }
+
+        private void UpdateCreateButton()
+        {
+            createButton.Enabled = sourceAccount.SelectedItem != null && recipientAccount.SelectedItem != null && sourceTree.SelectedNode != null && sourceTree.SelectedNode.Tag is ShareBrowseItem;
+        }
+
+        private async Task CreateShareAsync()
+        {
+            AccountSnapshot source = sourceAccount.SelectedItem as AccountSnapshot;
+            AccountSnapshot recipient = recipientAccount.SelectedItem as AccountSnapshot;
+            ShareBrowseItem item = sourceTree.SelectedNode == null ? null : sourceTree.SelectedNode.Tag as ShareBrowseItem;
+            if (source == null || recipient == null || item == null) return;
+            if (MessageBox.Show(source + " 계정의 '" + item.Name + "' 항목을\n" + recipient + " 계정에 읽기 전용으로 공유할까요?", "NAS 계정 간 공유", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            createButton.Enabled = false;
+            createStatus.Text = "공유 권한을 확인하고 있습니다...";
+            try
+            {
+                Dictionary<string, object> result = await Task.Run(() => RunAgentJson("--share-create-json --source-device-id " + Program.QuoteArgument(source.DeviceId) + " --recipient-device-id " + Program.QuoteArgument(recipient.DeviceId) + " --share-path " + Program.QuoteArgument(item.RelPath)));
+                bool created = GetBool(result, "created");
+                createStatus.Text = created ? "공유가 완료되었습니다. 수신 계정 탐색기에 목록이 자동 표시됩니다." : "이미 같은 항목이 공유되어 있어 기존 관계를 유지했습니다.";
+                await LoadSharesAsync();
+            }
+            catch (Exception error) { createStatus.Text = FriendlyAgentError(error.Message); }
+            finally { UpdateCreateButton(); }
+        }
+
+        private async Task LoadSharesAsync()
+        {
+            AccountSnapshot account = manageAccount.SelectedItem as AccountSnapshot;
+            shareList.Items.Clear();
+            revokeButton.Enabled = false;
+            if (account == null) return;
+            manageStatus.Text = "공유 목록을 불러오는 중입니다...";
+            try
+            {
+                Dictionary<string, object> result = await Task.Run(() => RunAgentJson("--share-list-json --device-id " + Program.QuoteArgument(account.DeviceId)));
+                object rawShares;
+                object[] rows = result.TryGetValue("shares", out rawShares) ? rawShares as object[] : null;
+                if (rows != null) foreach (object raw in rows)
+                {
+                    var row = raw as Dictionary<string, object>;
+                    if (row == null) continue;
+                    shareList.Items.Add(new AccountShareSnapshot
+                    {
+                        ShareId = GetString(row, "shareId"),
+                        SourceOwnerKey = GetString(row, "sourceOwnerKey"),
+                        RecipientOwnerKey = GetString(row, "recipientOwnerKey"),
+                        SourceName = GetString(row, "sourceDisplayName"),
+                        RecipientName = GetString(row, "recipientDisplayName"),
+                        ItemName = GetString(row, "sourceItemName")
+                    });
+                }
+                manageStatus.Text = shareList.Items.Count == 0 ? "이 계정과 연결된 공유가 없습니다." : "공유 " + shareList.Items.Count + "개 · 보내거나 받은 계정 모두 해제할 수 있습니다.";
+            }
+            catch (Exception error) { manageStatus.Text = FriendlyAgentError(error.Message); }
+        }
+
+        private async Task RevokeShareAsync()
+        {
+            AccountSnapshot account = manageAccount.SelectedItem as AccountSnapshot;
+            AccountShareSnapshot share = shareList.SelectedItem as AccountShareSnapshot;
+            if (account == null || share == null) return;
+            if (MessageBox.Show("이 공유 관계를 해제할까요?\n내려받은 파일은 NAS Drive 휴지통 정책으로 안전하게 보호됩니다.", "공유 해제", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            revokeButton.Enabled = false;
+            try
+            {
+                await Task.Run(() => RunAgentJson("--share-revoke-json --device-id " + Program.QuoteArgument(account.DeviceId) + " --share-id " + Program.QuoteArgument(share.ShareId)));
+                await LoadSharesAsync();
+            }
+            catch (Exception error) { manageStatus.Text = FriendlyAgentError(error.Message); }
+        }
+
+        private Dictionary<string, object> RunAgentJson(string arguments)
+        {
+            using (var process = Process.Start(new ProcessStartInfo(agentExe, arguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = Path.GetDirectoryName(agentExe)
+            }))
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                if (!process.WaitForExit(30000))
+                {
+                    try { process.Kill(); } catch { }
+                    throw new InvalidOperationException("NAS 서버 응답 시간이 초과되었습니다.");
+                }
+                if (process.ExitCode != 0) throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? "NAS Drive 요청을 완료하지 못했습니다." : error);
+                return new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 }.DeserializeObject(output) as Dictionary<string, object>
+                    ?? new Dictionary<string, object>();
+            }
+        }
+
+        private static string GetString(Dictionary<string, object> value, string name)
+        {
+            object result;
+            return value != null && value.TryGetValue(name, out result) && result != null ? Convert.ToString(result) : "";
+        }
+
+        private static bool GetBool(Dictionary<string, object> value, string name)
+        {
+            object result;
+            return value != null && value.TryGetValue(name, out result) && result != null && Convert.ToBoolean(result);
+        }
+
+        private static string FriendlyAgentError(string value)
+        {
+            string text = Regex.Replace(value ?? "요청을 완료하지 못했습니다.", @"HTTP \d+:\s*", "").Trim();
+            try
+            {
+                var json = new JavaScriptSerializer().DeserializeObject(text) as Dictionary<string, object>;
+                if (json != null && json.ContainsKey("error")) text = Convert.ToString(json["error"]);
+            }
+            catch { }
+            return text.Length > 240 ? text.Substring(0, 240) : text;
+        }
     }
 
     internal sealed class NativeControlCenter : DpiScaledForm
@@ -1912,14 +2323,25 @@ namespace NasDriveSetup
         private static readonly string HealthFile = Path.Combine(StateDir, "agent-health.json");
         private readonly string agentExe;
         private readonly Label accountLabel = new Label();
+        private readonly ComboBox accountPicker = new ComboBox();
         private readonly Label statusLabel = new Label();
         private readonly Label driveLabel = new Label();
         private readonly Button logoutButton = new Button();
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
+        private bool refreshingAccounts;
+        private readonly List<AccountSnapshot> previewAccounts;
+        private string previewActiveKey = "";
 
         internal NativeControlCenter(string installedAgentExe)
+            : this(installedAgentExe, null)
+        {
+        }
+
+        internal NativeControlCenter(string installedAgentExe, List<AccountSnapshot> visualPreviewAccounts)
         {
             agentExe = installedAgentExe;
+            previewAccounts = visualPreviewAccounts;
+            if (previewAccounts != null && previewAccounts.Count > 0) previewActiveKey = previewAccounts[0].AccountKey;
             BuildUi();
             ApplyInitialDpiScale();
             RefreshStatus();
@@ -1927,6 +2349,14 @@ namespace NasDriveSetup
             refreshTimer.Tick += (sender, args) => RefreshStatus();
             refreshTimer.Start();
             FormClosed += (sender, args) => refreshTimer.Stop();
+        }
+
+        private AccountSnapshot CurrentAccount()
+        {
+            if (previewAccounts == null) return ActiveAccount();
+            foreach (AccountSnapshot account in previewAccounts)
+                if (string.Equals(account.AccountKey, previewActiveKey, StringComparison.OrdinalIgnoreCase)) return account;
+            return previewAccounts.Count > 0 ? previewAccounts[0] : null;
         }
 
         internal static bool HasUsableProfile()
@@ -1988,36 +2418,42 @@ namespace NasDriveSetup
 
         internal static AccountSnapshot ActiveAccount()
         {
+            List<AccountSnapshot> accounts = AllAccounts();
+            if (accounts.Count == 0) return null;
             try
             {
                 var serializer = new JavaScriptSerializer();
                 var config = serializer.DeserializeObject(File.ReadAllText(ConfigFile, Encoding.UTF8)) as Dictionary<string, object>;
-                if (config == null) return null;
+                if (config == null) return accounts[0];
                 string activeKey = GetString(config, "activeAccountKey");
+                foreach (AccountSnapshot account in accounts)
+                    if (string.Equals(account.AccountKey, activeKey, StringComparison.OrdinalIgnoreCase)) return account;
+                return accounts[0];
+            }
+            catch { return accounts[0]; }
+        }
+
+        internal static List<AccountSnapshot> AllAccounts()
+        {
+            var result = new List<AccountSnapshot>();
+            try
+            {
+                var serializer = new JavaScriptSerializer();
+                var config = serializer.DeserializeObject(File.ReadAllText(ConfigFile, Encoding.UTF8)) as Dictionary<string, object>;
+                if (config == null) return result;
                 object rawProfiles;
                 var profiles = config.TryGetValue("profiles", out rawProfiles) ? rawProfiles as object[] : null;
-                if (profiles == null || profiles.Length == 0) return null;
-                Dictionary<string, object> selected = null;
+                if (profiles == null || profiles.Length == 0) return result;
                 foreach (object item in profiles)
                 {
                     var profile = item as Dictionary<string, object>;
                     if (profile == null) continue;
-                    if (selected == null) selected = profile;
-                    if (!string.IsNullOrWhiteSpace(activeKey) && string.Equals(GetString(profile, "accountKey"), activeKey, StringComparison.OrdinalIgnoreCase))
+                    string drivePath = "";
+                    object rawRoots;
+                    var roots = profile.TryGetValue("syncRoots", out rawRoots) ? rawRoots as object[] : null;
+                    if (roots != null) foreach (object rootItem in roots)
                     {
-                        selected = profile;
-                        break;
-                    }
-                }
-                if (selected == null) return null;
-                string drivePath = "";
-                object rawRoots;
-                var roots = selected.TryGetValue("syncRoots", out rawRoots) ? rawRoots as object[] : null;
-                if (roots != null)
-                {
-                    foreach (object item in roots)
-                    {
-                        var root = item as Dictionary<string, object>;
+                        var root = rootItem as Dictionary<string, object>;
                         if (root == null) continue;
                         string candidate = GetString(root, "localPath");
                         if (string.IsNullOrWhiteSpace(drivePath)) drivePath = candidate;
@@ -2027,18 +2463,50 @@ namespace NasDriveSetup
                             break;
                         }
                     }
+                    result.Add(new AccountSnapshot
+                    {
+                        AccountKey = GetString(profile, "accountKey"),
+                        LoginId = GetString(profile, "loginId"),
+                        DisplayName = GetString(profile, "displayName"),
+                        DeviceId = GetString(profile, "deviceId"),
+                        DrivePath = drivePath,
+                        AccountCount = profiles.Length
+                    });
                 }
-                return new AccountSnapshot
-                {
-                    AccountKey = GetString(selected, "accountKey"),
-                    LoginId = GetString(selected, "loginId"),
-                    DisplayName = GetString(selected, "displayName"),
-                    DeviceId = GetString(selected, "deviceId"),
-                    DrivePath = drivePath,
-                    AccountCount = profiles.Length
-                };
+                return result;
             }
-            catch { return null; }
+            catch { return result; }
+        }
+
+        private static bool SetActiveAccountKey(string accountKey)
+        {
+            try
+            {
+                var serializer = new JavaScriptSerializer();
+                var config = serializer.DeserializeObject(File.ReadAllText(ConfigFile, Encoding.UTF8)) as Dictionary<string, object>;
+                if (config == null) return false;
+                object rawProfiles;
+                var profiles = config.TryGetValue("profiles", out rawProfiles) ? rawProfiles as object[] : null;
+                bool exists = false;
+                if (profiles != null) foreach (object item in profiles)
+                {
+                    var profile = item as Dictionary<string, object>;
+                    if (profile != null && string.Equals(GetString(profile, "accountKey"), accountKey, StringComparison.OrdinalIgnoreCase)) exists = true;
+                }
+                if (!exists) return false;
+                config["activeAccountKey"] = accountKey;
+                config["savedAt"] = DateTime.UtcNow.ToString("o");
+                WriteTextAtomically(ConfigFile, serializer.Serialize(config));
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static bool HasAccountKey(string accountKey)
+        {
+            foreach (AccountSnapshot account in AllAccounts())
+                if (string.Equals(account.AccountKey, accountKey, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
 
         private static string GetString(Dictionary<string, object> value, string name)
@@ -2082,65 +2550,96 @@ namespace NasDriveSetup
         {
             AutoScaleMode = AutoScaleMode.None;
             Text = "NAS Drive";
-            ClientSize = new Size(620, 620);
+            ClientSize = new Size(680, 700);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             BackColor = Color.White;
 
-            var header = new Panel { Location = new Point(0, 0), Size = new Size(620, 110), BackColor = BrandBlue };
-            header.Controls.Add(new Label { Text = "NAS DRIVE", Location = new Point(32, 19), Size = new Size(540, 24), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 11f) });
-            header.Controls.Add(new Label { Text = "내 NAS Drive", Location = new Point(30, 50), Size = new Size(540, 40), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 20f) });
+            var header = new Panel { Location = new Point(0, 0), Size = new Size(680, 110), BackColor = BrandBlue };
+            header.Controls.Add(new Label { Text = "NAS DRIVE", Location = new Point(32, 19), Size = new Size(600, 24), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 11f) });
+            header.Controls.Add(new Label { Text = "여러 계정을 한곳에서", Location = new Point(30, 50), Size = new Size(600, 40), ForeColor = Color.White, Font = Program.UiFont("Segoe UI Semibold", 20f) });
             Controls.Add(header);
 
             accountLabel.Location = new Point(34, 135);
-            accountLabel.Size = new Size(550, 58);
-            accountLabel.Font = Program.UiFont("Segoe UI Semibold", 13f);
+            accountLabel.Size = new Size(250, 24);
+            accountLabel.Text = "사용할 NAS 계정";
+            accountLabel.Font = Program.UiFont("Segoe UI Semibold", 10f);
             Controls.Add(accountLabel);
 
-            statusLabel.Location = new Point(34, 208);
-            statusLabel.Size = new Size(550, 58);
+            accountPicker.Location = new Point(34, 165);
+            accountPicker.Size = new Size(410, 32);
+            accountPicker.DropDownStyle = ComboBoxStyle.DropDownList;
+            accountPicker.Font = Program.UiFont("Segoe UI", 10f);
+            accountPicker.SelectedIndexChanged += (sender, args) =>
+            {
+                if (refreshingAccounts) return;
+                AccountSnapshot selected = accountPicker.SelectedItem as AccountSnapshot;
+                if (selected != null && previewAccounts != null)
+                {
+                    previewActiveKey = selected.AccountKey;
+                    RefreshStatus();
+                }
+                else if (selected != null && SetActiveAccountKey(selected.AccountKey))
+                {
+                    RestartBackground();
+                    Program.SignalNativeTrayRefresh();
+                    RefreshStatus();
+                }
+            };
+            Controls.Add(accountPicker);
+            var addAccount = new Button { Text = "계정 추가", Location = new Point(460, 163), Size = new Size(186, 36), Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
+            addAccount.Click += (sender, args) => AddAccount();
+            Controls.Add(addAccount);
+
+            statusLabel.Location = new Point(34, 220);
+            statusLabel.Size = new Size(612, 52);
             statusLabel.Font = Program.UiFont("Segoe UI Semibold", 11f);
             statusLabel.ForeColor = BrandBlue;
             Controls.Add(statusLabel);
 
-            driveLabel.Location = new Point(34, 278);
-            driveLabel.Size = new Size(550, 75);
+            driveLabel.Location = new Point(34, 282);
+            driveLabel.Size = new Size(612, 75);
             driveLabel.Font = Program.UiFont("Segoe UI", 9.5f);
             driveLabel.ForeColor = Color.FromArgb(75, 82, 96);
             Controls.Add(driveLabel);
 
-            var stateGuide = new Panel { Location = new Point(34, 350), Size = new Size(550, 118), BackColor = Color.FromArgb(242, 247, 255) };
+            var stateGuide = new Panel { Location = new Point(34, 365), Size = new Size(612, 118), BackColor = Color.FromArgb(242, 247, 255) };
             stateGuide.Controls.Add(new Label { Text = "파일별 저장 상태", Location = new Point(16, 12), Size = new Size(500, 24), Font = Program.UiFont("Segoe UI Semibold", 10f), ForeColor = Color.FromArgb(32, 71, 126) });
             stateGuide.Controls.Add(new Label { Text = "☁  온라인 전용  ·  NAS에 저장되어 있으며 열 때 다운로드", Location = new Point(16, 39), Size = new Size(510, 22), Font = Program.UiFont("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
             stateGuide.Controls.Add(new Label { Text = "✓  이 PC에서 사용 가능  ·  이미 다운로드되어 오프라인 사용 가능", Location = new Point(16, 64), Size = new Size(510, 22), Font = Program.UiFont("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
             stateGuide.Controls.Add(new Label { Text = "●  항상 유지  ·  우클릭으로 고정, 공간 확보로 온라인 전용 전환", Location = new Point(16, 89), Size = new Size(510, 22), Font = Program.UiFont("Segoe UI", 9f), ForeColor = Color.FromArgb(65, 76, 94) });
             Controls.Add(stateGuide);
 
-            var openDrive = new Button { Text = "NAS Drive 열기", Location = new Point(34, 492), Size = new Size(170, 44), BackColor = BrandBlue, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
+            var openDrive = new Button { Text = "선택 계정 열기", Location = new Point(34, 507), Size = new Size(190, 44), BackColor = BrandBlue, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
             openDrive.Click += (sender, args) => OpenDrive();
             Controls.Add(openDrive);
 
-            var openWeb = new Button { Text = "웹에서 관리", Location = new Point(218, 492), Size = new Size(150, 44), Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
+            var openWeb = new Button { Text = "웹에서 관리", Location = new Point(238, 507), Size = new Size(190, 44), Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
             openWeb.Click += (sender, args) => Program.OpenWebWithBrowserPicker(agentExe);
             Controls.Add(openWeb);
 
+            var share = new Button { Text = "계정 간 공유", Location = new Point(442, 507), Size = new Size(204, 44), Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
+            share.Click += (sender, args) => OpenAccountShare();
+            Controls.Add(share);
+
             logoutButton.Text = "로그아웃";
-            logoutButton.Location = new Point(382, 492);
-            logoutButton.Size = new Size(202, 44);
+            logoutButton.Location = new Point(34, 570);
+            logoutButton.Size = new Size(190, 40);
             logoutButton.Font = Program.UiFont("Segoe UI Semibold", 9.5f);
             logoutButton.Click += async (sender, args) => await LogoutAsync();
             Controls.Add(logoutButton);
 
-            Controls.Add(new Label { Text = "이 창을 닫아도 NAS Drive는 작업표시줄 알림 영역에서 계속 실행됩니다.", Location = new Point(34, 562), Size = new Size(410, 28), ForeColor = Color.DimGray, Font = Program.UiFont("Segoe UI", 9f) });
-            var close = new Button { Text = "창 닫기", Location = new Point(464, 558), Size = new Size(120, 36), Font = Program.UiFont("Segoe UI Semibold", 9f) };
+            Controls.Add(new Label { Text = "각 계정은 별도 드라이브와 토큰을 사용하며 백그라운드에서 함께 연결됩니다.", Location = new Point(34, 625), Size = new Size(480, 28), ForeColor = Color.DimGray, Font = Program.UiFont("Segoe UI", 9f) });
+            var close = new Button { Text = "창 닫기", Location = new Point(526, 620), Size = new Size(120, 36), Font = Program.UiFont("Segoe UI Semibold", 9f) };
             close.Click += (sender, args) => Close();
             Controls.Add(close);
         }
 
         private void RefreshStatus()
         {
-            AccountSnapshot account = ActiveAccount();
+            AccountSnapshot account = CurrentAccount();
+            RefreshAccountPicker(account);
             string drive = account == null ? "" : account.DrivePath;
             string state = HealthState();
             string stateText = state == "offline" ? "NAS 서버 오프라인 - 서버가 켜지면 자동 재연결됩니다."
@@ -2151,15 +2650,70 @@ namespace NasDriveSetup
                 : state == "connecting" ? "NAS Drive 연결 중"
                 : state == "updating" ? "NAS Drive 업데이트 중"
                 : "NAS와 동기화됨";
-            string displayName = account == null ? "연결된 계정 없음" : (!string.IsNullOrWhiteSpace(account.DisplayName) ? account.DisplayName : account.LoginId);
-            string loginText = account == null || string.IsNullOrWhiteSpace(account.LoginId) ? "" : "  ·  " + account.LoginId;
-            accountLabel.Text = displayName + loginText;
             statusLabel.Text = "● " + stateText;
             statusLabel.ForeColor = state == "offline" || state == "error" || state == "needs-relink" ? Color.FromArgb(190, 55, 55)
                 : state == "syncing" || state == "connecting" || state == "updating" ? Color.FromArgb(218, 132, 21) : BrandBlue;
             driveLabel.Text = "저장 위치" + Environment.NewLine + (string.IsNullOrWhiteSpace(drive) ? "연결된 폴더 없음" : drive)
                 + Environment.NewLine + "연결 계정 " + (account == null ? "0" : account.AccountCount.ToString()) + "개";
             logoutButton.Text = state == "needs-relink" || state == "connecting" ? "연결 해제 후 다시 로그인" : "로그아웃";
+        }
+
+        private void RefreshAccountPicker(AccountSnapshot active)
+        {
+            List<AccountSnapshot> accounts = previewAccounts ?? AllAccounts();
+            string selectedKey = active == null ? "" : active.AccountKey;
+            refreshingAccounts = true;
+            try
+            {
+                accountPicker.Items.Clear();
+                foreach (AccountSnapshot account in accounts) accountPicker.Items.Add(account);
+                for (int index = 0; index < accountPicker.Items.Count; index++)
+                    if (string.Equals(((AccountSnapshot)accountPicker.Items[index]).AccountKey, selectedKey, StringComparison.OrdinalIgnoreCase)) accountPicker.SelectedIndex = index;
+                if (accountPicker.SelectedIndex < 0 && accountPicker.Items.Count > 0) accountPicker.SelectedIndex = 0;
+            }
+            finally { refreshingAccounts = false; }
+        }
+
+        private void AddAccount()
+        {
+            if (previewAccounts != null) return;
+            using (var login = new NativeLoginForm(agentExe, false))
+            {
+                if (login.ShowDialog(this) == DialogResult.OK)
+                {
+                    RestartBackground();
+                    RefreshStatus();
+                    Program.SignalNativeTrayRefresh();
+                }
+            }
+        }
+
+        private void RestartBackground()
+        {
+            try
+            {
+                string launcher = Path.Combine(Path.GetDirectoryName(agentExe), "NAS-Drive.exe");
+                if (!File.Exists(launcher)) return;
+                Process.Start(new ProcessStartInfo(launcher, "--restart-background")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WorkingDirectory = Path.GetDirectoryName(launcher)
+                });
+            }
+            catch { }
+        }
+
+        private void OpenAccountShare()
+        {
+            List<AccountSnapshot> accounts = previewAccounts ?? AllAccounts();
+            if (accounts.Count < 2)
+            {
+                MessageBox.Show("계정 간 공유를 사용하려면 먼저 서로 다른 NAS 계정을 2개 이상 연결해 주세요.", "NAS 계정 간 공유", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using (var share = new NativeAccountShareForm(agentExe, accounts)) share.ShowDialog(this);
         }
 
         private static string ReadJsonValue(string file, string name)
@@ -2174,6 +2728,7 @@ namespace NasDriveSetup
 
         private void OpenDrive()
         {
+            if (previewAccounts != null) return;
             string drive = FirstDrivePath();
             if (string.IsNullOrWhiteSpace(drive) || !Directory.Exists(drive))
             {
@@ -2185,18 +2740,30 @@ namespace NasDriveSetup
 
         private async Task LogoutAsync()
         {
+            if (previewAccounts != null) return;
+            AccountSnapshot selectedAccount = ActiveAccount();
+            if (selectedAccount == null) return;
             if (MessageBox.Show("현재 NAS 계정에서 로그아웃할까요?\n로컬 파일은 삭제하지 않습니다.", "NAS Drive 로그아웃", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             logoutButton.Enabled = false;
             statusLabel.Text = "NAS 계정 연결을 안전하게 해제하는 중입니다...";
             try
             {
                 int exitCode = 1;
-                try { exitCode = await Task.Run(() => RunLogout()); } catch { }
-                if ((exitCode != 0 || HasConfiguredProfile()) && !EmergencyLocalLogout())
+                try { exitCode = await Task.Run(() => RunLogout(selectedAccount.AccountKey)); } catch { }
+                if ((exitCode != 0 || HasAccountKey(selectedAccount.AccountKey)) && !EmergencyLocalLogout(selectedAccount.AccountKey))
                     throw new InvalidOperationException("로컬 연결을 해제하지 못했습니다. NAS Drive를 다시 열어 재시도해 주세요.");
-                Hide();
-                using (var login = new NativeLoginForm(agentExe)) login.ShowDialog(this);
-                Close();
+                if (AllAccounts().Count == 0)
+                {
+                    Hide();
+                    using (var login = new NativeLoginForm(agentExe)) login.ShowDialog(this);
+                    Close();
+                }
+                else
+                {
+                    logoutButton.Enabled = true;
+                    RefreshStatus();
+                    Program.SignalNativeTrayRefresh();
+                }
             }
             catch (Exception error)
             {
@@ -2206,7 +2773,7 @@ namespace NasDriveSetup
             }
         }
 
-        private int RunLogout()
+        private int RunLogout(string accountKey)
         {
             using (var process = Process.Start(new ProcessStartInfo(agentExe, Program.QuoteArgument("nas-sync://logout?confirmed=1&native=1") + " --hidden-bootstrap")
             {
@@ -2222,14 +2789,14 @@ namespace NasDriveSetup
                     if (process.WaitForExit(250)) return process.ExitCode;
                     // Agent 1.10.31 persists the local disconnect first, then
                     // performs remote revoke and shell cleanup in the background.
-                    if (!HasConfiguredProfile()) return 0;
+                    if (!HasAccountKey(accountKey)) return 0;
                 }
                 try { process.Kill(); } catch { }
                 return 1;
             }
         }
 
-        private bool EmergencyLocalLogout()
+        private bool EmergencyLocalLogout(string requestedAccountKey)
         {
             try
             {
@@ -2237,7 +2804,7 @@ namespace NasDriveSetup
                 Dictionary<string, object> config = null;
                 try { config = serializer.DeserializeObject(File.ReadAllText(ConfigFile, Encoding.UTF8)) as Dictionary<string, object>; } catch { }
                 if (config == null) config = new Dictionary<string, object>();
-                string activeKey = GetString(config, "activeAccountKey");
+                string activeKey = requestedAccountKey;
                 object rawProfiles;
                 var profiles = config.TryGetValue("profiles", out rawProfiles) ? rawProfiles as object[] : null;
                 var remainingProfiles = new List<object>();
@@ -2270,9 +2837,9 @@ namespace NasDriveSetup
                 }
                 var health = new Dictionary<string, object>
                 {
-                    { "state", "needs-relink" },
-                    { "message", "로컬 NAS Drive 연결을 해제했습니다. 다시 로그인할 수 있습니다." },
-                    { "needsRelink", true },
+                    { "state", remainingProfiles.Count > 0 ? "connecting" : "needs-relink" },
+                    { "message", remainingProfiles.Count > 0 ? "선택한 계정 연결을 해제했습니다. 나머지 계정을 계속 연결합니다." : "로컬 NAS Drive 연결을 해제했습니다. 다시 로그인할 수 있습니다." },
+                    { "needsRelink", remainingProfiles.Count == 0 },
                     { "updatedAt", DateTime.UtcNow.ToString("o") }
                 };
                 WriteTextAtomically(HealthFile, serializer.Serialize(health));
@@ -2288,7 +2855,7 @@ namespace NasDriveSetup
                         WorkingDirectory = Path.GetDirectoryName(launcher)
                     });
                 }
-                return !HasConfiguredProfile();
+                return !HasAccountKey(activeKey);
             }
             catch { return false; }
         }

@@ -61,6 +61,16 @@ const {
   sanitizeFileName: sanitizeDocumentStudioFileName
 } = require('./documentStudioService');
 const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankDocumentService');
+const {
+  SHARED_ROOT_NAME,
+  normalizeRelativePath: normalizeAccountShareRelPath,
+  safeDisplaySegment,
+  createShareId: createAccountShareId,
+  sharesForRecipient,
+  combineRevision: combineAccountShareRevision,
+  buildSharedManifestEntries,
+  resolveSharedFile
+} = require('./accountDriveShares');
 
 const router = express.Router();
 
@@ -114,12 +124,13 @@ const DEVICE_DATA_DIR = path.join(__dirname, 'data');
 const DEVICE_PAIRINGS_FILE = path.join(DEVICE_DATA_DIR, 'device_pairings.json');
 const LINKED_DEVICES_FILE = path.join(DEVICE_DATA_DIR, 'linked_devices.json');
 const UNLINKED_SYNC_ROOTS_FILE = path.join(DEVICE_DATA_DIR, 'unlinked_sync_roots.json');
+const ACCOUNT_DRIVE_SHARES_FILE = path.join(DEVICE_DATA_DIR, 'account_drive_shares.json');
 const AGENT_INCOMING_ROOT = path.join(nasPath, '.agent_incoming');
 const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.10.33';
+const WINDOWS_AGENT_VERSION = '1.11.0';
 const DEVICE_OFFLINE_AFTER_MS = 30 * 1000;
 const DEVICE_CONNECT_GRACE_MS = 90 * 1000;
 let windowsAgentBuildCache = null;
@@ -286,7 +297,7 @@ const agentChunkUpload = multer({
 
 const ensureDeviceDataFiles = () => {
   if (!fs.existsSync(DEVICE_DATA_DIR)) fs.mkdirSync(DEVICE_DATA_DIR, { recursive: true });
-  for (const f of [DEVICE_PAIRINGS_FILE, LINKED_DEVICES_FILE, UNLINKED_SYNC_ROOTS_FILE]) {
+  for (const f of [DEVICE_PAIRINGS_FILE, LINKED_DEVICES_FILE, UNLINKED_SYNC_ROOTS_FILE, ACCOUNT_DRIVE_SHARES_FILE]) {
     if (!fs.existsSync(f)) fs.writeFileSync(f, '[]');
   }
 };
@@ -3800,6 +3811,161 @@ router.post('/devices/agent/logout', express.json({ limit: '8kb' }), (req, res) 
   }
 });
 
+const readAccountDriveShares = () => readJsonArrayFile(ACCOUNT_DRIVE_SHARES_FILE);
+const writeAccountDriveShares = rows => writeJsonArrayFile(ACCOUNT_DRIVE_SHARES_FILE, rows);
+
+const getPersonalDriveRoot = (device) => normalizeDeviceSyncRoots(device)
+  .find(root => root.kind === 'personal-drive' && root.absolutePath);
+
+const getAccountShareSourceRoot = (share) => {
+  const owner = findMemberByAnyId(share?.sourceOwnerKey);
+  if (!owner || owner.disabled) throw Object.assign(new Error('공유한 계정이 없거나 비활성화되었습니다.'), { status: 403 });
+  const root = getDeviceUserBasePath(normalizeQuotaFields(owner));
+  if (!fs.existsSync(root)) throw Object.assign(new Error('공유한 계정의 저장공간을 찾을 수 없습니다.'), { status: 404 });
+  assertRealPathInside(root, root);
+  return path.resolve(root);
+};
+
+const listAccountShareDirectory = (root, relPathValue = '') => {
+  const relPath = normalizeAccountShareRelPath(relPathValue, { allowEmpty: true });
+  const target = relPath ? path.resolve(root, ...relPath.split('/')) : path.resolve(root);
+  if (!isSameOrChildPath(root, target)) throw Object.assign(new Error('공유 범위를 벗어난 경로입니다.'), { status: 403 });
+  assertRealPathInside(root, target);
+  if (!fs.existsSync(target) || !fs.lstatSync(target).isDirectory()) {
+    throw Object.assign(new Error('폴더를 찾을 수 없습니다.'), { status: 404 });
+  }
+  return fs.readdirSync(target, { withFileTypes: true }).map(entry => {
+    if (SEARCH_SKIP_NAMES.has(entry.name) || entry.name === LINKED_DEVICE_META || entry.isSymbolicLink()) return null;
+    const fullPath = path.join(target, entry.name);
+    const stat = fs.lstatSync(fullPath);
+    if (!stat.isDirectory() && !stat.isFile()) return null;
+    const itemRelPath = path.relative(root, fullPath).replace(/\\/g, '/');
+    return {
+      name: entry.name,
+      relPath: itemRelPath,
+      type: stat.isDirectory() ? 'folder' : 'file',
+      size: stat.isFile() ? stat.size : 0,
+      mtimeMs: Math.round(stat.mtimeMs)
+    };
+  }).filter(Boolean).sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'folder' ? -1 : 1));
+};
+
+// Native NAS Drive only: browse metadata without downloading file contents.
+router.get('/devices/agent/account-share/browse', (req, res) => {
+  try {
+    const deviceId = String(req.query?.deviceId || '').trim();
+    const agentToken = String(req.headers['x-agent-token'] || '').trim();
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    if (!getPersonalDriveRoot(device)) return res.status(400).json({ error: '개인 NAS Drive 계정만 공유할 수 있습니다.' });
+    const owner = getCurrentDeviceOwner(device);
+    const root = getDeviceUserBasePath(owner);
+    return res.json({
+      success: true,
+      path: normalizeAccountShareRelPath(req.query?.path, { allowEmpty: true }),
+      items: listAccountShareDirectory(root, req.query?.path)
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '공유할 항목을 불러오지 못했습니다.' });
+  }
+});
+
+// A relation is always source account -> one recipient account. Repeating this
+// operation safely supports any number of linked accounts without group tokens.
+router.post('/devices/agent/account-shares', express.json({ limit: '24kb' }), (req, res) => {
+  try {
+    const sourceDeviceId = String(req.body?.sourceDeviceId || '').trim();
+    const sourceToken = String(req.headers['x-agent-token'] || '').trim();
+    const recipientDeviceId = String(req.body?.recipientDeviceId || '').trim();
+    const recipientToken = String(req.body?.recipientAgentToken || '').trim();
+    const sourceDevice = getAgentDeviceByToken(sourceDeviceId, sourceToken);
+    const recipientDevice = getAgentDeviceByToken(recipientDeviceId, recipientToken);
+    if (!sourceDevice || !recipientDevice) return res.status(403).json({ error: '두 NAS 계정의 Agent 인증이 모두 필요합니다.' });
+    if (!sourceDevice.clientDeviceKey || sourceDevice.clientDeviceKey !== recipientDevice.clientDeviceKey) {
+      return res.status(403).json({ error: '이 PC의 NAS Drive에 함께 연결된 계정끼리만 공유할 수 있습니다.' });
+    }
+    const sourceRoot = getPersonalDriveRoot(sourceDevice);
+    const recipientRoot = getPersonalDriveRoot(recipientDevice);
+    if (!sourceRoot || !recipientRoot) return res.status(400).json({ error: '개인 NAS Drive 계정끼리만 공유할 수 있습니다.' });
+    const sourceOwner = getCurrentDeviceOwner(sourceDevice);
+    const recipientOwner = getCurrentDeviceOwner(recipientDevice);
+    const sourceOwnerKey = getDeviceOwnerKey(sourceOwner);
+    const recipientOwnerKey = getDeviceOwnerKey(recipientOwner);
+    if (sourceOwnerKey === recipientOwnerKey) return res.status(409).json({ error: '같은 계정으로는 공유할 수 없습니다.' });
+
+    const sourceRelPath = normalizeAccountShareRelPath(req.body?.sourceRelPath, { allowEmpty: true });
+    const sourceBase = getDeviceUserBasePath(sourceOwner);
+    const selectedPath = sourceRelPath ? path.resolve(sourceBase, ...sourceRelPath.split('/')) : path.resolve(sourceBase);
+    if (!isSameOrChildPath(sourceBase, selectedPath)) return res.status(403).json({ error: '공유 범위를 벗어난 경로입니다.' });
+    assertRealPathInside(sourceBase, selectedPath);
+    if (!fs.existsSync(selectedPath)) return res.status(404).json({ error: '공유할 항목을 찾을 수 없습니다.' });
+    const stat = fs.lstatSync(selectedPath);
+    if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) return res.status(400).json({ error: '이 항목 형식은 공유할 수 없습니다.' });
+
+    const shares = readAccountDriveShares();
+    const duplicate = shares.find(share => !share.revokedAt && share.sourceOwnerKey === sourceOwnerKey
+      && share.recipientOwnerKey === recipientOwnerKey && share.sourceRelPath === sourceRelPath);
+    if (duplicate) return res.json({ success: true, created: false, share: duplicate });
+    const now = new Date().toISOString();
+    const share = {
+      shareId: createAccountShareId(),
+      sourceOwnerKey,
+      sourceLoginId: getUserLoginId(sourceOwner),
+      sourceDisplayName: safeDisplaySegment(sourceOwner.displayName || sourceOwner.nickname || getUserLoginId(sourceOwner)),
+      recipientOwnerKey,
+      recipientLoginId: getUserLoginId(recipientOwner),
+      recipientDisplayName: safeDisplaySegment(recipientOwner.displayName || recipientOwner.nickname || getUserLoginId(recipientOwner)),
+      sourceRelPath,
+      sourceItemName: sourceRelPath ? path.basename(selectedPath) : '전체 파일',
+      sourceType: stat.isDirectory() ? 'folder' : 'file',
+      access: 'read-only',
+      createdAt: now,
+      updatedAt: now,
+      revokedAt: null
+    };
+    shares.push(share);
+    writeAccountDriveShares(shares);
+    return res.status(201).json({ success: true, created: true, share });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '계정 간 공유를 만들지 못했습니다.' });
+  }
+});
+
+router.post('/devices/agent/account-shares/list', express.json({ limit: '8kb' }), (req, res) => {
+  try {
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const agentToken = String(req.headers['x-agent-token'] || '').trim();
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    const ownerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
+    const shares = readAccountDriveShares().filter(share => !share.revokedAt
+      && (share.sourceOwnerKey === ownerKey || share.recipientOwnerKey === ownerKey));
+    return res.json({ success: true, shares });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '계정 간 공유 목록을 불러오지 못했습니다.' });
+  }
+});
+
+router.post('/devices/agent/account-shares/revoke', express.json({ limit: '8kb' }), (req, res) => {
+  try {
+    const deviceId = String(req.body?.deviceId || '').trim();
+    const shareId = String(req.body?.shareId || '').trim();
+    const agentToken = String(req.headers['x-agent-token'] || '').trim();
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    const ownerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
+    const shares = readAccountDriveShares();
+    const index = shares.findIndex(share => share.shareId === shareId && !share.revokedAt
+      && (share.sourceOwnerKey === ownerKey || share.recipientOwnerKey === ownerKey));
+    if (index < 0) return res.status(404).json({ error: '공유 관계를 찾을 수 없습니다.' });
+    shares[index] = { ...shares[index], revokedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    writeAccountDriveShares(shares);
+    return res.json({ success: true, shareId });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '공유를 해제하지 못했습니다.' });
+  }
+});
+
 // Agent가 pairingToken으로 실제 PC 등록
 router.post('/devices/agent/register', (req, res) => {
   try {
@@ -3999,6 +4165,11 @@ const getValidatedAgentTarget = (deviceId, agentToken, relPathValue, syncRootIdV
   resolveInside(ownerBasePath, path.relative(ownerBasePath, linkedRoot));
   assertRealPathInside(ownerBasePath, linkedRoot);
   const relPath = normalizeAgentRelPath(relPathValue);
+  if (relPath === SHARED_ROOT_NAME || relPath.startsWith(SHARED_ROOT_NAME + '/')) {
+    const err = new Error('공유받은 항목은 읽기 전용입니다. 원본 계정에서 변경해 주세요.');
+    err.status = 403;
+    throw err;
+  }
   if (SEARCH_SKIP_NAMES.has(relPath.split('/')[0])) {
     const err = new Error('내부 복구 저장소는 동기화할 수 없습니다.');
     err.status = 400;
@@ -4607,11 +4778,16 @@ router.get('/devices/agent/changes', (req, res) => {
     const agentToken = String(req.headers['x-agent-token'] || '');
     const { device, linkedRoot } = getValidatedAgentRoot(deviceId, agentToken, syncRootId);
     const monitor = ensureAgentRootMonitor(linkedRoot);
+    const ownerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
+    const accountShares = sharesForRecipient(readAccountDriveShares(), ownerKey);
+    const revision = combineAccountShareRevision(monitor.revision, accountShares, share => {
+      try { return ensureAgentRootMonitor(getAccountShareSourceRoot(share)).revision; } catch { return 'unavailable'; }
+    });
     touchLinkedDevice(device, linkedRoot);
     return res.json({
       success: true,
-      changed: String(req.query.revision || '') !== monitor.revision,
-      revision: monitor.revision
+      changed: String(req.query.revision || '') !== revision,
+      revision
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || 'Agent 변경 상태 조회 실패' });
@@ -4626,6 +4802,18 @@ router.get('/devices/agent/manifest', (req, res) => {
     const agentToken = String(req.headers['x-agent-token'] || '');
     const { device, syncRoot, linkedRoot } = getValidatedAgentRoot(deviceId, agentToken, syncRootId);
     const monitor = ensureAgentRootMonitor(linkedRoot);
+    const ownerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
+    const accountShares = sharesForRecipient(readAccountDriveShares(), ownerKey);
+    const revision = combineAccountShareRevision(monitor.revision, accountShares, share => {
+      try { return ensureAgentRootMonitor(getAccountShareSourceRoot(share)).revision; } catch { return 'unavailable'; }
+    });
+    const localEntries = listAgentManifestEntries(linkedRoot)
+      .filter(entry => entry.relPath !== SHARED_ROOT_NAME && !entry.relPath.startsWith(SHARED_ROOT_NAME + '/'));
+    const sharedEntries = accountShares.flatMap(share => {
+      try { return buildSharedManifestEntries(share, getAccountShareSourceRoot(share), listAgentManifestEntries); } catch { return []; }
+    });
+    const entriesByPath = new Map();
+    for (const entry of [...localEntries, ...sharedEntries]) entriesByPath.set(entry.relPath, entry);
     touchLinkedDevice(device, linkedRoot);
 
     return res.json({
@@ -4633,8 +4821,11 @@ router.get('/devices/agent/manifest', (req, res) => {
       deviceId,
       syncRootId: syncRoot.syncRootId,
       generatedAt: new Date().toISOString(),
-      revision: monitor.revision,
-      entries: listAgentManifestEntries(linkedRoot)
+      revision,
+      entries: Array.from(entriesByPath.values()).sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+        return a.relPath.localeCompare(b.relPath);
+      })
     });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || 'Agent manifest 조회 실패' });
@@ -4646,9 +4837,27 @@ router.get('/devices/agent/file', (req, res) => {
   try {
     const deviceId = String(req.query.deviceId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const { device, linkedRoot, relPath, finalPath } = getValidatedAgentTarget(deviceId, agentToken, req.query.relPath, req.query.syncRootId);
+    const device = getAgentDeviceByToken(deviceId, agentToken);
+    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    const requestedRelPath = String(req.query.relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    let linkedRoot;
+    let relPath;
+    let finalPath;
+    if (requestedRelPath === SHARED_ROOT_NAME || requestedRelPath.startsWith(SHARED_ROOT_NAME + '/')) {
+      const recipientOwnerKey = getDeviceOwnerKey(getCurrentDeviceOwner(device));
+      const resolved = resolveSharedFile(readAccountDriveShares(), recipientOwnerKey, requestedRelPath, getAccountShareSourceRoot);
+      linkedRoot = resolved.sourceRoot;
+      relPath = resolved.relPath;
+      finalPath = resolved.finalPath;
+      assertRealPathInside(linkedRoot, finalPath);
+    } else {
+      const target = getValidatedAgentTarget(deviceId, agentToken, requestedRelPath, req.query.syncRootId);
+      linkedRoot = target.linkedRoot;
+      relPath = target.relPath;
+      finalPath = target.finalPath;
+    }
 
-    if (!fs.existsSync(finalPath) || !fs.statSync(finalPath).isFile()) {
+    if (!fs.existsSync(finalPath) || fs.lstatSync(finalPath).isSymbolicLink() || !fs.statSync(finalPath).isFile()) {
       return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
     }
 

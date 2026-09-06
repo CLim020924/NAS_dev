@@ -80,9 +80,12 @@ assert.match(windowsLauncherSource, /DeletePidFileWhenOwnerIsGone\(NativeUiPidFi
 assert.match(windowsLauncherSource, /DeletePidFileWhenOwnerIsGone\(WebPickerPidFile, launcherExe\)/);
 assert.match(windowsLauncherSource, /RegisterWindowMessage\("TaskbarCreated"\)/);
 assert.match(windowsLauncherSource, /startupRestoreTick == 1 \|\| startupRestoreTick == 3 \|\| startupRestoreTick == 6/);
-assert.match(windowsLauncherSource, /EmergencyLocalLogout\(\)/);
+assert.match(windowsLauncherSource, /EmergencyLocalLogout\(selectedAccount\.AccountKey\)/);
 assert.match(windowsLauncherSource, /profiles"\] = remainingProfiles\.ToArray\(\)/);
-assert.match(windowsLauncherSource, /try \{ exitCode = await Task\.Run\(\(\) => RunLogout\(\)\); \} catch \{ \}/);
+assert.match(windowsLauncherSource, /try \{ exitCode = await Task\.Run\(\(\) => RunLogout\(selectedAccount\.AccountKey\)\); \} catch \{ \}/);
+assert.match(windowsLauncherSource, /AllAccounts\(\)\.Count == 0/);
+assert.match(windowsLauncherSource, /계정 간 공유/);
+assert.match(windowsAgentSource, /isReadOnlyAccountSharePath/);
 assert.match(windowsLauncherSource, /--open-drive-after-install/);
 assert.match(windowsLauncherSource, /OpenDriveForegroundWhenReady\(openDriveDeviceId\)/);
 assert.match(windowsLauncherSource, /DrivePathForDeviceId\(deviceId\)/);

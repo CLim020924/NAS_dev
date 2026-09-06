@@ -18,7 +18,7 @@ const {
 } = require('./web-browser');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.10.33';
+const AGENT_VERSION = '1.11.0';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -55,6 +55,7 @@ const UPDATE_CHECK_FILE = path.join(STATE_DIR, 'agent-update-check.json');
 const OPEN_WEB_DIAGNOSTIC_FILE = path.join(STATE_DIR, 'open-web-last.json');
 const UPDATE_SCRIPT_FILE = path.join(STATE_DIR, 'agent-update.ps1');
 const STATE_PREFIX = 'state_';
+const ACCOUNT_SHARED_ROOT_NAME = '다른 NAS 계정에서 공유됨';
 
 let applyingRemoteChange = false;
 let setupProgressActive = false;
@@ -362,7 +363,10 @@ function safeAccountKey(value) {
 }
 
 function personalDrivePath(account = {}) {
-  const label = String(account.displayName || account.loginId || account.ownerKey || '개인')
+  const display = String(account.displayName || account.loginId || account.ownerKey || '개인').trim();
+  const loginId = String(account.loginId || '').trim();
+  const accountLabel = loginId && display.toLowerCase() !== loginId.toLowerCase() ? display + ' (' + loginId + ')' : display;
+  const label = accountLabel
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
     .trim() || '개인';
   return path.join(os.homedir(), `NAS Drive - ${label}`);
@@ -447,6 +451,14 @@ function explorerStatusLabel(state) {
     updating: 'NAS Drive 업데이트 중',
     error: '오류 · NAS Drive 확인 필요'
   }[state] || 'NAS Drive 상태 확인 필요');
+}
+
+function isReadOnlyAccountSharePath(root, targetOrRelativePath) {
+  if (root?.kind !== 'personal-drive') return false;
+  let relativePath = String(targetOrRelativePath || '');
+  if (root.localPath && path.isAbsolute(relativePath)) relativePath = relPath(root.localPath, relativePath);
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return normalized === ACCOUNT_SHARED_ROOT_NAME || normalized.startsWith(`${ACCOUNT_SHARED_ROOT_NAME}/`);
 }
 
 function setPersonalDriveFolderIcon(rootPath, enabled, state = 'up-to-date', message = '') {
@@ -791,6 +803,13 @@ async function syncPersonalDrivePlaceholders(root, profile, manifest, previous) 
   };
   for (const entry of visibleManifest.entries) {
     suppressRemotePath(path.join(root.localPath, entry.relPath.split('/').join(path.sep)));
+    const previousEntry = previous?.remoteEntries?.[entry.relPath];
+    if (entry.type === 'file' && isReadOnlyAccountSharePath(root, entry.relPath) && previousEntry && !entriesMatch(previousEntry, entry)) {
+      // Shared items are read-only views of another account. Drop a stale
+      // hydrated/placeholder instance before CFAPI reapplies the new metadata;
+      // the old local bytes remain recoverable through the Drive trash policy.
+      moveToTrash(root, path.join(root.localPath, entry.relPath.split('/').join(path.sep)), { allowOnlineOnlyPlaceholderDelete: true });
+    }
   }
   writeJson(manifestFile, visibleManifest);
   let manifestSyncError;
@@ -2645,7 +2664,6 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
   // disconnect before any network call or provider cleanup that can time out.
   saveConfig(nextConfig);
   try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
-  setAgentHealth('needs-relink', '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
 
   if (profile.agentToken) {
     try {
@@ -2661,6 +2679,9 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
   } else {
     log('[logout local only: token unavailable]', profile.deviceId);
   }
+  setAgentHealth(remainingProfiles.length > 0 ? 'connecting' : 'needs-relink', remainingProfiles.length > 0
+    ? '선택한 계정 연결을 해제했습니다. 나머지 NAS Drive 계정을 계속 연결하는 중입니다.'
+    : '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
 
   clearLocalProfileResources(profile);
   restartBackground();
@@ -3037,7 +3058,7 @@ function buildRegisteredProfile(currentConfig, reg, lookupResult, deviceName, ro
 }
 
 async function syncFolder(root, dir, config) {
-  if (isPersonalDriveShellMetadata(root, dir)) return;
+  if (isPersonalDriveShellMetadata(root, dir) || isReadOnlyAccountSharePath(root, dir)) return;
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return;
   const rel = relPath(root.localPath, dir);
   if (!rel) return;
@@ -3047,14 +3068,14 @@ async function syncFolder(root, dir, config) {
 }
 
 async function syncDelete(root, target, config) {
-  if (isPersonalDriveShellMetadata(root, target)) return;
+  if (isPersonalDriveShellMetadata(root, target) || isReadOnlyAccountSharePath(root, target)) return;
   const rel = relPath(root.localPath, target);
   if (!rel) return;
   await requestJson('POST', '/api/devices/agent/sync-delete', { deviceId: config.deviceId, syncRootId: root.syncRootId, relPath: rel }, config.agentToken);
 }
 
 async function syncFile(root, file, config) {
-  if (isPersonalDriveShellMetadata(root, file)) return;
+  if (isPersonalDriveShellMetadata(root, file) || isReadOnlyAccountSharePath(root, file)) return;
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return;
   const stat = fs.statSync(file);
   if (stat.size > MAX_FILE_BYTES) {
@@ -3176,6 +3197,7 @@ async function reconcileOfflineLocalChanges(root, config) {
   const localEntries = localScan.entries;
 
   for (const [relativePath, local] of Object.entries(localEntries)) {
+    if (isReadOnlyAccountSharePath(root, relativePath)) continue;
     const before = previousEntries[relativePath];
     const remote = currentRemote[relativePath];
     if (!local.unreadable && localEntryNeedsUpload(local, before, remote, previousRemotePaths.has(relativePath))) {
@@ -3190,7 +3212,7 @@ async function reconcileOfflineLocalChanges(root, config) {
 
   const isUnreadable = relativePath => Array.from(localScan.unreadablePrefixes).some(prefix => !prefix || relativePath === prefix || relativePath.startsWith(prefix + '/'));
   const missing = Object.keys(previousEntries)
-    .filter(relativePath => !localEntries[relativePath] && !isUnreadable(relativePath) && currentRemote[relativePath] && entriesMatch(currentRemote[relativePath], previousEntries[relativePath]))
+    .filter(relativePath => !isReadOnlyAccountSharePath(root, relativePath) && !localEntries[relativePath] && !isUnreadable(relativePath) && currentRemote[relativePath] && entriesMatch(currentRemote[relativePath], previousEntries[relativePath]))
     .sort((a, b) => a.split('/').length - b.split('/').length);
   const topLevelMissing = [];
   for (const relativePath of missing) {
@@ -3211,7 +3233,7 @@ async function initialSync(root, config) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       try {
-        if (isPersonalDriveShellMetadata(root, full)) continue;
+        if (isPersonalDriveShellMetadata(root, full) || isReadOnlyAccountSharePath(root, full)) continue;
         if (entry.isDirectory()) {
           await syncFolder(root, full, config);
           await walk(full);
@@ -3562,6 +3584,7 @@ function runSelfTest() {
   const expectedPrefix = path.join(os.homedir(), 'NAS Drive - ');
   const defaultPath = personalDrivePath({ displayName: '테스트 계정' });
   if (!defaultPath.startsWith(expectedPrefix)) throw new Error('OneDrive-style default path test failed.');
+  if (!personalDrivePath({ displayName: '같은 이름', loginId: 'account-b' }).includes('(account-b)')) throw new Error('Multi-account Drive path collision test failed.');
   if (personalDrivePath({ displayName: 'a/b:c' }).includes('/b:')) throw new Error('Drive label sanitization test failed.');
   if (safeAccountKey('a/b') !== 'a_b') throw new Error('Account key sanitization test failed.');
   if (classifyAgentError(new Error('HTTP 503: tunnel unavailable')) !== 'offline') throw new Error('NAS offline classification test failed.');
@@ -3610,12 +3633,83 @@ function runSelfTest() {
   if (localEntryNeedsUpload(sampleFile, null, { ...sampleFile })) throw new Error('Existing remote file reconciliation test failed.');
   if (!localEntryNeedsUpload({ ...sampleFile, size: 11 }, sampleFile, sampleFile)) throw new Error('Changed local file reconciliation test failed.');
   if (validatePersonalDrivePath(defaultPath) !== path.resolve(defaultPath)) throw new Error('Drive path validation test failed.');
+  if (!isReadOnlyAccountSharePath({ kind: 'personal-drive', localPath: defaultPath }, path.join(defaultPath, ACCOUNT_SHARED_ROOT_NAME, 'sample.txt'))) {
+    throw new Error('Account-shared read-only path test failed.');
+  }
   const overlapTestRoot = path.join(os.tmpdir(), 'nas-drive-overlap-test');
   if (!isSameOrChildLocalPath(overlapTestRoot, path.join(overlapTestRoot, 'Agent.exe'))) throw new Error('Install overlap detection test failed.');
   if (MAX_FILE_BYTES !== 250 * 1024 * 1024 * 1024) throw new Error('250GB file limit test failed.');
   if (!entriesMatch({ type: 'file', size: 10, mtimeMs: 1000 }, { type: 'file', size: 10, mtimeMs: 2500 })) throw new Error('Offline reconciliation tolerance test failed.');
   if (entriesMatch({ type: 'file', size: 10, mtimeMs: 1000 }, { type: 'file', size: 11, mtimeMs: 1000 })) throw new Error('Offline reconciliation change test failed.');
   if (!process.pkg) console.log('NAS Drive agent self-tests passed');
+}
+
+function profileByDeviceId(config, deviceId) {
+  const profiles = getProfiles(config);
+  return profiles.find(profile => profile.deviceId === deviceId)
+    || profiles.find(profile => profile.accountKey === config?.activeAccountKey)
+    || profiles[0]
+    || null;
+}
+
+function publicAccountProfile(profile) {
+  return {
+    accountKey: String(profile?.accountKey || ''),
+    loginId: String(profile?.loginId || ''),
+    displayName: String(profile?.displayName || profile?.loginId || '개인'),
+    deviceId: String(profile?.deviceId || ''),
+    drivePath: String(getRoots(profile).find(root => root.kind === 'personal-drive')?.localPath || '')
+  };
+}
+
+async function runAccountShareCommand(config) {
+  if (process.argv.includes('--account-profiles-json')) {
+    process.stdout.write(JSON.stringify({ profiles: getProfiles(config).map(publicAccountProfile), activeAccountKey: config?.activeAccountKey || '' }));
+    return true;
+  }
+  if (process.argv.includes('--share-browse-json')) {
+    const profile = profileByDeviceId(config, getCommandArgument('--device-id'));
+    if (!profile?.deviceId || !profile?.agentToken) throw new Error('공유할 NAS 계정의 로그인이 필요합니다.');
+    const browsePath = getCommandArgument('--share-path') || '';
+    const result = await request('GET', `/api/devices/agent/account-share/browse?deviceId=${encodeURIComponent(profile.deviceId)}&path=${encodeURIComponent(browsePath)}`, {
+      headers: { 'x-agent-token': profile.agentToken }, timeoutMs: 15_000
+    });
+    process.stdout.write(JSON.stringify(result));
+    return true;
+  }
+  if (process.argv.includes('--share-create-json')) {
+    const source = profileByDeviceId(config, getCommandArgument('--source-device-id'));
+    const recipient = profileByDeviceId(config, getCommandArgument('--recipient-device-id'));
+    if (!source?.agentToken || !recipient?.agentToken || source.deviceId === recipient.deviceId) {
+      throw new Error('서로 다른 두 NAS 계정을 선택해 주세요.');
+    }
+    const result = await requestJson('POST', '/api/devices/agent/account-shares', {
+      sourceDeviceId: source.deviceId,
+      recipientDeviceId: recipient.deviceId,
+      recipientAgentToken: recipient.agentToken,
+      sourceRelPath: getCommandArgument('--share-path') || ''
+    }, source.agentToken, 20_000);
+    process.stdout.write(JSON.stringify(result));
+    return true;
+  }
+  if (process.argv.includes('--share-list-json')) {
+    const profile = profileByDeviceId(config, getCommandArgument('--device-id'));
+    if (!profile?.agentToken) throw new Error('NAS 계정 로그인이 필요합니다.');
+    const result = await requestJson('POST', '/api/devices/agent/account-shares/list', { deviceId: profile.deviceId }, profile.agentToken, 15_000);
+    process.stdout.write(JSON.stringify(result));
+    return true;
+  }
+  if (process.argv.includes('--share-revoke-json')) {
+    const profile = profileByDeviceId(config, getCommandArgument('--device-id'));
+    if (!profile?.agentToken) throw new Error('NAS 계정 로그인이 필요합니다.');
+    const result = await requestJson('POST', '/api/devices/agent/account-shares/revoke', {
+      deviceId: profile.deviceId,
+      shareId: getCommandArgument('--share-id') || ''
+    }, profile.agentToken, 15_000);
+    process.stdout.write(JSON.stringify(result));
+    return true;
+  }
+  return false;
 }
 
 async function runForeground() {
@@ -3856,6 +3950,8 @@ async function runForeground() {
       runSelfTest();
       return;
     }
+    const commandConfig = loadConfig();
+    if (await runAccountShareCommand(commandConfig)) return;
     if (relaunchForegroundHiddenIfNeeded()) return;
     ensureStateDir();
     refreshInstalledBrandAssets();

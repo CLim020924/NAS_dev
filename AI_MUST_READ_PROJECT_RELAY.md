@@ -995,3 +995,15 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 중복 터널 제거: systemd cloudflared는 `/etc/cloudflared/config.yml`의 origin `127.0.0.1:3030`으로 정상 연결됐지만, GNOME Terminal에서 사용자가 실행한 두 번째 cloudflared가 `/home/limchanyoung/.cloudflared/config.yml`의 origin `127.0.0.1:80`으로 같은 tunnel을 잡아 공개 주소가 자기 자신으로 301 반복됐다. 사용자 cloudflared PID만 종료하고 systemd 인스턴스 하나만 남겼으며 공개 HTTPS가 200으로 복구됐다. 사용자 unit·cron 자동 실행은 없었다.
 - 운영 배포·검증: GitHub의 `275d53d`까지 NAS live branch를 clean fast-forward했다. NAS Linux Agent self-test와 backend 22/22가 통과했고 PM2 restart/save 후 `msp-backend` online이다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 enabled+active, Tailscale ping 1ms, gateway·DNS 정상, 내부 3030과 공개 HTTPS는 200이며 무인증 Agent 다운로드 endpoint는 401이다. NAS Agent/Setup SHA-256은 로컬 release와 일치한다.
 - 프로젝트 메모리: workbook에 `WIN-NAS-REBOOT-RECOVERY-119`, `NAS-BOOT-NETWORK-SYSTEM-PROFILE-120`, `WIN-NAS-REBOOT-FAST-RECOVERY`와 Relation/Code/Patch/Request를 기록했다. formula error 0, 관련 6개 시트 렌더와 변경 범위 시각 검사를 통과했다. 다음 자연 재부팅에서 사용자 로그인 전 online 시각을 관찰하는 것 외에 미완료 작업은 없다.
+
+## 2026-09-06 NAS Drive 다중 계정·계정 간 읽기 전용 공유 1.11.0
+
+- 사용자 요청: 한 Windows PC의 NAS Drive에서 3개 이상 계정을 안전하게 연결·전환하고, 한 계정이 가진 파일·폴더를 같은 PC에 연결된 다른 계정으로 공유하되 파일 내용은 미리 복제하지 않고 목록만 표시한 뒤 열 때 내려받게 한다.
+- 다중 계정 UX: 제어 센터에 계정 선택, 계정 추가, 선택 계정 Drive 열기, 웹 관리, 계정 간 공유, 선택 계정 로그아웃을 추가했다. 표시 이름이 같은 계정도 로그인 ID를 Drive 폴더명에 포함해 경로 충돌을 막는다. 선택 계정 전환·추가 뒤 background를 재시작해 profile job과 상태를 즉시 다시 읽는다.
+- 로그아웃 안전성: 선택한 `accountKey`만 제거됐는지 확인하며 다른 profile이 남으면 전체 Agent를 미연결 상태로 만들지 않는다. 기존 emergency 정리 경로가 남은 다른 계정을 잘못 지울 수 있던 조건을 제거하고 명시적인 대상 키만 처리한다.
+- 공유 계약: `다른 NAS 계정에서 공유됨`을 예약된 읽기 전용 가상 루트로 사용한다. 공유 생성 때 source와 recipient Agent 자격을 둘 다 검증하고 같은 비어 있지 않은 Windows `clientDeviceKey`, 서로 다른 owner, 개인 Drive root, 실경로 containment, 비-symlink 조건을 요구한다. 관계 기록에는 token이나 NAS 절대경로를 저장하지 않고 owner ID·상대경로·표시 메타데이터만 둔다.
+- 목록·수화: recipient manifest에는 source 파일의 이름·종류·크기·수정시각만 합성한다. placeholder를 recipient 파일로 업로드하거나 삭제하지 않으며 열기 요청 때마다 현재 공유 관계, recipient 권한, source 계정/root와 containment를 다시 검증한 뒤 원본을 제공한다. source 변경·삭제·공유 해제는 composite revision으로 recipient manifest에 반영되며 오래된 로컬 사본은 기존 Drive 휴지통 정책으로 정리된다.
+- 관리 기능: native 공유 창에서 source 계정, recipient 계정, source 메타데이터 트리를 단계적으로 선택해 파일·폴더·전체 root를 공유할 수 있고, 보낸 공유와 받은 공유를 조회·해제할 수 있다. 계정 수를 2개로 가정하지 않아 동일 PC에 연결된 여러 계정 사이에서 관계별로 반복해 사용할 수 있다.
+- 구현 위치: `backend/accountDriveShares.js`, `backend/nasRoutes.js`, Windows Agent/Setup 1.11.0, `backend/tests/accountDriveShares.test.js`, `backend/tests/deviceSyncSecurity.test.js`에 반영했다. 실제 자격 증명이나 사용자 파일을 쓰지 않는 3계정 native 렌더 QA에서 제어 센터와 공유 창의 배치·선택 흐름을 확인했다.
+- 로컬 검증: 새 공유 helper 단위 테스트, Agent self-test, Setup C# compile/self-test, 전체 backend 회귀 테스트를 통과했다. workbook에는 `WIN-ACCOUNT-SHARE-BOUNDARY`, `WIN-MULTI-ACCOUNT-ONDEMAND-SHARE`와 Relation/Code 기록을 추가했고 formula error 0 및 변경 시트 렌더 검사를 통과했다.
+- 현재 상태: 로컬 구현과 배포 바이너리 생성은 완료됐으며 이 기록 시점에는 GitHub push와 NAS 운영 배포·내부/공개 endpoint 검증이 남아 있다.
