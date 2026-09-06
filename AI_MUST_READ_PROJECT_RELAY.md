@@ -1171,3 +1171,9 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 저장 UX: 새 문서는 계정별 복구 가능한 draft로 열고 첫 `Ctrl+S` 또는 저장에서 이름·NAS 위치 선택기를 표시한다. 기본 경로는 호출 context의 notebook/page directory이고 사용자가 바꿀 수 있다. 첫 publish 뒤 일반 `Ctrl+S`는 같은 파일에 저장하며, `다른 이름으로 저장`·`복사본 저장`만 다시 위치를 묻는다. 기존 파일을 열었을 때는 새 위치를 묻지 않는다.
 - 연결 안정성: 노트 블록은 변경 가능한 경로 문자열만 저장하지 않고 server가 발급한 stable document ID와 마지막 알려진 path/revision을 함께 가진다. 파일 관리자·문서 스튜디오·NAS Drive를 통한 이동·이름 변경은 registry와 참조를 원자 갱신한다. 다른 위치 저장 뒤에도 블록 클릭은 현재 경로를 해석해 같은 문서를 열며, 권한 상실·외부 이동·삭제로 해석할 수 없으면 다른 파일을 추측해 열지 않고 `연결 끊김`과 다시 연결 기능을 제공한다.
 - 안전 경계: draft와 최종 위치 모두 계정 personal root, realpath/symlink, quota·물리 여유, 확장자 allowlist와 이름 충돌 정책을 서버가 재검증한다. 블록 삭제는 기본적으로 링크만 제거하고 실제 문서는 보존하며 `링크와 파일 함께 삭제`는 별도 확인 및 휴지통을 사용한다.
+
+## 2026-09-06 Office 문서 기본 저장 경로 해석 교정
+
+- 사용자 교정: 직전 기록의 `현재 페이지의 문서 경로` 고정 해석은 너무 좁다. 사용자가 노트북 내부 트리의 특정 폴더를 우클릭하거나, 파일 영역에서 현재 보고 있는 경로 또는 다른 노트북 기능을 통해 Office 문서 생성을 시작했다면 그 **명령 발생 경로**가 새 문서의 기본 저장 위치다.
+- 교정된 동작: 문서 생성 command는 `notebookId`, `invocationDirectory`, 선택된 page/block ID와 당시 directory revision을 draft context에 저장한다. 작성 후 첫 저장 위치 선택기는 `invocationDirectory`를 기본으로 열고, 사용자가 계정 내 다른 NAS 위치를 선택할 수 있다. 명시적 폴더 없이 page 본문에서 호출했을 때만 해당 page의 backing directory를 fallback으로 사용하고, 그것도 없으면 notebook root를 사용한다.
+- 경계 변화: 작성 중 원래 폴더가 이동·삭제되거나 권한이 바뀌면 오래된 문자열 경로에 자동 저장하지 않고 stable directory identity로 현재 위치를 다시 해석한다. 해석 실패 시 notebook root로 몰래 바꾸지 않고 위치 선택을 요구한다. 다른 위치에 저장해도 호출 지점에는 문서 reference block/항목을 유지하며 실제 최종 위치를 표시한다.
