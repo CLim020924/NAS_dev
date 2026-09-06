@@ -9,6 +9,7 @@ const createPlan = options => rawCreatePlan({ ...options, availabilityVerified: 
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-path-portability-'));
 const write = (file, value, encoding = 'utf8') => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value, encoding); };
+const portable = value => String(value || '').replace(/\\/g, '/');
 try {
   const drive = path.join(temp, 'NAS Drive');
   const project = path.join(drive, 'workspace', 'sample-project');
@@ -42,8 +43,8 @@ try {
   const jetbrains = path.join(project, '.run', 'sample.run.xml');
   write(jetbrains, `<configuration><option name="SCRIPT_NAME" value="${oldInternal}" /></configuration>`);
   plan = createPlan({ projectRoot: project, allowedRoots: [drive], stateDir: state });
-  const launchCandidate = plan.candidates.find(item => item.file === '.vscode\\launch.json');
-  const taskCandidates = plan.candidates.filter(item => item.file === '.vscode\\tasks.json');
+  const launchCandidate = plan.candidates.find(item => portable(item.file) === '.vscode/launch.json');
+  const taskCandidates = plan.candidates.filter(item => portable(item.file) === '.vscode/tasks.json');
   const workspaceCandidate = plan.candidates.find(item => item.file === 'sample.code-workspace');
   const jetbrainsCandidate = plan.candidates.find(item => item.file.includes('sample.run.xml'));
   assert.strictEqual(launchCandidate.replacementDisplay, '${workspaceFolder}/data/input.csv');
