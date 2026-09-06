@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios';
 import Editor from '@monaco-editor/react';
 import { EditorContent, useEditor } from '@tiptap/react';
+import { Node } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Underline from '@tiptap/extension-underline';
@@ -53,6 +54,28 @@ const TYPE_OPTIONS = [
 const languageOptions = ['plaintext', 'javascript', 'typescript', 'python', 'json', 'html', 'css', 'sql', 'shell', 'yaml', 'markdown'];
 const errorMessage = (error, fallback) => error.response?.data?.error || error.message || fallback;
 const formatTime = (value) => value ? new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '';
+
+const NoteLinkNode = Node.create({
+  name: 'noteLink', group: 'block', atom: true, draggable: true,
+  addAttributes: () => ({ noteId: { default: '' }, label: { default: '하위 페이지' } }),
+  parseHTML: () => [{ tag: 'div[data-note-link-id]' }],
+  renderHTML: ({ HTMLAttributes }) => ['div', {
+    'data-note-link-id': HTMLAttributes.noteId,
+    class: 'note-studio-reference-link',
+    role: 'button', tabindex: '0'
+  }, ['span', { class: 'note-studio-reference-icon', 'aria-hidden': 'true' }, '↳'], ['span', {}, HTMLAttributes.label]]
+});
+
+const NasResourceLinkNode = Node.create({
+  name: 'nasResourceLink', group: 'block', atom: true, draggable: true,
+  addAttributes: () => ({ attachmentId: { default: '' }, label: { default: 'NAS 문서' } }),
+  parseHTML: () => [{ tag: 'div[data-nas-attachment-id]' }],
+  renderHTML: ({ HTMLAttributes }) => ['div', {
+    'data-nas-attachment-id': HTMLAttributes.attachmentId,
+    class: 'note-studio-reference-link',
+    role: 'button', tabindex: '0'
+  }, ['span', { class: 'note-studio-reference-icon', 'aria-hidden': 'true' }, '□'], ['span', {}, HTMLAttributes.label]]
+});
 
 const BlockToolbar = ({ editor }) => {
   if (!editor) return null;
@@ -119,6 +142,8 @@ const NoteStudio = () => {
   const savingRef = useRef(false);
   const slashFromRef = useRef(null);
   const commandOpenRef = useRef(false);
+  const openNoteRef = useRef(null);
+  const openAttachmentRef = useRef(null);
 
   const editor = useEditor({
     extensions: [
@@ -126,11 +151,27 @@ const NoteStudio = () => {
       Underline,
       TaskList,
       TaskItem.configure({ nested: true }),
+      NoteLinkNode,
+      NasResourceLinkNode,
       Placeholder.configure({ placeholder: "'/'를 누르거나 내용을 입력하세요." })
     ],
     content: { type: 'doc', content: [{ type: 'paragraph' }] },
     immediatelyRender: false,
     editorProps: {
+      handleClick: (_view, _position, event) => {
+        const noteLink = event.target?.closest?.('[data-note-link-id]');
+        if (noteLink?.dataset?.noteLinkId) {
+          openNoteRef.current?.({ id: noteLink.dataset.noteLinkId });
+          return true;
+        }
+        const fileLink = event.target?.closest?.('[data-nas-attachment-id]');
+        if (fileLink?.dataset?.nasAttachmentId) {
+          const attachment = (selectedRef.current?.attachments || []).find((item) => item.id === fileLink.dataset.nasAttachmentId);
+          if (attachment) openAttachmentRef.current?.(attachment);
+          return true;
+        }
+        return false;
+      },
       handleKeyDown: (view, event) => {
         const { $from, empty } = view.state.selection;
         if (event.key === 'Tab' && !event.shiftKey && empty && $from.parent.type.name === 'paragraph') {
@@ -233,6 +274,7 @@ const NoteStudio = () => {
       queueMicrotask(() => { loadingNoteRef.current = false; });
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '노트를 열지 못했습니다.') }); }
   }, [editor, trashMode]);
+  useEffect(() => { openNoteRef.current = openNote; }, [openNote]);
 
   const saveNow = useCallback(async (reason = 'autosave') => {
     const current = selectedRef.current;
@@ -458,6 +500,23 @@ const NoteStudio = () => {
       setMessage({ severity: 'error', text: errorMessage(error, '연결된 NAS 항목을 열지 못했습니다.') });
     }
   };
+  useEffect(() => { openAttachmentRef.current = openAttachment; });
+
+  const createLinkedSubpage = async () => {
+    const current = selectedRef.current;
+    if (!current?.notebookId || current.type !== 'block' || current.deletedAt) return;
+    try {
+      const { data } = await axios.post('/api/note-studio/notes', {
+        title: '새 하위 페이지', type: 'block', notebookId: current.notebookId, parentId: current.id
+      }, { withCredentials: true });
+      editor?.chain().focus().insertContent([
+        { type: 'noteLink', attrs: { noteId: data.note.id, label: data.note.title } },
+        { type: 'paragraph' }
+      ]).run();
+      await loadList();
+      setMessage({ severity: 'success', text: '현재 위치에 새 하위 페이지 링크를 만들었습니다.' });
+    } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '하위 페이지를 만들지 못했습니다.') }); }
+  };
 
   const createOfficeDocument = async (format, label, directoryPath = '') => {
     const current = selectedRef.current;
@@ -478,6 +537,12 @@ const NoteStudio = () => {
       selectedRef.current = { ...current, ...data.note };
       setSelected(selectedRef.current);
       setNotes((items) => items.map((note) => note.id === current.id ? { ...note, ...data.note } : note));
+      if (current.type === 'block' && data.attachment?.id) {
+        editor?.chain().focus().insertContent([
+          { type: 'nasResourceLink', attrs: { attachmentId: data.attachment.id, label: data.name } },
+          { type: 'paragraph' }
+        ]).run();
+      }
       setMessage({ severity: 'success', text: `${data.name}을(를) ${directoryPath ? '선택한 NAS 폴더' : '이 페이지 폴더'}에 만들고 이 페이지에 연결했습니다.` });
       await openFileWindowByPath(data.fullPath, data.name, true);
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '페이지에 새 문서를 만들지 못했습니다.') }); }
@@ -577,7 +642,12 @@ const NoteStudio = () => {
       'code-block': () => chain.toggleCodeBlock().run(),
       divider: () => chain.setHorizontalRule().run()
     };
-    actions[commandId]?.();
+    if (commandId === 'subpage') {
+      chain.run();
+      createLinkedSubpage();
+    } else {
+      actions[commandId]?.();
+    }
     commandOpenRef.current = false;
     slashFromRef.current = null;
     setCommandOpen(false);

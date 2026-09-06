@@ -5,6 +5,7 @@ import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, parseSlashQuery, tabSh
 test('filters block commands with Korean and English aliases', () => {
   expect(filterCommands(BLOCK_COMMANDS, '제목').map((item) => item.id)).toEqual(['heading-1', 'heading-2', 'heading-3']);
   expect(filterCommands(BLOCK_COMMANDS, 'quote').map((item) => item.id)).toEqual(['quote']);
+  expect(filterCommands(BLOCK_COMMANDS, 'page').map((item) => item.id)).toEqual(['subpage']);
 });
 
 test('flattens a note tree in parent-before-child order', () => {

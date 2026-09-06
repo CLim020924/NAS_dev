@@ -1,4 +1,5 @@
 export const BLOCK_COMMANDS = [
+  { id: 'subpage', label: '하위 페이지', keywords: 'page subpage child 페이지 하위' },
   { id: 'paragraph', label: '본문', keywords: 'text paragraph 본문 문단' },
   { id: 'heading-1', label: '제목 1', keywords: 'heading title h1 제목' },
   { id: 'heading-2', label: '제목 2', keywords: 'heading title h2 소제목' },

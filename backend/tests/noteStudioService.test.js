@@ -122,6 +122,22 @@ test('recovers an externally renamed attachment by stable filesystem identity', 
   assert.equal(updated.attachments[0].name, 'renamed.txt');
 }));
 
+test('hydrates current page and attachment names into stable block references', () => withStore((store) => {
+  const parent = store.create({ title: '부모', type: 'block' });
+  const child = store.create({ title: '현재 하위 이름', type: 'block', parentId: parent.id });
+  const attached = store.addAttachment(parent.id, { name: '현재 문서.docx', path: '/현재 문서.docx', kind: 'file' }, parent.revision);
+  store.update(parent.id, {
+    expectedRevision: attached.note.revision,
+    content: { type: 'doc', content: [
+      { type: 'noteLink', attrs: { noteId: child.id, label: '오래된 하위 이름' } },
+      { type: 'nasResourceLink', attrs: { attachmentId: attached.attachment.id, label: '오래된 문서.docx' } }
+    ] }
+  });
+  const content = store.get(parent.id).content.content;
+  assert.equal(content[0].attrs.label, '현재 하위 이름');
+  assert.equal(content[1].attrs.label, '현재 문서.docx');
+}));
+
 test('allows hierarchy changes but rejects parent cycles', () => withStore((store) => {
   const root = store.create({ title: 'root', type: 'text' });
   const child = store.create({ title: 'child', type: 'text', parentId: root.id });

@@ -67,3 +67,27 @@
   flex: 1;
   min-width: 0;
 }
+
+.note-studio-editor .tiptap .note-studio-reference-link {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin: 0.45rem 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgba(127, 127, 127, 0.22);
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.055);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.note-studio-editor .tiptap .note-studio-reference-link:hover {
+  background: rgba(127, 127, 127, 0.1);
+}
+
+.note-studio-editor .tiptap .note-studio-reference-icon {
+  width: 1.35rem;
+  color: #6b7280;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}

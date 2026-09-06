@@ -273,6 +273,21 @@ const createNoteStudioStore = ({ personalRootPath }) => {
     return stored;
   };
 
+  const hydrateReferenceLabels = (content, index, ownerMeta) => {
+    if (!content || typeof content !== 'object') return content;
+    if (Array.isArray(content)) return content.map((item) => hydrateReferenceLabels(item, index, ownerMeta));
+    const next = { ...content };
+    if (next.type === 'noteLink' && next.attrs?.noteId) {
+      const linked = index.notes.find((item) => item.id === next.attrs.noteId && !item.deletedAt);
+      next.attrs = { ...next.attrs, label: linked?.title || '삭제되었거나 찾을 수 없는 페이지' };
+    } else if (next.type === 'nasResourceLink' && next.attrs?.attachmentId) {
+      const attachment = (ownerMeta.attachments || []).find((item) => item.id === next.attrs.attachmentId);
+      next.attrs = { ...next.attrs, label: attachment?.name || '연결이 해제된 NAS 문서' };
+    }
+    if (Array.isArray(next.content)) next.content = hydrateReferenceLabels(next.content, index, ownerMeta);
+    return next;
+  };
+
   const snapshot = (meta, storedContent, reason = 'autosave') => {
     const versionId = `${String(meta.revision).padStart(8, '0')}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     atomicWriteJson(path.join(versionsRoot(meta.id), `${versionId}.json`), {
@@ -311,7 +326,8 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   const get = (id, options = {}) => {
     const index = readIndex();
     const meta = findMeta(index, id, options);
-    return { ...meta, content: readContent(meta).content };
+    const content = readContent(meta).content;
+    return { ...meta, content: meta.type === 'block' ? hydrateReferenceLabels(content, index, meta) : content };
   };
 
   const create = ({ title, type = 'block', language = '', parentId = null, notebookId = null, content } = {}) => {
