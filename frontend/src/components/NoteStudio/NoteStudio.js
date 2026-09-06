@@ -30,6 +30,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
+import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
@@ -71,6 +73,8 @@ const BlockToolbar = ({ editor }) => {
 const NoteStudio = () => {
   const theme = useTheme();
   const { openFileWindowByPath, openFolderWindowByPath } = useWindows();
+  const [notebooks, setNotebooks] = useState([]);
+  const [activeNotebookId, setActiveNotebookId] = useState(null);
   const [notes, setNotes] = useState([]);
   const [selected, setSelected] = useState(null);
   const [query, setQuery] = useState('');
@@ -87,6 +91,8 @@ const NoteStudio = () => {
   const [commandQuery, setCommandQuery] = useState('');
   const [pendingParentId, setPendingParentId] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [notebookDialogOpen, setNotebookDialogOpen] = useState(false);
+  const [notebookTitle, setNotebookTitle] = useState('');
   const selectedRef = useRef(null);
   const saveTimerRef = useRef(null);
   const pendingContentRef = useRef(null);
@@ -121,9 +127,16 @@ const NoteStudio = () => {
   const loadList = useCallback(async ({ keepSelection = true } = {}) => {
     setLoading(true);
     try {
-      const { data } = await axios.get('/api/note-studio/notes', { params: { deleted: trashMode, q: query }, withCredentials: true });
-      setNotes(data.notes || []);
-      if (!keepSelection || (selectedRef.current && !(data.notes || []).some((note) => note.id === selectedRef.current.id))) setSelected(null);
+      const [{ data }, notebookResponse] = await Promise.all([
+        axios.get('/api/note-studio/notes', { params: { deleted: trashMode, q: query }, withCredentials: true }),
+        axios.get('/api/note-studio/notebooks', { withCredentials: true })
+      ]);
+      const nextNotes = data.notes || [];
+      const nextNotebooks = notebookResponse.data.notebooks || [];
+      setNotes(nextNotes);
+      setNotebooks(nextNotebooks);
+      setActiveNotebookId((current) => nextNotebooks.some((item) => item.id === current) ? current : nextNotebooks[0]?.id || null);
+      if (!keepSelection || (selectedRef.current && !nextNotes.some((note) => note.id === selectedRef.current.id))) setSelected(null);
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '노트 목록을 불러오지 못했습니다.') }); }
     finally { setLoading(false); }
   }, [query, trashMode]);
@@ -233,12 +246,30 @@ const NoteStudio = () => {
   const createNote = async (option) => {
     setCreateAnchor(null);
     try {
-      const { data } = await axios.post('/api/note-studio/notes', { title: `새 ${option.label}`, type: option.type, language: option.type === 'code' ? 'plaintext' : '', parentId: pendingParentId }, { withCredentials: true });
+      const parent = pendingParentId ? notes.find((note) => note.id === pendingParentId) : null;
+      const notebookId = parent ? parent.notebookId : activeNotebookId;
+      if (!notebookId && !parent) {
+        setNotebookDialogOpen(true);
+        setMessage({ severity: 'info', text: '페이지를 만들 노트북을 먼저 생성해 주세요.' });
+        return;
+      }
+      const { data } = await axios.post('/api/note-studio/notes', { title: `새 ${option.label}`, type: option.type, language: option.type === 'code' ? 'plaintext' : '', parentId: pendingParentId, notebookId }, { withCredentials: true });
       setPendingParentId(null);
       setTrashMode(false);
       await loadList({ keepSelection: false });
       await openNote(data.note);
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '새 노트를 만들지 못했습니다.') }); }
+  };
+
+  const createNotebook = async () => {
+    try {
+      const { data } = await axios.post('/api/note-studio/notebooks', { title: notebookTitle || '새 노트북' }, { withCredentials: true });
+      setNotebookDialogOpen(false);
+      setNotebookTitle('');
+      await loadList();
+      setActiveNotebookId(data.notebook.id);
+      setMessage({ severity: 'success', text: `NOTE MANAGER에 “${data.notebook.title}” 노트북을 만들었습니다.` });
+    } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '새 노트북을 만들지 못했습니다.') }); }
   };
 
   const trashSelected = async () => {
@@ -322,8 +353,14 @@ const NoteStudio = () => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    if (!activeNotebookId) {
+      setNotebookDialogOpen(true);
+      setMessage({ severity: 'info', text: '파일을 가져올 노트북을 먼저 생성해 주세요.' });
+      return;
+    }
     const body = new FormData();
     body.append('file', file);
+    body.append('notebookId', activeNotebookId);
     try {
       const { data } = await axios.post('/api/note-studio/import', body, { withCredentials: true });
       setTrashMode(false);
@@ -349,7 +386,11 @@ const NoteStudio = () => {
   };
 
   const saveLabel = useMemo(() => ({ idle: '저장됨', saved: '저장됨', dirty: '저장 대기', saving: '저장 중…', conflict: '충돌 — 재확인 필요', error: '저장 실패' }[savingState]), [savingState]);
-  const treeNotes = useMemo(() => flattenNoteTree(notes), [notes]);
+  const notesByNotebook = useMemo(() => notebooks.map((notebook) => ({
+    notebook,
+    notes: flattenNoteTree(notes.filter((note) => note.notebookId === notebook.id))
+  })), [notebooks, notes]);
+  const legacyTreeNotes = useMemo(() => flattenNoteTree(notes.filter((note) => !note.notebookId)), [notes]);
   const visibleCommands = useMemo(() => filterCommands(BLOCK_COMMANDS, commandQuery), [commandQuery]);
 
   const runBlockCommand = (commandId) => {
@@ -387,8 +428,8 @@ const NoteStudio = () => {
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateColumns: { xs: '1fr', md: '270px minmax(0, 1fr)' }, bgcolor: 'background.default' }}>
       <Paper square elevation={0} sx={{ display: { xs: selected ? 'none' : 'flex', md: 'flex' }, minHeight: 0, flexDirection: 'column', borderRight: { md: '1px solid' }, borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ p: 1.5 }}>
-          <Box><Typography sx={{ fontWeight: 950, letterSpacing: '-0.03em' }}>노트 스튜디오</Typography><Typography variant="caption" color="text.secondary">내 NAS의 개인 작업대</Typography></Box>
-          <Tooltip title="새 노트"><IconButton color="primary" onClick={(event) => { setPendingParentId(null); setCreateAnchor(event.currentTarget); }}><AddIcon /></IconButton></Tooltip>
+          <Box><Typography sx={{ fontWeight: 950, letterSpacing: '-0.03em' }}>노트 스튜디오</Typography><Typography variant="caption" color="text.secondary">NOTE MANAGER의 개인 작업대</Typography></Box>
+          <Stack direction="row"><Tooltip title="새 노트북"><IconButton onClick={() => setNotebookDialogOpen(true)}><CreateNewFolderOutlinedIcon /></IconButton></Tooltip><Tooltip title="새 페이지"><IconButton color="primary" onClick={(event) => { setPendingParentId(null); if (!activeNotebookId) setNotebookDialogOpen(true); else setCreateAnchor(event.currentTarget); }}><AddIcon /></IconButton></Tooltip></Stack>
         </Stack>
         <Box sx={{ px: 1.25, pb: 1 }}><TextField value={query} onChange={(event) => setQuery(event.target.value)} size="small" fullWidth placeholder="제목과 내용 검색" InputProps={{ startAdornment: <SearchIcon fontSize="small" sx={{ mr: 0.75, color: 'text.secondary' }} /> }} /></Box>
         <Stack direction="row" spacing={0.75} sx={{ px: 1.25, pb: 1 }}>
@@ -397,18 +438,18 @@ const NoteStudio = () => {
         </Stack>
         <Divider />
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트를 만들어 시작하세요.'}</Typography></Box> : <List dense disablePadding>{treeNotes.map((note) => {
+          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 && notebooks.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트북을 만들어 시작하세요.'}</Typography></Box> : <List dense disablePadding>{notesByNotebook.map(({ notebook, notes: notebookNotes }) => <Box key={notebook.id}><ListItemButton selected={activeNotebookId === notebook.id} onClick={() => setActiveNotebookId(notebook.id)} sx={{ py: 0.85, bgcolor: alpha(theme.palette.text.primary, 0.025) }}><ListItemIcon sx={{ minWidth: 34 }}><MenuBookOutlinedIcon fontSize="small" /></ListItemIcon><ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : notebook.directoryName} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} /></ListItemButton>{notebookNotes.map((note) => {
             const type = TYPE_OPTIONS.find((option) => option.type === note.type) || TYPE_OPTIONS[0];
             const Icon = type.Icon;
-            return <ListItemButton key={note.id} selected={selected?.id === note.id} onClick={() => openNote(note)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, note, anchorEl: event.currentTarget }); }} sx={{ py: 1, pl: 1 + Math.min(note.depth, 5) * 2, borderBottom: '1px solid', borderColor: alpha(theme.palette.divider, 0.7) }}>{note.depth > 0 && <KeyboardArrowRightIcon fontSize="small" color="disabled" sx={{ mr: 0.25 }} />}<ListItemIcon sx={{ minWidth: 34 }}><Icon fontSize="small" /></ListItemIcon><ListItemText primary={note.title} secondary={`${type.label} · ${formatTime(note.updatedAt)}`} primaryTypographyProps={{ noWrap: true, fontWeight: 750 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11 }} /></ListItemButton>;
-          })}</List>}
+            return <ListItemButton key={note.id} selected={selected?.id === note.id} onClick={() => { setActiveNotebookId(notebook.id); openNote(note); }} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, note, anchorEl: event.currentTarget }); }} sx={{ py: 1, pl: 3 + Math.min(note.depth, 5) * 2, borderBottom: '1px solid', borderColor: alpha(theme.palette.divider, 0.7) }}>{note.depth > 0 && <KeyboardArrowRightIcon fontSize="small" color="disabled" sx={{ mr: 0.25 }} />}<ListItemIcon sx={{ minWidth: 34 }}><Icon fontSize="small" /></ListItemIcon><ListItemText primary={note.title} secondary={`${type.label} · ${formatTime(note.updatedAt)}`} primaryTypographyProps={{ noWrap: true, fontWeight: 750 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11 }} /></ListItemButton>;
+          })}</Box>)}{legacyTreeNotes.length > 0 && <Box><Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>기존 노트</Typography>{legacyTreeNotes.map((note) => { const type = TYPE_OPTIONS.find((option) => option.type === note.type) || TYPE_OPTIONS[0]; const Icon = type.Icon; return <ListItemButton key={note.id} selected={selected?.id === note.id} onClick={() => openNote(note)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, note, anchorEl: event.currentTarget }); }} sx={{ pl: 3 + Math.min(note.depth, 5) * 2 }}><ListItemIcon sx={{ minWidth: 34 }}><Icon fontSize="small" /></ListItemIcon><ListItemText primary={note.title} secondary={type.label} /></ListItemButton>; })}</Box>}</List>}
         </Box>
         <Box sx={{ p: 1.25, borderTop: '1px solid', borderColor: 'divider' }}><Button size="small" fullWidth startIcon={<UploadFileIcon />} onClick={() => importInputRef.current?.click()}>TXT·Markdown·코드 가져오기</Button><input ref={importInputRef} hidden type="file" accept=".txt,.md,.markdown,.js,.jsx,.ts,.tsx,.py,.json,.html,.css,.sql,.sh,.yaml,.yml" onChange={importFile} /><Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>개인 공간 저장 · 변경 충돌 보호 · 최대 100개 버전</Typography></Box>
       </Paper>
 
       <Box sx={{ minWidth: 0, minHeight: 0, display: { xs: selected ? 'flex' : 'none', md: 'flex' }, flexDirection: 'column' }}>
         {message && <Alert severity={message.severity} onClose={() => setMessage(null)} sx={{ borderRadius: 0 }}>{message.text}</Alert>}
-        {!selected ? <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}><Box sx={{ textAlign: 'center', maxWidth: 440 }}><NotesIcon sx={{ fontSize: 64, color: alpha(theme.palette.primary.main, 0.35) }} /><Typography variant="h6" sx={{ mt: 1, fontWeight: 900 }}>생각을 파일보다 가볍게 기록하세요</Typography><Typography color="text.secondary" sx={{ mt: 0.75 }}>블록 노트, Markdown, TXT, 코드 노트를 한곳에서 만들고 자동 저장합니다.</Typography><Button sx={{ mt: 2 }} variant="contained" startIcon={<AddIcon />} onClick={(event) => { setPendingParentId(null); setCreateAnchor(event.currentTarget); }}>새 노트</Button></Box></Box> : <>
+        {!selected ? <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}><Box sx={{ textAlign: 'center', maxWidth: 440 }}><NotesIcon sx={{ fontSize: 64, color: alpha(theme.palette.text.primary, 0.22) }} /><Typography variant="h6" sx={{ mt: 1, fontWeight: 900 }}>노트북 안에 페이지를 구성하세요</Typography><Typography color="text.secondary" sx={{ mt: 0.75 }}>블록, Markdown, TXT, 코드를 같은 트리에서 관리하며 실제 NOTE MANAGER 경로에 연결합니다.</Typography><Button sx={{ mt: 2 }} variant="contained" startIcon={notebooks.length ? <AddIcon /> : <CreateNewFolderOutlinedIcon />} onClick={(event) => { setPendingParentId(null); if (!activeNotebookId) setNotebookDialogOpen(true); else setCreateAnchor(event.currentTarget); }}>{notebooks.length ? '새 페이지' : '첫 노트북 만들기'}</Button></Box></Box> : <>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.25, py: 0.85, minHeight: 55, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
             <Button sx={{ display: { md: 'none' }, minWidth: 0 }} onClick={() => setSelected(null)}>BACK</Button>
             <TextField variant="standard" value={selected.title} onChange={(event) => updateMeta({ title: event.target.value })} disabled={!!selected.deletedAt} fullWidth inputProps={{ 'aria-label': '노트 제목' }} InputProps={{ disableUnderline: true, sx: { fontWeight: 900, fontSize: 18 } }} />
@@ -432,7 +473,7 @@ const NoteStudio = () => {
       <Menu open={!!contextMenu} onClose={() => setContextMenu(null)} anchorReference="anchorPosition" anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}>
         <MenuItem onClick={() => { const target = contextMenu.note; setContextMenu(null); openNote(target); }}>열기</MenuItem>
         {!trashMode && <MenuItem onClick={() => { const target = contextMenu; setContextMenu(null); setPendingParentId(target.note.id); setCreateAnchor(target.anchorEl); }}>하위 노트 만들기</MenuItem>}
-        {!trashMode && contextMenu?.note?.parentId && <MenuItem onClick={() => moveNoteToRoot(contextMenu.note)}>최상위로 이동</MenuItem>}
+        {!trashMode && contextMenu?.note?.parentId && !contextMenu?.note?.storageRelativePath && <MenuItem onClick={() => moveNoteToRoot(contextMenu.note)}>최상위로 이동</MenuItem>}
       </Menu>
       <Dialog open={commandOpen} onClose={() => setCommandOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 900 }}>블록 명령</DialogTitle>
@@ -447,6 +488,11 @@ const NoteStudio = () => {
         <DialogTitle sx={{ fontWeight: 900 }}>버전 기록</DialogTitle>
         <DialogContent dividers>{versions.length === 0 ? <Typography color="text.secondary">아직 이전 버전이 없습니다. 첫 저장 이후부터 기록됩니다.</Typography> : <List disablePadding>{versions.map((version) => <ListItemButton key={version.versionId} onClick={() => restoreVersion(version)}><ListItemIcon><HistoryIcon /></ListItemIcon><ListItemText primary={`버전 ${version.revision} · ${version.title}`} secondary={`${formatTime(version.createdAt)} · ${version.reason === 'manual' ? '직접 저장' : version.reason === 'version-restore' ? '버전 복원' : '자동 저장'}`} /><RestoreIcon fontSize="small" /></ListItemButton>)}</List>}</DialogContent>
         <DialogActions><Button onClick={() => setVersionsOpen(false)}>닫기</Button></DialogActions>
+      </Dialog>
+      <Dialog open={notebookDialogOpen} onClose={() => setNotebookDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>새 노트북</DialogTitle>
+        <DialogContent><TextField autoFocus fullWidth label="노트북 이름" value={notebookTitle} onChange={(event) => setNotebookTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createNotebook(); }} helperText="계정 루트의 NOTE MANAGER 아래에 실제 폴더로 생성됩니다." sx={{ mt: 1 }} /></DialogContent>
+        <DialogActions><Button onClick={() => setNotebookDialogOpen(false)}>취소</Button><Button variant="contained" onClick={createNotebook}>만들기</Button></DialogActions>
       </Dialog>
       <NasItemPickerDialog open={attachmentPickerOpen} onClose={() => setAttachmentPickerOpen(false)} onSelect={addAttachment} title="노트에 NAS 항목 첨부" confirmLabel="첨부" allowCurrentFolder />
     </Box>

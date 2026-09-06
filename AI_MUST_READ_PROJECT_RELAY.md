@@ -1189,3 +1189,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 감사 결과: 직전 9개 요구는 `AI_MUST_READ_PROJECT_RELAY.md`와 commits `12e28c3`부터 `f27bd79`까지 모두 존재했지만, 프로그램별 상세 기준인 `docs/programs/NAS_NOTE_STUDIO_SPEC.xlsx`에는 아직 반영되지 않은 기록 격차가 있었다. 따라서 당시 상태를 `모두 기록 완료`라고 표현하지 않고 전용 원장을 즉시 동기화했다.
 - 전용 원장 반영: Decisions, User_Flows, Note_Types, Block_Catalog, Slash_Commands, Context_Menus, Python_Notebook, Collaboration, Data_Model, Storage_Interop, Security, API_Contracts, Error_Recovery, Cross_App_Relations, Performance, Test_Matrix, Implementation_Status, Change_Log에 노트북 물리 계층, 혼합 Python 페이지, NAS 원격 실행과 동적 자원 gate, PY/MD 로컬 투영, Markdown 표현 경계, 댓글/소스 주석, Office 문서 생성·호출 경로 기반 첫 저장·stable reference를 연결했다.
 - 검증: artifact-tool로 수정본을 다시 열어 formula error 0, `??`·replacement character·의심 mojibake 0건을 확인했다. 변경된 18개 시트의 관련 범위를 모두 PNG로 렌더해 기존 형식과 줄바꿈·한글 가독성을 확인했고, 출력본과 repo canonical workbook의 SHA-256이 일치한다. 신규 항목은 `설계 확정·구현 전`으로 표시해 구현 완료와 혼동하지 않는다.
+
+## 2026-09-06 노트 스튜디오 M1-F 노트북 물리 계층 1차 구현
+
+- 사용자 요청: 지금까지 합의한 대규모 노트 스튜디오 변경을 실제로 순차 구현한다. 보안과 논리 오류를 최우선으로 하고, 1차 구현 뒤 아직 부족한 점과 새로 드러난 해결 과제를 구현 완료 항목과 분리해 기록한다.
+- 이번 구현 경계: 기존 `.note_studio`의 노트·버전 데이터를 자동 이동하거나 변환하지 않았다. 각 계정의 `getQuotaBasePath(user)` 바로 아래에 보이는 `NOTE MANAGER`를 자동 준비하고, 그 안에 사용자가 만든 노트북과 페이지·하위 페이지를 실제 디렉터리로 생성한다. 내부 내용·revision·버전과 노트북 registry는 계속 `.note_studio`에 두어 일반 파일 동기화가 내부 JSON을 직접 수정하지 않게 했다.
+- ID와 경로 원칙: 노트북과 페이지는 UUID가 기준이고 표시 제목과 실제 폴더 이름을 분리했다. `/`, `:`, 제어문자, Windows 예약 이름과 끝의 점·공백을 정리하며 같은 이름은 `이름 (2)`처럼 새 폴더로 만든다. 자동 저장 중 제목을 글자마다 바꾸더라도 실제 경로는 흔들리지 않는다. 노트북 간 parent 결합과 실제 폴더를 옮기지 않은 논리 이동은 409로 차단한다.
+- 계정·경로 보안: 관리자/마스터라도 노트 저장은 NAS root가 아닌 해당 계정 personal quota root만 사용한다. `NOTE MANAGER` 또는 그 상위 경로의 symlink와 realpath 경계 이탈을 거부한다. 다른 계정의 registry는 별도 root에 저장되어 서로 조회되지 않는다.
+- UI: 왼쪽 목록을 노트북 우선 트리로 바꾸고 노트북별 페이지와 하위 페이지를 표시한다. 새 노트북은 실제 폴더 생성임을 안내하며, 노트북이 없으면 새 페이지나 파일 가져오기를 바로 만들지 않고 먼저 노트북 생성을 요구한다. 기존 노트는 `기존 노트` 그룹에서 계속 열 수 있다. 노트북과 형식 아이콘은 별도 색을 입히지 않은 단색 시스템 아이콘을 사용한다.
+- 자동 검증: note service 15/15, backend 전체 37 pass·2개 환경 조건부 skip, frontend 기능 34 pass, production build가 통과했다. 조건부 skip은 문서 변환용 LibreOffice 통합 2건이며, Windows 권한이 필요한 기존 symlink 보조 검사는 해당 테스트 내부에서 별도 skip 문구를 남겼다. 전체 frontend 중 `App.test.js` 하나는 기존 로컬 `node_modules`의 `react-router-dom` 테스트 해석 실패로 실행되지 않았지만 production build와 노트 관련 테스트는 통과했다.
+- 1차 gap 감사: 아직 운영 NAS 배포와 로그인 실화면 검증 전이다. 외부에서 노트북 경로가 사라지면 500 대신 `NOTE_PATH_MISSING` 상태·409로 복구 안내하고, 활성 하위 페이지가 있는 부모 삭제는 `NOTE_HAS_CHILDREN`으로 차단한다. 명시적인 page/notebook 이름 변경·이동 transaction, 일반 파일이 들어 있는 페이지의 휴지통·영구 삭제 정책, `.msp-page.json` 기반 PC 투영, 파일 관리자와 stable directory ID 통합, note 쓰기 quota admission, 기존 노트의 선택적 이관, 다중 프로세스 잠금은 다음 M1-F 묶음이다. 현재는 사용자 파일을 암묵 삭제하지 않기 위해 페이지 휴지통/영구 삭제가 실제 폴더를 제거하지 않는다.
+- 다음 순서: 이 commit을 GitHub와 NAS live branch에 clean fast-forward하고 API·실제 계정 root·서비스·HTTP를 검증한 뒤 M1-F 2차 transaction을 시작한다. M1-G Office reference, M1.5 댓글, M2 Python 실행은 이 저장 경계가 안정화되기 전 활성화하지 않는다.

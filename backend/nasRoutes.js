@@ -1134,6 +1134,19 @@ const sendNoteStudioError = (res, error) => res.status(error.status || 500).json
   latest: error.latest || undefined
 });
 
+router.get('/note-studio/notebooks', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, notebooks: getNoteStudioStore(req.user).listNotebooks() });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/notebooks', verifyToken, express.json({ limit: '32kb' }), (req, res) => {
+  try {
+    const notebook = getNoteStudioStore(req.user).createNotebook(req.body || {});
+    return res.status(201).json({ success: true, notebook });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
 router.get('/note-studio/notes', verifyToken, (req, res) => {
   try {
     const notes = getNoteStudioStore(req.user).list({
@@ -1169,6 +1182,7 @@ router.post('/note-studio/import', verifyToken, noteStudioImportUpload.single('f
       title: path.basename(req.file.originalname, extension),
       type,
       language: languageByExtension[extension] || '',
+      notebookId: req.body?.notebookId || null,
       content: req.file.buffer.toString('utf8')
     });
     return res.status(201).json({ success: true, note });

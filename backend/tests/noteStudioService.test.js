@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { createNoteStudioStore, MAX_VERSIONS_PER_NOTE } = require('../noteStudioService');
+const { createNoteStudioStore, MAX_VERSIONS_PER_NOTE, NOTE_MANAGER_ROOT } = require('../noteStudioService');
 
 const withStore = (run) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-note-studio-'));
@@ -98,4 +98,77 @@ test('rejects oversized notes and bounds retained history', () => withStore((sto
     note = store.update(note.id, { expectedRevision: note.revision, content: String(i) });
   }
   assert.equal(store.versions(note.id).length, MAX_VERSIONS_PER_NOTE);
+}));
+
+test('creates a visible NOTE MANAGER root without migrating legacy notes', () => withStore((store, root) => {
+  const legacy = store.create({ title: '기존 노트', type: 'text' });
+  assert.equal(legacy.notebookId, null);
+  assert.equal(legacy.storageRelativePath, null);
+  assert.ok(fs.statSync(path.join(root, NOTE_MANAGER_ROOT)).isDirectory());
+  assert.deepEqual(store.listNotebooks(), []);
+}));
+
+test('creates notebook, page and child page as contained physical directories', () => withStore((store, root) => {
+  const notebook = store.createNotebook({ title: '개발 / 노트북' });
+  const page = store.create({ title: 'API: 설계', type: 'block', notebookId: notebook.id });
+  const child = store.create({ title: '하위 * 페이지', type: 'code', parentId: page.id, language: 'python' });
+  assert.equal(page.notebookId, notebook.id);
+  assert.equal(child.notebookId, notebook.id);
+  assert.equal(child.parentId, page.id);
+  assert.ok(fs.statSync(path.join(root, ...page.storageRelativePath.split('/'))).isDirectory());
+  assert.ok(fs.statSync(path.join(root, ...child.storageRelativePath.split('/'))).isDirectory());
+  assert.ok(child.storageRelativePath.startsWith(`${page.storageRelativePath}/`));
+  assert.ok(!page.directoryName.includes(':'));
+}));
+
+test('resolves duplicate notebook and page folder names without overwriting', () => withStore((store, root) => {
+  const first = store.createNotebook({ title: '업무' });
+  const second = store.createNotebook({ title: '업무' });
+  assert.equal(first.directoryName, '업무');
+  assert.equal(second.directoryName, '업무 (2)');
+  const a = store.create({ title: '회의', notebookId: first.id });
+  const b = store.create({ title: '회의', notebookId: first.id });
+  assert.equal(a.directoryName, '회의');
+  assert.equal(b.directoryName, '회의 (2)');
+  assert.ok(fs.existsSync(path.join(root, NOTE_MANAGER_ROOT, first.directoryName, b.directoryName)));
+}));
+
+test('enforces notebook boundaries and blocks unsafe logical-only page moves', () => withStore((store) => {
+  const left = store.createNotebook({ title: '왼쪽' });
+  const right = store.createNotebook({ title: '오른쪽' });
+  const leftPage = store.create({ title: 'A', notebookId: left.id });
+  const rightPage = store.create({ title: 'B', notebookId: right.id });
+  assert.throws(() => store.create({ title: '침범', notebookId: right.id, parentId: leftPage.id }), (error) => error.code === 'NOTEBOOK_BOUNDARY');
+  assert.throws(() => store.update(leftPage.id, { expectedRevision: 1, parentId: rightPage.id }), (error) => error.code === 'PHYSICAL_PAGE_MOVE_REQUIRED');
+}));
+
+test('keeps notebook registries isolated by account root', () => {
+  const rootA = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-notebook-a-'));
+  const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-notebook-b-'));
+  try {
+    const a = createNoteStudioStore({ personalRootPath: rootA });
+    const b = createNoteStudioStore({ personalRootPath: rootB });
+    a.createNotebook({ title: 'A 전용' });
+    assert.equal(a.listNotebooks().length, 1);
+    assert.equal(b.listNotebooks().length, 0);
+  } finally {
+    fs.rmSync(rootA, { recursive: true, force: true });
+    fs.rmSync(rootB, { recursive: true, force: true });
+  }
+});
+
+test('reports an externally missing notebook path and returns a stable conflict', () => withStore((store, root) => {
+  const notebook = store.createNotebook({ title: '이동될 노트북' });
+  fs.rmdirSync(path.join(root, NOTE_MANAGER_ROOT, notebook.directoryName));
+  const listed = store.listNotebooks()[0];
+  assert.equal(listed.available, false);
+  assert.equal(listed.pathState, 'NOTE_PATH_MISSING');
+  assert.throws(() => store.create({ title: '페이지', notebookId: notebook.id }), (error) => error.status === 409 && error.code === 'NOTE_PATH_MISSING');
+}));
+
+test('blocks deleting a managed parent while an active child remains', () => withStore((store) => {
+  const notebook = store.createNotebook({ title: '보호' });
+  const parent = store.create({ title: '부모', notebookId: notebook.id });
+  store.create({ title: '자식', parentId: parent.id });
+  assert.throws(() => store.moveToTrash(parent.id, parent.revision), (error) => error.status === 409 && error.code === 'NOTE_HAS_CHILDREN');
 }));
