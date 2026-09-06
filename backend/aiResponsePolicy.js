@@ -1,4 +1,4 @@
-const FALSE_APPROVAL_CLAIM = /(?:승인이 필요한 작업이\s*\d+개|승인\s*카드에서\s*(?:승인|실행)|승인\s*대기\s*중)/i;
+const FALSE_APPROVAL_CLAIM = /(?:승인이 필요한 작업이\s*\d+개|승인\s*카드.{0,12}(?:승인|실행)|승인\s*대기\s*중)/i;
 const RECALL_REQUEST = /(?:과거|예전|이전|전에|맨\s*처음|기억|대화|말했던|말했|내\s*키)/i;
 const NUMERIC_ONLY_REQUEST = /(?:숫자(?:로)?만|번호(?:로)?만)/i;
 const PATH_ONLY_REQUEST = /(?:경로만\s*(?:답|말|알려)|(?:답|말).*(?:경로만))/i;
@@ -33,10 +33,19 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}) => {
   return { answer, protocolWarning: null };
 };
 
+const finalizeContinuationAnswer = (interruptions = [], agentResult = {}) => {
+  const decisions = Array.isArray(interruptions) ? interruptions.map((item) => item?.decision).filter(Boolean) : [];
+  if (decisions.length > 0 && decisions.every((decision) => decision === 'rejected')) {
+    return { answer: '요청한 작업을 거절해 실행하지 않았습니다.', protocolWarning: null };
+  }
+  return finalizeAgentAnswer('', agentResult);
+};
+
 const needsConversationSearch = (userMessage) => RECALL_REQUEST.test(String(userMessage || ''));
 
 module.exports = {
   finalizeAgentAnswer,
+  finalizeContinuationAnswer,
   needsConversationSearch,
   _test: { extractUniqueNumber, extractUniquePath, FALSE_APPROVAL_CLAIM },
 };

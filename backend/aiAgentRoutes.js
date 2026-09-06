@@ -50,7 +50,7 @@ const {
   finishProgress,
   failProgress,
 } = require('./aiProgressStore');
-const { finalizeAgentAnswer, needsConversationSearch } = require('./aiResponsePolicy');
+const { finalizeAgentAnswer, finalizeContinuationAnswer, needsConversationSearch } = require('./aiResponsePolicy');
 
 const router = express.Router();
 
@@ -420,7 +420,7 @@ const continueStoredRun = async (user, run, req, { forceApproval = false } = {})
       return { status: 'waiting_approval', answer, messages, toolEvents: agentResult.events };
     }
 
-    const answer = agentResult.text;
+    const answer = finalizeContinuationAnswer(run.interruptions || [], agentResult).answer;
     (run.interruptions || []).forEach((item) => updateAction(user, item.actionId, { continuationStatus: null }));
     updateAgentRun(user, run.runId, {
       status: 'completed',

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { finalizeAgentAnswer, needsConversationSearch } = require('../aiResponsePolicy');
+const { finalizeAgentAnswer, finalizeContinuationAnswer, needsConversationSearch } = require('../aiResponsePolicy');
 
 test('실제 action 없는 승인 카드 문구를 완료 응답으로 노출하지 않는다', () => {
   const result = finalizeAgentAnswer('파일 만들어줘', {
@@ -13,6 +13,22 @@ test('실제 action 없는 승인 카드 문구를 완료 응답으로 노출하
 
 test('실제로 pause된 요청은 route의 승인 응답 생성을 방해하지 않는다', () => {
   assert.deepEqual(finalizeAgentAnswer('파일 만들어줘', { paused: true, text: '' }), { answer: '', protocolWarning: null });
+});
+
+test('모든 승인 작업을 거절하면 모델 문구와 무관하게 미실행을 확정한다', () => {
+  const result = finalizeContinuationAnswer([{ decision: 'rejected' }], {
+    paused: false,
+    text: '아직 승인 대기 중입니다. 승인 카드에서 승인해 주세요.',
+  });
+  assert.equal(result.answer, '요청한 작업을 거절해 실행하지 않았습니다.');
+});
+
+test('승인 후 후속 응답도 실제 action 없는 승인 문구를 차단한다', () => {
+  const result = finalizeContinuationAnswer([{ decision: 'approved' }], {
+    paused: false,
+    text: '승인 카드에서 다시 승인해 주세요.',
+  });
+  assert.equal(result.protocolWarning, 'AI_FALSE_APPROVAL_CLAIM');
 });
 
 test('숫자만 요청은 답에 숫자가 하나일 때 군더더기를 제거한다', () => {
