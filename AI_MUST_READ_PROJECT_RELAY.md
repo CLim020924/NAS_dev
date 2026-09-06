@@ -1320,3 +1320,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: NAS backend 67/67, Note Studio 명령 5/5, production build와 PDF.js API/Worker 4.8.69가 통과했다. 최종 운영 bundle은 `main.003d533b.js`이며 `/var/www/html`, 내부 3030, 공개 HTTPS에서 hash 이름이 모두 일치한다. 내부·공개 HTTP 200, PM2 `msp-backend` online/save, 무인증 `/api/ai/history` 401을 확인했다. 로그인된 Chrome을 새로고침해 플랫폼과 Note Studio의 새 노트북/새 페이지/가져오기 화면을 실제 확인했으며 시험 사용자 데이터는 만들지 않았다.
 - 기록: commits `0b0b260`, `1b48201`, `d3e7072`, `84c5ca7`, `acd4a65`, `473931a`, `66d2723`에 구현을 분리했다. `docs/NAS_PROJECT_LOG.xlsx`, `docs/programs/NAS_NOTE_STUDIO_SPEC.xlsx`, `docs/AUDITS/2026-09-06_FINAL_VALIDATION.md`를 현재 완료 경계로 갱신하고 formula error 0, 문자 깨짐 0, 변경 시트 렌더를 확인했다.
 - 아직 완료가 아닌 것: 시스템 디스크 1TiB 보조 풀은 현재 `/` ext4에 project quota가 없고 앱이 단일 `NAS_ROOT`를 가정하므로 유지보수 창에서 quota·volume registry·placement·backup·reboot recovery를 함께 구축해야 한다. Windows 신규 PC/업데이트/재부팅/다중 계정 장시간 E2E, Explorer OS 상태, 공인 코드 서명은 실기기·인증서가 필요하다. Note Studio의 댓글·멘션·블록 drag·breadcrumb·rich media/database·Yjs offline/collaboration과 지속 kernel/ipynb, AI streaming·semantic citation·관리자 설정·문서 변환 job 도구는 후속 제품 단계다.
+
+## 2026-09-07 AI 패널 최상위 레이어·실제 처리 단계 표시
+
+- 사용자 요청: AI 버튼으로 연 사이드바가 플랫폼 헤더나 앱 창에 가려지는지 확인하고, 기존 `요청을 확인하고 있습니다…` 대신 Codex처럼 지금 무엇을 확인·실행·검증하는지 보여준다.
+- 확인된 원인: 운영 Chrome 화면에서 AI 패널 상단 약 48px가 TopBar 아래에 가려져 제목·활성 상태·닫기 버튼이 보이지 않았다. 코드상 MUI Drawer 기본 z-index는 1200이고 TopBar는 drawer+1인 1201이었다. 요청 상태는 실제 서버 단계와 무관한 임시 assistant 말풍선이었고, 429 같은 실패 뒤에도 해당 문구가 남았다.
+- 레이어 수정: AI Drawer와 paper에 전용 z-index `2147483100`을 적용해 TopBar, 일반 앱 창, immersive 창보다 위에 표시한다. 배포 후 운영 Chrome에서 패널 제목·모델·활성 상태·설정·닫기 버튼 전체가 최상단에 보이는 것을 화면으로 확인했다.
+- 진행 상태: 브라우저가 UUID requestId를 만들고 서버는 로그인 userUid와 결합해 10분 메모리 상태로 관리한다. `요청 확인 → 문맥 준비 → AI 판단 → 도구 실행 → 결과 재검토 → 저장 → 승인 대기/완료/실패`를 모델 요청과 도구 시작·완료 callback에서만 갱신한다. UI는 인증된 `/api/ai/progress/:requestId`를 350ms 간격으로 읽어 상단 고정 카드에 실제 단계, 설명, 최근 완료 단계와 진행률을 표시한다. 경로·본문·도구 인자는 원장에 넣지 않으며 다른 계정은 같은 requestId로 조회할 수 없다.
+- 실패 복구: 고정 `요청을 확인하고 있습니다…` 말풍선을 제거했다. 실패 시 사용자 요청은 서버 대화에 저장되지 않고 진행 카드는 실제 오류를 보여준 뒤 사라진다. 토큰 한도 도달 상태에서 `진행 상태 표시 테스트`를 전송해 `요청 처리를 마치지 못했습니다 · 100% · 오늘 설정한 AI 토큰 한도 도달` 카드가 표시되는 것을 확인했고, OpenAI 호출과 비용은 0회였다. 화면은 reload해 시험 문장을 제거했다.
+- 검증·배포: local 신규 회귀 7/7, NAS 전체 backend 70/70, Note 명령 5/5, frontend production build와 PDF.js API/Worker 4.8.69가 통과했다. commits `5c654e6`, `1931908`을 GitHub와 NAS checkout에 반영했다. live bundle은 `main.b133ff20.js`이고 디스크·내부 3030·공개 HTTPS가 일치한다. 공개 HTTP 200, PM2 `msp-backend` online/save, 무인증 progress API 401이다.
+- 남은 검증 경계: 현재 계정이 일일 토큰 한도에 도달해 정상 OpenAI 요청의 여러 실제 단계는 mock callback 순서로 검증했다. 한도 초기화 후 짧은 읽기 요청 1회로 모델→도구→모델 단계의 운영 화면 전환을 추가 확인한다. 시간 기반 가짜 진행률로 대체하지 않는다.
