@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const DATA_ROOT = path.join(__dirname, 'data', 'ai');
+const DATA_ROOT = path.resolve(process.env.AI_AGENT_DATA_ROOT || path.join(__dirname, 'data', 'ai'));
 
 const ensureDir = (dirPath) => {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
