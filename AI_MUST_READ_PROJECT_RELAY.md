@@ -1020,3 +1020,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 프로젝트 메모리: `WIN-MULTI-ACCOUNT-ONDEMAND-SHARE` 상태와 `WIN-ACCOUNT-SHARE-BOUNDARY`에 personal-drive 전용, exact deviceId, 선택 공유 root realpath 규칙을 보강했다. formula error 0과 관련 범위 렌더를 확인했다.
 - 배포 버전 보정: 첫 1.11.0과 경계 보완판이 같은 semantic version이면 이미 설치한 PC의 updater가 새 binary를 구분하지 못하므로 공개 버전을 1.11.1로 올렸다. Agent 상수, 서버 metadata, npm package/lock, Setup Assembly/File/ProductVersion을 함께 맞췄다. 1.11.1 Agent SHA-256은 `363c42f92d23c39ea3674b53cbdd07d57da86133b8a716cf82c6cb09e7a164f8`, Setup은 `70120cc2ea21e2785b366040d1e5c4be95a8cf74f49ccada1fb8627f954ddcb1`이다.
 - 운영 완료: 경계 보완 `3bc145a`와 1.11.1 release `c6347ce`를 GitHub와 NAS live branch에 clean fast-forward했다. NAS Linux에서 중간 symlink 공유 범위 이탈 검사를 포함한 Agent self-test와 backend 전체 14개 테스트 파일이 통과했고 문서 변환 통합 2건도 성공했다. release 재배포 뒤 핵심 공유·보안 테스트도 다시 통과했다. PM2 restart/save 뒤 `msp-backend` online, 필수 서비스 active, 내부·공개 HTTP 200이며 1.11.1 상수와 위 두 배포 파일 SHA-256이 NAS·로컬에서 일치한다.
+
+## 2026-09-06 NAS 디스크·계정 루트·20GiB 전환 사전 진단
+
+- 사용자 요청: 최근 가입 계정의 실제 저장 루트와 기존 저장 방식의 문제를 확인하고, 실제 사용량이 20GiB를 넘는 계정을 제외한 기존 계정 및 신규 계정 기본 할당량을 20GiB로 낮추는 작업을 검토한다. 관리자 용량 화면에는 전체 NAS 공간, 사용자 할당, 할당량 중 실제 사용, 사용 가능한 공간을 구분해 표시할 예정이다. 이번 단계에서는 가장 먼저 실제 디스크 사용량만 확인하며 용량 값이나 경로는 변경하지 않는다.
+- 물리 디스크: NAS 데이터는 `/dev/nvme0n1p1` ext4 한 개가 `/mnt/nas`에 마운트되어 있다. 총 1,967,845,998,592 bytes, 사용 87,256,711,168 bytes, 가용 1,780,552,622,080 bytes로 약 1.8TiB 중 82GiB 사용·1.7TiB 여유다. 별도 `/dev/nvme1n1p2` 약 1.8TiB는 Debian `/` 시스템 디스크이며 NAS 데이터 볼륨과 합쳐져 있지 않다.
+- 주요 실제 사용처: `/mnt/nas` 82GiB 중 사용자 계정 root 합계는 약 2.441GiB다. 나머지는 주로 계정 밖의 설치 자료, 과제 자료, backup, 임시 업로드와 Agent incoming 저장소다.
+- 계정 할당: 승인 계정 22개, 승인 대기 0개다. 할당량 합계는 1,401GiB지만 실제 계정 사용량은 약 2.441GiB이며 20GiB를 초과해 사용 중인 계정은 0개다. 따라서 현재 조건을 그대로 적용하면 22개 모두 20GiB로 낮출 수 있고 총 할당은 440GiB가 된다. 아직 실제 quota 변경은 하지 않았다.
+- 최근 계정 루트: 최근 승인 계정들은 `members.json`의 `personalRootPath=/users/<loginId>`와 실제 `/mnt/nas/users/<loginId>`가 일치하며 폴더도 존재한다. `rootPath`가 빈 값이어도 현재 접근 코드가 같은 소문자 `users/<loginId>`를 fallback으로 사용하므로 최근 계정 자체의 저장 위치는 정상이다.
+- 기존 구조 문제: 오래된 계정에는 `/mnt/nas/<loginId>`, `/mnt/nas/USERS/<loginId>`, `/mnt/nas/users/<loginId>`가 혼재한다. 일부 계정은 현재 유효 root와 별개인 과거 폴더가 동시에 남아 있고, 현재 어떤 계정에도 할당되지 않은 `users`/`USERS` 하위 폴더도 확인됐다. 합계가 수백 MiB 수준이라 디스크 부족의 주원인은 아니지만, 자동 이동·삭제 전에 소유권과 데이터 최신성을 별도로 확인해야 한다.
+- 판단: 관리 화면에서 작게 보인 값은 물리 디스크 여유가 아니라 1,401GiB의 논리 할당과 5% 시스템 reserve, 비계정 사용량을 차감한 `availableForAllocation`일 가능성이 높다. 다음 구현에서는 물리 사용량과 논리 할당량을 한 막대로 혼합하지 않고 네 가지 수치를 명시적으로 구분해야 한다.
