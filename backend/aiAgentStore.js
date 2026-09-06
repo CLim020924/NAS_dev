@@ -41,6 +41,7 @@ const writeJson = (filePath, value) => {
 
 const nowIso = () => new Date().toISOString();
 const MAX_RUN_STATE_BYTES = 768 * 1024;
+const MAX_PENDING_TASK_BYTES = 64 * 1024;
 
 const createId = (prefix) => {
   if (typeof crypto.randomUUID === 'function') {
@@ -120,6 +121,42 @@ const getPreferences = (user) => {
 const setPreferences = (user, preferences = {}) => {
   const next = { ...getPreferences(user), ...preferences, updatedAt: nowIso() };
   writeJson(fileFor(user, 'preferences.json'), next);
+  return next;
+};
+
+const getPendingTask = (user) => {
+  const task = readJson(fileFor(user, 'pending-task.json'), null);
+  if (!task || typeof task !== 'object' || task.status !== 'collecting') return null;
+  const updatedAt = Date.parse(task.updatedAt || task.createdAt || '');
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > 30 * 60 * 1000) return null;
+  return task;
+};
+
+const setPendingTask = (user, task = {}) => {
+  const previous = getPendingTask(user);
+  const next = {
+    taskId: task.taskId || previous?.taskId || createId('aitask'),
+    status: 'collecting',
+    createdAt: task.createdAt || previous?.createdAt || nowIso(),
+    updatedAt: nowIso(),
+    requestedByUid: user.userUid || '',
+    turnCount: Math.max(1, Number(task.turnCount || previous?.turnCount || 0)),
+    ...task,
+  };
+  if (Buffer.byteLength(JSON.stringify(next), 'utf8') > MAX_PENDING_TASK_BYTES) {
+    const err = new Error('AI 미완성 작업 상태가 안전 저장 한도를 초과했습니다. 요청을 더 작은 단위로 나눠주세요.');
+    err.status = 413;
+    throw err;
+  }
+  writeJson(fileFor(user, 'pending-task.json'), next);
+  return next;
+};
+
+const clearPendingTask = (user, reason = 'cleared') => {
+  const current = readJson(fileFor(user, 'pending-task.json'), null);
+  if (!current) return null;
+  const next = { ...current, status: 'closed', closeReason: reason, updatedAt: nowIso() };
+  writeJson(fileFor(user, 'pending-task.json'), next);
   return next;
 };
 
@@ -247,6 +284,9 @@ module.exports = {
   recoverStaleRuns,
   getPreferences,
   setPreferences,
+  getPendingTask,
+  setPendingTask,
+  clearPendingTask,
   getUsage,
   recordUsage,
 };

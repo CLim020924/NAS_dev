@@ -33,7 +33,7 @@ const newRequestId = () => {
   });
 };
 
-const AiAgentPanel = ({ open, onClose }) => {
+const AiAgentPanel = ({ open, onClose, context = {} }) => {
   const [status, setStatus] = useState(null);
   const [messages, setMessages] = useState([]);
   const [actions, setActions] = useState([]);
@@ -154,7 +154,7 @@ const AiAgentPanel = ({ open, onClose }) => {
       ]);
       const res = await axios.post('/api/ai/chat', {
         message: text,
-        context: { currentPath: '/' },
+        context,
         requestId,
       }, { withCredentials: true });
       const nextMessages = res.data?.messages || [];
@@ -245,7 +245,7 @@ const AiAgentPanel = ({ open, onClose }) => {
           <Box sx={{ minWidth: 0, flex: 1 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 900 }}>AI 에이전트</Typography>
             <Typography variant="caption" color="text.secondary">
-              {status?.configured ? `${status.provider} · ${status.model}` : 'AI 설정 필요'}
+              {status?.configured ? `${status.provider} · ${status.model} · ${status.toolCount || 0}개 작업 도구` : 'AI 설정 필요'}
             </Typography>
           </Box>
           <Chip size="small" color={status?.enabled ? 'success' : 'default'} label={status?.enabled ? '활성' : '비활성'} />
@@ -291,7 +291,7 @@ const AiAgentPanel = ({ open, onClose }) => {
                 <option value="ask_each">모든 변경 작업마다 승인</option>
                 <option value="auto_safe">폴더·텍스트 작업 자동 승인</option>
                 <option value="auto_reversible">복사·이동·휴지통까지 자동 승인</option>
-                <option value="auto_all">채팅·친구·차단까지 자동 승인</option>
+                <option value="auto_all">외부 영향 작업까지 자동 승인 (중요 작업 제외)</option>
               </TextField>
               <TextField size="small" type="number" label="하루 토큰 상한" value={preferences.dailyTokenLimit || 50000} inputProps={{ min: 1000, max: 1000000, step: 1000 }} onChange={(e) => setPreferences((prev) => ({ ...prev, dailyTokenLimit: Number(e.target.value) }))} />
               <Typography variant="caption" color="text.secondary">
@@ -324,7 +324,7 @@ const AiAgentPanel = ({ open, onClose }) => {
                   <SmartToyIcon color="disabled" sx={{ fontSize: 38 }} />
                   <Typography variant="subtitle1" sx={{ mt: 1, fontWeight: 900 }}>무엇을 도와드릴까요?</Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                    파일 찾기·읽기·복사·정리, 사용자에게 전송, 채팅과 친구 관리까지 문장으로 요청하세요.
+                    파일·저장공간·복원·공유·채팅·친구·알림·노트·문서 변환·연동 PC·회의·서버 상태를 대화로 조회하고 처리할 수 있습니다.
                   </Typography>
                 </Box>
               )}
@@ -360,6 +360,8 @@ const AiAgentPanel = ({ open, onClose }) => {
                 <Paper key={action.actionId} variant="outlined" sx={{ p: 1.5, borderColor: action.status === 'recovery_required' ? 'warning.main' : 'primary.main' }}>
                   <Typography variant="caption" color="text.secondary">AI가 확인을 기다리는 작업</Typography>
                   <Typography variant="body2" sx={{ mt: 0.25, fontWeight: 900 }}>{action.title}</Typography>
+                  {action.description && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{action.description}</Typography>}
+                  {action.risk === 'critical' && <Alert severity="warning" sx={{ mt: 1 }}>이 작업은 자동 승인되지 않습니다. 위 대상과 영향을 확인한 뒤 실행하세요.</Alert>}
                   {action.targetPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>대상: {action.targetPath}</Typography>}
                   {action.sourcePath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>원본: {action.sourcePath}</Typography>}
                   {action.destinationPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>이동 위치: {action.destinationPath}</Typography>}
@@ -408,7 +410,7 @@ const AiAgentPanel = ({ open, onClose }) => {
               multiline
               minRows={1}
               maxRows={5}
-              placeholder="파일 찾기, 정리, 전송 등 원하는 작업을 말씀해 주세요"
+              placeholder="NAS에서 원하는 일을 평소 말하듯 요청하세요"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onFocus={() => { followLatestRef.current = true; }}

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { deriveAuthorizedMutationTools } = require('../aiAgentRuntime');
+const { deriveAuthorizedMutationTools, _test } = require('../aiAgentRuntime');
 
 const sameTools = (actual, expected, prompt) => assert.deepEqual([...actual].sort(), [...expected].sort(), prompt);
 
@@ -61,6 +61,53 @@ const executableCases = [
   ['민수 차단하고 영희에게 친구 요청 보내줘', ['set_user_blocked', 'send_friend_request']],
   ['노트를 수정하고 파이썬 노트를 실행해줘', ['update_note', 'run_python_note']],
   ['노트를 만들고 그 안에 DOCX 문서를 만들어줘', ['create_note', 'create_office_document']],
+  ['간증문을 한글 문서로 만들어줘', ['create_document']],
+  ['휴지통에서 삭제한 파일을 복원해줘', ['restore_trash_item']],
+  ['보고서 파일의 이전 버전을 복원해줘', ['restore_file_version']],
+  ['전체 드라이브 복구 지점을 만들어줘', ['create_drive_restore_point']],
+  ['전체 드라이브를 복구 지점으로 복원해줘', ['restore_drive_restore_point']],
+  ['이 파일을 즐겨찾기에 추가해줘', ['set_file_favorite']],
+  ['받은 친구 요청을 수락해줘', ['accept_friend_request']],
+  ['받은 친구 요청을 거절해줘', ['reject_friend_request']],
+  ['민수를 친구에서 제거해줘', ['remove_friend']],
+  ['민수 친구를 즐겨찾기에 추가해줘', ['set_friend_favorite']],
+  ['이 알림을 읽음 처리해줘', ['mark_notification_read']],
+  ['모든 알림을 읽음 처리해줘', ['mark_all_notifications_read']],
+  ['개발 노트북을 만들어줘', ['create_notebook']],
+  ['휴지통의 노트를 복원해줘', ['restore_note']],
+  ['노트의 이전 버전을 복원해줘', ['restore_note_version']],
+  ['이 파일을 노트에 첨부해줘', ['attach_note_item']],
+  ['노트 첨부를 제거해줘', ['remove_note_attachment']],
+  ['문서 변환 작업을 취소해줘', ['cancel_document_job']],
+  ['문서 변환 작업을 재시도해줘', ['retry_document_job']],
+  ['이 문서를 PDF로 변환해줘', ['create_document_job']],
+  ['이 PC 동기화를 일시 정지해줘', ['set_device_sync']],
+  ['이 PC 연결을 해제해줘', ['revoke_device']],
+  ['이 폴더의 공유 링크를 만들어줘', ['create_share_link']],
+  ['공유 링크를 일시 정지해줘', ['set_share_paused']],
+  ['공유 링크를 비활성화해줘', ['revoke_share_link']],
+  ['민수와 영희를 초대해서 그룹 채팅방을 만들어줘', ['create_group_chat']],
+  ['개발 채팅방에 민수를 초대해줘', ['invite_group_chat']],
+  ['그룹 채팅 초대를 수락해줘', ['respond_group_invite']],
+  ['이 그룹 채팅방에서 나가줘', ['leave_group_chat']],
+  ['이 그룹 채팅방에 안녕하세요 메시지를 보내줘', ['send_group_message']],
+  ['민수 사용자 용량을 20GB로 변경해줘', ['update_managed_user']],
+  ['신규 계정 가입을 승인해줘', ['approve_signup']],
+  ['이 가입 요청을 거절해줘', ['reject_signup']],
+  ['서버 자원 제한 정책을 자동으로 설정해줘', ['set_resource_policy']],
+  ['자동 로그인을 켜줘', ['set_login_persistence']],
+  ['내 프로필 닉네임을 찬영으로 바꿔줘', ['update_profile']],
+  ['이 채팅방 방장을 민수에게 위임해줘', ['transfer_group_owner']],
+  ['이 채팅방에 민수를 부방장으로 지정해줘', ['set_group_cohost']],
+  ['민수를 이 그룹 채팅방에서 내보내줘', ['kick_group_member']],
+  ['이 그룹 채팅방을 파기해줘', ['delete_group_chat']],
+  ['이 화상회의 공개 설정을 변경해줘', ['configure_meeting']],
+  ['이 채팅방 회의를 시작해줘', ['start_meeting']],
+  ['이 임시 회의를 정규 회의로 저장해줘', ['save_meeting']],
+  ['이 채팅 메시지의 받은 파일을 저장해줘', ['save_chat_attachments']],
+  ['이 채팅방을 읽음 처리해줘', ['mark_chat_read']],
+  ['이 공유 링크 만료일을 변경해줘', ['update_share_link']],
+  ['이 공유 링크 주소를 재발급해줘', ['regenerate_share_token']],
 ];
 
 const nonExecutableCases = [
@@ -114,8 +161,6 @@ const nonExecutableCases = [
   'CPU와 RAM 사용량 보여줘',
   '현재 접속한 사용자 알려줘',
   '문서 변환 작업 상태 알려줘',
-  'PPTX를 PDF로 변환해줘',
-  'PDF 두 개를 합쳐줘',
   'HWP 내용을 읽어줘',
   '사진 속 글자를 읽어줘',
   '동영상 내용을 요약해줘',
@@ -131,15 +176,15 @@ const nonExecutableCases = [
   '노트를 수정할 계획이야',
 ];
 
-test('실행형 사용자 질문 57개는 필요한 최소 변경 도구만 허가한다', () => {
+test('실행형 사용자 질문은 필요한 최소 변경 도구만 허가한다', () => {
   executableCases.forEach(([prompt, expected]) => sameTools(deriveAuthorizedMutationTools(prompt), expected, prompt));
 });
 
-test('조회·설명·질문·과거형·금지·고위험·미지원 질문 65개는 변경 권한을 만들지 않는다', () => {
+test('조회·설명·질문·과거형·금지·미지원 질문은 변경 권한을 만들지 않는다', () => {
   nonExecutableCases.forEach((prompt) => sameTools(deriveAuthorizedMutationTools(prompt), [], prompt));
 });
 
-test('질문 행렬은 모든 현재 AI 변경 도구를 적어도 세 번 포함한다', () => {
+test('질문 행렬은 기존 핵심 도구를 반복 검증하고 모든 현재 변경 도구를 포함한다', () => {
   const counts = new Map();
   executableCases.forEach(([, tools]) => tools.forEach((name) => counts.set(name, (counts.get(name) || 0) + 1)));
   const expected = [
@@ -148,4 +193,5 @@ test('질문 행렬은 모든 현재 AI 변경 도구를 적어도 세 번 포�
     'send_file_to_user', 'create_note', 'update_note', 'trash_note', 'create_office_document', 'run_python_note',
   ];
   expected.forEach((name) => assert.ok((counts.get(name) || 0) >= 3, `${name} coverage`));
+  _test.MUTATION_TOOL_NAMES.forEach((name) => assert.ok((counts.get(name) || 0) >= 1, `${name} has no intent test`));
 });

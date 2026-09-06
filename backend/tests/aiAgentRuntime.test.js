@@ -22,6 +22,8 @@ test('승인 모드는 위험 등급에 따라 자동 실행 범위를 제한한
   assert.equal(_test.mayAutoExecute('external', 'auto_reversible'), false);
   assert.equal(_test.mayAutoExecute('external', 'auto_all'), true);
   assert.equal(_test.mayAutoExecute('permanent', 'auto_all'), false);
+  assert.equal(_test.mayAutoExecute('critical', 'auto_all'), false);
+  assert.equal(_test.mayAutoExecute('compute', 'auto_all'), false);
 });
 
 test('잘못된 승인 모드와 토큰 상한을 안전한 값으로 정규화한다', () => {

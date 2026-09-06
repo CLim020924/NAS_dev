@@ -105,8 +105,15 @@ const NAS = () => {
   const {
     openWindows, setOpenWindows, topZIndex, setTopZIndex,
     focusedContext, setFocusedContext,
+    setAiSelectedPaths,
     focusWindow, closeWindow, toggleMinimize, toggleMaximize, toggleFullscreen, fetchFiles
   } = useWindows();
+
+  useEffect(() => {
+    setAiSelectedPaths(selectedItems.filter((item) => item !== 'system_root').slice(0, 50));
+  }, [selectedItems, setAiSelectedPaths]);
+
+  useEffect(() => () => setAiSelectedPaths([]), [setAiSelectedPaths]);
 
   const desktopItemsRef = useRef(desktopItems);
   desktopItemsRef.current = desktopItems;

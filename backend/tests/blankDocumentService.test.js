@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const JSZip = require('jszip');
-const { createBlankOfficeDocument, createBlankRhwpDocument } = require('../blankDocumentService');
+const { createBlankOfficeDocument, createBlankRhwpDocument, createDocxWithText, createRhwpWithText } = require('../blankDocumentService');
 
 const expectedParts = {
   docx: ['[Content_Types].xml', '_rels/.rels', 'word/document.xml'],
@@ -21,6 +21,12 @@ const expectedParts = {
 
   await assert.rejects(() => createBlankOfficeDocument('exe'), /지원하지 않는/);
 
+  const authoredDocx = await createDocxWithText('첫 줄\n둘째 줄');
+  const authoredDocxZip = await JSZip.loadAsync(authoredDocx);
+  const authoredDocxXml = await authoredDocxZip.file('word/document.xml').async('string');
+  assert.match(authoredDocxXml, /첫 줄/);
+  assert.match(authoredDocxXml, /둘째 줄/);
+
   const hwpxBytes = createBlankRhwpDocument('hwpx');
   assert(Buffer.isBuffer(hwpxBytes) && hwpxBytes.length > 1000, 'hwpx should use a non-empty template');
   const hwpx = await JSZip.loadAsync(hwpxBytes);
@@ -37,6 +43,10 @@ const expectedParts = {
   const roundTrip = parsedBlank.exportHwpx();
   assert(roundTrip.length > 1000, 'blank hwpx must survive an immediate Ctrl+S-style export');
   assert.strictEqual(new rhwp.HwpDocument(roundTrip).pageCount(), 1, 'round-tripped blank hwpx must reopen');
+  const authoredHwpx = createRhwpWithText('hwpx', '간증문 본문', rhwp.HwpDocument);
+  const authoredParsed = new rhwp.HwpDocument(new Uint8Array(authoredHwpx));
+  const authoredText = authoredParsed.getTextRange(0, 0, 0, 100);
+  assert.match(authoredText, /간증문 본문/);
 
   const fakeHwp = { createEmpty: () => ({ exportHwp: () => Uint8Array.from([1, 2, 3]) }) };
   assert.deepStrictEqual(createBlankRhwpDocument('hwp', fakeHwp), Buffer.from([1, 2, 3]));

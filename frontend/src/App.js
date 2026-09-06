@@ -158,7 +158,8 @@ const PersistentMainRoutes = () => {
 
 function AppContent() {
   const navigate = useNavigate();
-  const { openFolderWindowByPath, setFileManagerPath, setFocusedContext } = useWindows();
+  const location = useLocation();
+  const { openWindows, fileManagerPath, focusedContext, aiSelectedPaths, openFolderWindowByPath, setFileManagerPath, setFocusedContext } = useWindows();
   const { themeName } = useCustomTheme();
   const [chatSidebarMode, setChatSidebarMode] = useState('none');
   const [activeDockedChat, setActiveDockedChat] = useState(null);
@@ -169,6 +170,21 @@ function AppContent() {
   const [appSocket, setAppSocket] = useState(null);
   const [chatPreview, setChatPreview] = useState(null);
   const previewTimerRef = useRef(null);
+  const aiUiContext = useMemo(() => {
+    const activeWindow = openWindows.find((win) => win.id === focusedContext && !win.isMinimized) || null;
+    const activePath = activeWindow?.currentPath || activeWindow?.fullPath || activeWindow?.basePath || fileManagerPath || '/';
+    return {
+      route: location.pathname,
+      currentPath: typeof activePath === 'string' ? activePath : '/',
+      activeApp: activeWindow?.appId || (location.pathname.startsWith('/nas') ? 'file-manager' : 'platform'),
+      activeWindowType: activeWindow?.winType || (focusedContext === 'desktop' ? 'desktop' : ''),
+      activeItemPath: activeWindow?.winType === 'file' ? (activeWindow.fullPath || '') : '',
+      selectedPaths: Array.isArray(aiSelectedPaths) ? aiSelectedPaths.slice(0, 50) : [],
+      conversationId: activeWindow?.workspaceSelectedConversationId || activeWindow?.conversationId || activeWindow?.payload?.conversationId || '',
+      noteId: activeWindow?.noteId || activeWindow?.payload?.noteId || '',
+      documentJobId: activeWindow?.documentJobId || activeWindow?.payload?.jobId || '',
+    };
+  }, [openWindows, focusedContext, fileManagerPath, location.pathname, aiSelectedPaths]);
 
   useEffect(() => {
     const checkUser = setInterval(() => {
@@ -398,7 +414,7 @@ function AppContent() {
                   chatSidebarMode={chatSidebarMode}
                   onOpenAi={() => setAiPanelOpen(true)}
                 />
-                <AiAgentPanel open={aiPanelOpen} onClose={() => setAiPanelOpen(false)} />
+                <AiAgentPanel open={aiPanelOpen} onClose={() => setAiPanelOpen(false)} context={aiUiContext} />
                 <NotificationSidebar
                   open={notificationsOpen}
                   onClose={() => setNotificationsOpen(false)}

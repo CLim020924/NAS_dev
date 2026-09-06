@@ -4,6 +4,12 @@ const path = require('path');
 
 const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 const BLANK_HWPX_TEMPLATE = path.join(__dirname, 'assets', 'templates', 'blank.hwpx');
+const xmlEscape = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&apos;');
 
 const addRootRelationships = (zip, target) => {
   zip.file('_rels/.rels', `${XML}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="${target}"/></Relationships>`);
@@ -14,6 +20,17 @@ const createBlankDocx = async () => {
   zip.file('[Content_Types].xml', `${XML}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
   addRootRelationships(zip, 'word/document.xml');
   zip.file('word/document.xml', `${XML}<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p/><w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+};
+
+const createDocxWithText = async (content = '') => {
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', `${XML}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
+  addRootRelationships(zip, 'word/document.xml');
+  const paragraphs = String(content ?? '').replace(/\r\n/g, '\n').split('\n')
+    .map((line) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(line)}</w:t></w:r></w:p>`)
+    .join('');
+  zip.file('word/document.xml', `${XML}<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs || '<w:p/>'}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`);
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 };
 
@@ -74,11 +91,23 @@ const createBlankRhwpDocument = (format, HwpDocument) => {
   throw error;
 };
 
+const createRhwpWithText = (format, content, HwpDocument) => {
+  if (!HwpDocument) throw new TypeError('HwpDocument is required.');
+  const source = format === 'hwpx'
+    ? new HwpDocument(new Uint8Array(fs.readFileSync(BLANK_HWPX_TEMPLATE)))
+    : HwpDocument.createEmpty();
+  const inserted = JSON.parse(source.insertText(0, 0, 0, String(content ?? '')) || '{}');
+  if (inserted.ok !== true) throw new Error('한글 문서 본문을 삽입하지 못했습니다.');
+  return Buffer.from(format === 'hwpx' ? source.exportHwpx() : source.exportHwp());
+};
+
 module.exports = {
   createBlankOfficeDocument,
   createBlankDocx,
+  createDocxWithText,
   createBlankXlsx,
   createBlankPptx,
   createBlankRhwpDocument,
+  createRhwpWithText,
   BLANK_HWPX_TEMPLATE
 };

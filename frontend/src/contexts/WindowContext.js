@@ -50,6 +50,7 @@ export const WindowProvider = ({ children }) => {
   
   // [추가] 현재 선택된(포커스된) 대상을 추적합니다. 기본값은 바탕화면('desktop')
   const [focusedContext, setFocusedContext] = useState('desktop');
+  const [aiSelectedPaths, setAiSelectedPaths] = useState([]);
 
   const fitOpenWindows = useCallback(() => {
     setOpenWindows((prev) => {
@@ -101,6 +102,7 @@ export const WindowProvider = ({ children }) => {
       setOpenWindows(transition.openWindows);
       setTaskbarOrder(transition.taskbarOrder);
       setFocusedContext(transition.focusedContext);
+      setAiSelectedPaths([]);
       setTopZIndex(transition.topZIndex);
       setFileManagerPath(transition.fileManagerPath);
     };
@@ -402,6 +404,7 @@ export const WindowProvider = ({ children }) => {
       taskbarOrder, setTaskbarOrder, taskbarWindows, activeWindowId,
       fileManagerPath, setFileManagerPath,
       focusedContext, setFocusedContext, // 새로 추가된 포커스 상태 내보내기
+      aiSelectedPaths, setAiSelectedPaths,
       focusWindow, closeWindow, toggleMinimize, toggleMaximize, toggleFullscreen, fetchFiles,
       openFolderWindowByPath, openFileWindowByPath, openAppWindow
     }}>
