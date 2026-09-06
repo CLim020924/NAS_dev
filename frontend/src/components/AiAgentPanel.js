@@ -26,7 +26,7 @@ const ACTIVE_ACTION_STATUSES = new Set(['pending', 'recovery_required']);
 const AI_PANEL_Z_INDEX = 2147483100;
 
 const newRequestId = () => {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
     const value = Math.floor(Math.random() * 16);
     return (char === 'x' ? value : ((value & 0x3) | 0x8)).toString(16);
