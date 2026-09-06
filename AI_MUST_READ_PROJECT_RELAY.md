@@ -1144,3 +1144,9 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 설계 결정: 서버의 block 문서를 단일 기준 원본으로 두고 로컬에는 `페이지명.py`, `페이지명.md`, 필요한 assets와 숨김 mapping manifest를 가진 작업 폴더를 생성한다. `.py`에는 실행 가능한 코드 셀만 넣고 UI·페이지 이동·rich block metadata는 넣지 않는다. `.md`에는 설명 블록을 순서대로 투영하며 manifest가 stable block ID, 원래 순서, 페이지 링크와 양쪽 파일의 revision/hash를 보존한다.
 - round-trip 경계: 로컬 `.py`와 `.md` 수정은 cell/block marker와 마지막 revision이 일치할 때 서버 페이지로 역반영한다. 양쪽이 동시에 바뀌면 자동 덮어쓰지 않고 코드·문서별 충돌 비교와 복사본을 제공한다. rich table, database, button, attachment, output처럼 Markdown이나 Python으로 무손실 표현할 수 없는 블록은 manifest/asset에 보존하고 로컬 파일에서 임의 삭제로 간주하지 않는다.
 - 실행 원칙: 로컬에서는 생성된 순수 `.py`만 일반 Python으로 실행할 수 있고, NAS 원격 실행은 서버 통합 페이지에서 Python 셀만 순서대로 실행한다. 생성물이라는 이유로 매 동기화 때 전체 파일을 다시 써서 사용자의 로컬 편집을 지우지 않으며, 원자 교체·hash·revision·base snapshot을 사용한다.
+
+## 2026-09-06 Markdown 투영과 rich block 표현 경계
+
+- 사용자 확인사항: 로컬에 분리되는 Markdown 파일이 NAS 웹에서는 Notion처럼 여러 이미지, 클릭 가능한 링크, 목록·구분점, emoji, 글꼴 등 풍부한 표현을 지원할 수 있는지 확인한다.
+- 지원 경계: 표준 Markdown/GFM으로 제목, 문단, 굵게·기울임·취소선, 목록·번호·체크박스, 인용, 구분선, 코드, 표, 여러 이미지, 일반/NAS 페이지 링크와 Unicode emoji를 양방향 보존한다. 글꼴 family·크기·색상, 자유 배치, column, callout 세부 스타일, button/action, database view, 접기 상태, 권한, 실행 output은 표준 Markdown만으로 무손실 표현할 수 없다.
+- 설계 결정: NAS 웹의 기준 원본은 type과 attrs를 가진 rich block schema로 유지하고 Markdown은 표준 기능의 편집·교환용 투영본으로 사용한다. 고급 블록은 `.msp-page.json`과 assets에 보존하고 MD에는 사람이 읽을 수 있는 fallback 링크·표·텍스트를 둔다. 허용된 제한적 extension을 도입할 수 있지만 raw HTML/MDX의 임의 script 실행은 금지하고 sanitizer와 scheme/URL 검증을 강제한다. 외부 Markdown 편집기가 이해하지 못한 고급 블록을 삭제한 것으로 오인하지 않는다.
