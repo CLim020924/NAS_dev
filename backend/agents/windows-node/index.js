@@ -16,9 +16,14 @@ const {
   chooseWebBrowser,
   launchSelectedBrowser
 } = require('./web-browser');
+const {
+  createPlan: createProjectPathPlan,
+  applyPlan: applyProjectPathPlan,
+  undoTransaction: undoProjectPathTransaction
+} = require('./project-path-portability');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.11.1';
+const AGENT_VERSION = '1.11.2';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -3715,6 +3720,50 @@ async function runAccountShareCommand(config) {
   return false;
 }
 
+function verifiedProfileDriveRoots(config) {
+  return getProfiles(config).flatMap(profile => getRoots(profile))
+    .map(root => String(root?.localPath || ''))
+    .filter(root => root && fs.existsSync(root));
+}
+
+function readManagedPathJson(file, expectedParent) {
+  const resolved = path.resolve(String(file || ''));
+  if (!isSameOrChildLocalPath(expectedParent, resolved)) throw new Error('NAS Drive가 생성한 경로 검토 파일만 사용할 수 있습니다.');
+  return readJson(resolved, null);
+}
+
+async function runProjectPathCommand(config) {
+  const stateRoot = path.join(STATE_DIR, 'path-portability');
+  if (process.argv.includes('--path-plan-json')) {
+    const projectRoot = path.resolve(getCommandArgument('--project-root') || '');
+    const driveRoots = verifiedProfileDriveRoots(config);
+    if (!driveRoots.some(root => isSameOrChildLocalPath(root, projectRoot))) throw new Error('연결된 NAS Drive 안의 프로젝트 폴더만 분석할 수 있습니다.');
+    const plan = createProjectPathPlan({ projectRoot, allowedRoots: driveRoots, stateDir: STATE_DIR });
+    process.stdout.write(JSON.stringify(plan));
+    return true;
+  }
+  if (process.argv.includes('--path-apply-json')) {
+    const planFile = getCommandArgument('--plan-file');
+    const plan = readManagedPathJson(planFile, path.join(stateRoot, 'plans'));
+    if (!plan) throw new Error('경로 변경 미리보기를 읽을 수 없습니다. 다시 분석해 주세요.');
+    const driveRoots = verifiedProfileDriveRoots(config);
+    if (!driveRoots.some(root => isSameOrChildLocalPath(root, plan.projectRoot))) throw new Error('현재 연결된 NAS Drive 프로젝트가 아닙니다.');
+    const ids = String(getCommandArgument('--candidate-ids') || '').split(',').filter(Boolean);
+    const transaction = applyProjectPathPlan({ plan, candidateIds: ids, stateDir: STATE_DIR });
+    process.stdout.write(JSON.stringify(transaction));
+    return true;
+  }
+  if (process.argv.includes('--path-undo-json')) {
+    const transactionFile = getCommandArgument('--transaction-file');
+    const transaction = readManagedPathJson(transactionFile, path.join(stateRoot, 'transactions'));
+    if (!transaction) throw new Error('복구 기록을 읽을 수 없습니다.');
+    const result = undoProjectPathTransaction(transaction);
+    process.stdout.write(JSON.stringify(result));
+    return true;
+  }
+  return false;
+}
+
 async function runForeground() {
   const protocolAction = getProtocolAction();
   const currentConfig = loadConfig();
@@ -3955,6 +4004,7 @@ async function runForeground() {
     }
     const commandConfig = loadConfig();
     if (await runAccountShareCommand(commandConfig)) return;
+    if (await runProjectPathCommand(commandConfig)) return;
     if (relaunchForegroundHiddenIfNeeded()) return;
     ensureStateDir();
     refreshInstalledBrandAssets();

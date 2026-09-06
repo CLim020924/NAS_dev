@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.11.1.0")]
-[assembly: AssemblyFileVersion("1.11.1.0")]
+[assembly: AssemblyVersion("1.11.2.0")]
+[assembly: AssemblyFileVersion("1.11.2.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.11.1";
+        internal const string ProductVersion = "1.11.2";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
@@ -123,6 +123,33 @@ namespace NasDriveSetup
                     Application.DoEvents();
                     form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
                     bitmap.Save(args[renderSharePreviewIndex + 1], System.Drawing.Imaging.ImageFormat.Png);
+                    form.Close();
+                }
+                return;
+            }
+            int renderPathPreviewIndex = Array.FindIndex(args, item => string.Equals(item, "--render-path-ui-preview", StringComparison.OrdinalIgnoreCase));
+            if (renderPathPreviewIndex >= 0 && renderPathPreviewIndex + 1 < args.Length)
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                var previewPlan = new Dictionary<string, object>
+                {
+                    { "projectRoot", @"C:\Users\Preview\NAS Drive\sample-project" },
+                    { "summary", new Dictionary<string, object> { { "safe", 2 }, { "review", 1 }, { "unresolved", 1 } } },
+                    { "candidates", new object[]
+                        {
+                            new Dictionary<string, object> { { "id", "a" }, { "file", "src\\main.py" }, { "line", 18 }, { "confidence", "safe" }, { "selectedByDefault", true }, { "oldPath", @"C:\Users\OldPC\Desktop\sample-project\data\input.csv" }, { "suggestedPath", @"C:\Users\Preview\NAS Drive\sample-project\data\input.csv" }, { "reason", "프로젝트 내부의 동일한 하위 경로가 확인됨" } },
+                            new Dictionary<string, object> { { "id", "b" }, { "file", "config\\train.yaml" }, { "line", 7 }, { "confidence", "review" }, { "selectedByDefault", false }, { "oldPath", @"D:\Shared\models\labels.json" }, { "suggestedPath", @"C:\Users\Preview\NAS Drive\공유 자료\models\labels.json" }, { "reason", "허용된 NAS Drive 범위에서 유일한 외부 대상이 확인됨" } },
+                            new Dictionary<string, object> { { "id", "c" }, { "file", "tools\\export.py" }, { "line", 42 }, { "confidence", "unresolved" }, { "selectedByDefault", false }, { "oldPath", @"E:\Unknown\output" }, { "suggestedPath", "" }, { "reason", "대상이 없거나 둘 이상이어서 자동 변경하지 않음" } }
+                        }
+                    }
+                };
+                using (var form = new NativeProjectPathReviewForm("", previewPlan))
+                using (var bitmap = new Bitmap(form.Width, form.Height))
+                {
+                    form.Show(); form.Refresh(); Application.DoEvents();
+                    form.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height));
+                    bitmap.Save(args[renderPathPreviewIndex + 1], System.Drawing.Imaging.ImageFormat.Png);
                     form.Close();
                 }
                 return;
@@ -994,11 +1021,13 @@ namespace NasDriveSetup
                 using (var setup = new InstallerForm())
                 using (var login = new NativeLoginForm(Path.Combine(Path.GetTempPath(), "NAS-Sync-Agent.exe")))
                 using (var control = new NativeControlCenter(Path.Combine(Path.GetTempPath(), "NAS-Sync-Agent.exe")))
+                using (var pathReview = new NativeProjectPathReviewForm(Path.Combine(Path.GetTempPath(), "NAS-Sync-Agent.exe"), new Dictionary<string, object>()))
                 using (var picker = new WebBrowserPickerForm())
                 {
                     return HasExpectedScaledClientSize(setup, 660, 470)
                         && HasExpectedScaledClientSize(login, 470, 650)
                         && HasExpectedScaledClientSize(control, 620, 620)
+                        && HasExpectedScaledClientSize(pathReview, 1040, 720)
                         && HasExpectedScaledClientSize(picker, 720, 570);
                 }
             }
@@ -2315,6 +2344,180 @@ namespace NasDriveSetup
         }
     }
 
+    internal sealed class NativeProjectPathReviewForm : DpiScaledForm
+    {
+        private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
+        private readonly string agentExe;
+        private readonly Dictionary<string, object> plan;
+        private readonly ListView candidates = new ListView();
+        private readonly Label detail = new Label();
+        private readonly Button applyButton = new Button();
+        private string transactionFile = "";
+
+        internal NativeProjectPathReviewForm(string installedAgentExe, Dictionary<string, object> pathPlan)
+        {
+            agentExe = installedAgentExe;
+            plan = pathPlan ?? new Dictionary<string, object>();
+            BuildUi();
+            ApplyInitialDpiScale();
+        }
+
+        private static string Value(Dictionary<string, object> item, string key)
+        {
+            object raw;
+            return item != null && item.TryGetValue(key, out raw) && raw != null ? Convert.ToString(raw) : "";
+        }
+
+        private static bool BoolValue(Dictionary<string, object> item, string key)
+        {
+            object raw;
+            return item != null && item.TryGetValue(key, out raw) && raw != null && Convert.ToBoolean(raw);
+        }
+
+        private void BuildUi()
+        {
+            AutoScaleMode = AutoScaleMode.None;
+            Text = "프로젝트 경로 확인";
+            ClientSize = new Size(1040, 720);
+            MinimumSize = new Size(900, 620);
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Color.White;
+
+            var header = new Panel { Dock = DockStyle.Top, Height = 112, BackColor = Color.FromArgb(245, 248, 254) };
+            header.Controls.Add(new Label { Text = "프로젝트 경로 확인", Location = new Point(28, 18), Size = new Size(500, 34), Font = Program.UiFont("Segoe UI Semibold", 18f), ForeColor = Color.FromArgb(30, 42, 68) });
+            header.Controls.Add(new Label { Text = "다른 PC에서 만든 고정 경로를 이 PC의 실제 위치와 비교합니다. 애매한 경로는 자동으로 바꾸지 않습니다.", Location = new Point(30, 58), Size = new Size(950, 24), Font = Program.UiFont("Segoe UI", 9.5f), ForeColor = Color.FromArgb(70, 78, 94) });
+            header.Controls.Add(new Label { Text = Value(plan, "projectRoot"), Location = new Point(30, 83), Size = new Size(950, 22), Font = Program.UiFont("Segoe UI", 9f), ForeColor = BrandBlue, AutoEllipsis = true });
+            Controls.Add(header);
+
+            Dictionary<string, object> summary = null;
+            object rawSummary;
+            if (plan.TryGetValue("summary", out rawSummary)) summary = rawSummary as Dictionary<string, object>;
+            var summaryLabel = new Label {
+                Text = "안전한 자동 변경  " + Value(summary, "safe") + "개     직접 확인  " + Value(summary, "review") + "개     변경 안 함  " + Value(summary, "unresolved") + "개",
+                Location = new Point(28, 128), Size = new Size(980, 32), Font = Program.UiFont("Segoe UI Semibold", 10.5f), ForeColor = Color.FromArgb(34, 51, 78)
+            };
+            Controls.Add(summaryLabel);
+
+            candidates.Location = new Point(28, 166);
+            candidates.Size = new Size(984, 365);
+            candidates.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            candidates.View = View.Details;
+            candidates.FullRowSelect = true;
+            candidates.CheckBoxes = true;
+            candidates.HideSelection = false;
+            candidates.Columns.Add("파일 · 위치", 230);
+            candidates.Columns.Add("판정", 100);
+            candidates.Columns.Add("기존 경로", 300);
+            candidates.Columns.Add("이 PC 경로", 330);
+            candidates.SelectedIndexChanged += (sender, args) => ShowSelectedDetail();
+            object rawCandidates;
+            object[] rows = plan.TryGetValue("candidates", out rawCandidates) ? rawCandidates as object[] : null;
+            if (rows != null) foreach (object row in rows)
+            {
+                var item = row as Dictionary<string, object>;
+                if (item == null) continue;
+                string confidence = Value(item, "confidence");
+                string status = confidence == "safe" ? "자동 적용" : confidence == "review" ? "확인 필요" : "변경 안 함";
+                var view = new ListViewItem(Value(item, "file") + ":" + Value(item, "line"));
+                view.SubItems.Add(status);
+                view.SubItems.Add(Value(item, "oldPath"));
+                view.SubItems.Add(Value(item, "suggestedPath"));
+                view.Checked = BoolValue(item, "selectedByDefault");
+                view.Tag = item;
+                if (confidence == "unresolved") view.ForeColor = Color.DimGray;
+                candidates.Items.Add(view);
+            }
+            Controls.Add(candidates);
+
+            detail.Location = new Point(28, 544);
+            detail.Size = new Size(984, 54);
+            detail.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            detail.Font = Program.UiFont("Segoe UI", 9f);
+            detail.ForeColor = Color.FromArgb(70, 78, 94);
+            detail.Text = candidates.Items.Count == 0 ? "변경이 필요한 고정 경로를 찾지 못했습니다." : "항목을 선택하면 판단 근거를 볼 수 있습니다.";
+            Controls.Add(detail);
+
+            var keep = new Button { Text = "변경하지 않고 열기", Location = new Point(28, 628), Size = new Size(190, 44), Anchor = AnchorStyles.Bottom | AnchorStyles.Left, Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
+            keep.Click += (sender, args) => { OpenProject(); Close(); };
+            Controls.Add(keep);
+
+            var close = new Button { Text = "나중에", Location = new Point(230, 628), Size = new Size(120, 44), Anchor = AnchorStyles.Bottom | AnchorStyles.Left, Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
+            close.Click += (sender, args) => Close();
+            Controls.Add(close);
+
+            applyButton.Text = "선택한 경로 적용하고 열기";
+            applyButton.Location = new Point(744, 628);
+            applyButton.Size = new Size(268, 44);
+            applyButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            applyButton.BackColor = BrandBlue;
+            applyButton.ForeColor = Color.White;
+            applyButton.FlatStyle = FlatStyle.Flat;
+            applyButton.Font = Program.UiFont("Segoe UI Semibold", 9.5f);
+            applyButton.Click += (sender, args) => ApplyOrUndo();
+            Controls.Add(applyButton);
+        }
+
+        private void ShowSelectedDetail()
+        {
+            if (candidates.SelectedItems.Count == 0) return;
+            var item = candidates.SelectedItems[0].Tag as Dictionary<string, object>;
+            detail.Text = Value(item, "reason") + Environment.NewLine + (Value(item, "confidence") == "review" ? "외부 경로는 체크한 항목만 변경됩니다." : "미리보기 이후 파일이 달라지면 안전을 위해 전체 적용을 중단합니다.");
+        }
+
+        private Dictionary<string, object> RunAgentJson(string arguments)
+        {
+            using (var process = Process.Start(new ProcessStartInfo(agentExe, arguments)
+            {
+                UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = Path.GetDirectoryName(agentExe), RedirectStandardOutput = true, RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+            }))
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                if (!process.WaitForExit(60000)) { try { process.Kill(); } catch { } throw new InvalidOperationException("경로 확인 작업 시간이 초과되었습니다."); }
+                if (process.ExitCode != 0) throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? "경로 작업을 완료하지 못했습니다." : error);
+                return new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 }.DeserializeObject(output) as Dictionary<string, object> ?? new Dictionary<string, object>();
+            }
+        }
+
+        private void ApplyOrUndo()
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(transactionFile))
+                {
+                    RunAgentJson("--path-undo-json --transaction-file " + Program.QuoteArgument(transactionFile));
+                    transactionFile = "";
+                    applyButton.Text = "선택한 경로 적용하고 열기";
+                    MessageBox.Show("변경 전 내용으로 안전하게 되돌렸습니다.", "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                var ids = new List<string>();
+                foreach (ListViewItem view in candidates.Items)
+                {
+                    if (!view.Checked) continue;
+                    var item = view.Tag as Dictionary<string, object>;
+                    if (Value(item, "confidence") != "unresolved") ids.Add(Value(item, "id"));
+                }
+                if (ids.Count == 0) { OpenProject(); Close(); return; }
+                string planFile = Value(plan, "planFile");
+                var result = RunAgentJson("--path-apply-json --plan-file " + Program.QuoteArgument(planFile) + " --candidate-ids " + Program.QuoteArgument(string.Join(",", ids.ToArray())));
+                transactionFile = Value(result, "transactionFile");
+                applyButton.Text = "방금 변경 되돌리기";
+                OpenProject();
+                MessageBox.Show(ids.Count + "개 경로를 적용했습니다. 이 창에서 바로 되돌릴 수 있습니다.", "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception error) { MessageBox.Show(error.Message, "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        private void OpenProject()
+        {
+            string root = Value(plan, "projectRoot");
+            if (!string.IsNullOrWhiteSpace(root) && Directory.Exists(root)) Process.Start(new ProcessStartInfo("explorer.exe", Program.QuoteArgument(root)) { UseShellExecute = false });
+        }
+    }
+
     internal sealed class NativeControlCenter : DpiScaledForm
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
@@ -2630,6 +2833,10 @@ namespace NasDriveSetup
             logoutButton.Click += async (sender, args) => await LogoutAsync();
             Controls.Add(logoutButton);
 
+            var projectPaths = new Button { Text = "프로젝트 경로 확인", Location = new Point(238, 570), Size = new Size(260, 40), Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
+            projectPaths.Click += (sender, args) => OpenProjectPathReview();
+            Controls.Add(projectPaths);
+
             Controls.Add(new Label { Text = "각 계정은 별도 드라이브와 토큰을 사용하며 백그라운드에서 함께 연결됩니다.", Location = new Point(34, 625), Size = new Size(480, 28), ForeColor = Color.DimGray, Font = Program.UiFont("Segoe UI", 9f) });
             var close = new Button { Text = "창 닫기", Location = new Point(526, 620), Size = new Size(120, 36), Font = Program.UiFont("Segoe UI Semibold", 9f) };
             close.Click += (sender, args) => Close();
@@ -2685,6 +2892,39 @@ namespace NasDriveSetup
                     RefreshStatus();
                     Program.SignalNativeTrayRefresh();
                 }
+            }
+        }
+
+        private void OpenProjectPathReview()
+        {
+            if (previewAccounts != null) return;
+            AccountSnapshot account = CurrentAccount();
+            if (account == null || string.IsNullOrWhiteSpace(account.DrivePath) || !Directory.Exists(account.DrivePath))
+            {
+                MessageBox.Show("먼저 사용할 NAS 계정의 드라이브를 연결해 주세요.", "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using (var picker = new FolderBrowserDialog { Description = "경로를 확인할 프로젝트 폴더를 선택하세요.", SelectedPath = account.DrivePath, ShowNewFolderButton = false })
+            {
+                if (picker.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    using (var process = Process.Start(new ProcessStartInfo(agentExe, "--path-plan-json --project-root " + Program.QuoteArgument(picker.SelectedPath))
+                    {
+                        UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
+                        WorkingDirectory = Path.GetDirectoryName(agentExe), RedirectStandardOutput = true, RedirectStandardError = true,
+                        StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+                    }))
+                    {
+                        string output = process.StandardOutput.ReadToEnd();
+                        string error = process.StandardError.ReadToEnd();
+                        if (!process.WaitForExit(60000)) { try { process.Kill(); } catch { } throw new InvalidOperationException("프로젝트 분석 시간이 초과되었습니다."); }
+                        if (process.ExitCode != 0) throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? "프로젝트 경로를 분석하지 못했습니다." : error);
+                        var plan = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 }.DeserializeObject(output) as Dictionary<string, object>;
+                        using (var review = new NativeProjectPathReviewForm(agentExe, plan)) review.ShowDialog(this);
+                    }
+                }
+                catch (Exception error) { MessageBox.Show(error.Message, "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
             }
         }
 
