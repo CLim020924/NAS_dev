@@ -3,7 +3,7 @@
 import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
 
 test('filters block commands with Korean and English aliases', () => {
-  expect(filterCommands(BLOCK_COMMANDS, '제목').map((item) => item.id)).toEqual(['heading-1', 'heading-2']);
+  expect(filterCommands(BLOCK_COMMANDS, '제목').map((item) => item.id)).toEqual(['heading-1', 'heading-2', 'heading-3']);
   expect(filterCommands(BLOCK_COMMANDS, 'quote').map((item) => item.id)).toEqual(['quote']);
 });
 
@@ -32,5 +32,9 @@ test('maps explicit Tab patterns without changing normal prose', () => {
   expect(tabShortcutForParagraph('1')).toBe('ordered-list');
   expect(tabShortcutForParagraph('-')).toBe('bullet-list');
   expect(tabShortcutForParagraph('---')).toBe('divider');
+  expect(tabShortcutForParagraph('[ ]')).toBe('task-list');
+  expect(tabShortcutForParagraph('###')).toBe('heading-3');
+  expect(tabShortcutForParagraph('>')).toBe('quote');
+  expect(tabShortcutForParagraph('```')).toBe('code-block');
   expect(tabShortcutForParagraph('일반 문장')).toBeNull();
 });

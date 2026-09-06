@@ -2,8 +2,10 @@ export const BLOCK_COMMANDS = [
   { id: 'paragraph', label: '본문', keywords: 'text paragraph 본문 문단' },
   { id: 'heading-1', label: '제목 1', keywords: 'heading title h1 제목' },
   { id: 'heading-2', label: '제목 2', keywords: 'heading title h2 소제목' },
+  { id: 'heading-3', label: '제목 3', keywords: 'heading title h3 작은 제목' },
   { id: 'bullet-list', label: '글머리표 목록', keywords: 'bullet list 목록' },
   { id: 'ordered-list', label: '번호 목록', keywords: 'number ordered list 번호' },
+  { id: 'task-list', label: '할 일 목록', keywords: 'todo task checkbox check 할일 체크' },
   { id: 'quote', label: '인용문', keywords: 'quote blockquote 인용' },
   { id: 'code-block', label: '코드 블록', keywords: 'code pre 코드' },
   { id: 'divider', label: '구분선', keywords: 'divider horizontal rule 구분선' }
@@ -24,6 +26,12 @@ export const tabShortcutForParagraph = (text = '') => {
   const value = String(text).trim();
   if (value === '1' || value === '1.') return 'ordered-list';
   if (value === '-' || value === '*') return 'bullet-list';
+  if (value === '[]' || value === '[ ]' || value.toLowerCase() === '[x]') return 'task-list';
+  if (value === '#') return 'heading-1';
+  if (value === '##') return 'heading-2';
+  if (value === '###') return 'heading-3';
+  if (value === '>' || value === '"') return 'quote';
+  if (value === '```') return 'code-block';
   if (value === '---' || value === '===') return 'divider';
   return null;
 };

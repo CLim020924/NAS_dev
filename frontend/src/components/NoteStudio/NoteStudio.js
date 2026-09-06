@@ -4,6 +4,8 @@ import Editor from '@monaco-editor/react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
+import Underline from '@tiptap/extension-underline';
+import { TaskItem, TaskList } from '@tiptap/extension-list';
 import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
   DialogTitle, Divider, IconButton, List, ListItemButton, ListItemIcon, ListItemText,
@@ -18,6 +20,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DescriptionIcon from '@mui/icons-material/Description';
 import FormatBoldIcon from '@mui/icons-material/FormatBold';
 import FormatItalicIcon from '@mui/icons-material/FormatItalic';
+import FormatUnderlinedIcon from '@mui/icons-material/FormatUnderlined';
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
 import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import HistoryIcon from '@mui/icons-material/History';
@@ -33,6 +36,7 @@ import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
+import ChecklistIcon from '@mui/icons-material/Checklist';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
@@ -55,8 +59,10 @@ const BlockToolbar = ({ editor }) => {
   const actions = [
     ['굵게', <FormatBoldIcon fontSize="small" />, () => editor.chain().focus().toggleBold().run(), editor.isActive('bold')],
     ['기울임', <FormatItalicIcon fontSize="small" />, () => editor.chain().focus().toggleItalic().run(), editor.isActive('italic')],
+    ['밑줄', <FormatUnderlinedIcon fontSize="small" />, () => editor.chain().focus().toggleUnderline().run(), editor.isActive('underline')],
     ['글머리표', <FormatListBulletedIcon fontSize="small" />, () => editor.chain().focus().toggleBulletList().run(), editor.isActive('bulletList')],
-    ['번호 목록', <FormatListNumberedIcon fontSize="small" />, () => editor.chain().focus().toggleOrderedList().run(), editor.isActive('orderedList')]
+    ['번호 목록', <FormatListNumberedIcon fontSize="small" />, () => editor.chain().focus().toggleOrderedList().run(), editor.isActive('orderedList')],
+    ['할 일', <ChecklistIcon fontSize="small" />, () => editor.chain().focus().toggleTaskList().run(), editor.isActive('taskList')]
   ];
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ px: 1.25, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', overflowX: 'auto' }}>
@@ -67,6 +73,7 @@ const BlockToolbar = ({ editor }) => {
       <Divider flexItem orientation="vertical" />
       <Button size="small" color={editor.isActive('heading', { level: 1 }) ? 'primary' : 'inherit'} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}>제목 1</Button>
       <Button size="small" color={editor.isActive('heading', { level: 2 }) ? 'primary' : 'inherit'} onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>제목 2</Button>
+      <Button size="small" color={editor.isActive('heading', { level: 3 }) ? 'primary' : 'inherit'} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>제목 3</Button>
     </Stack>
   );
 };
@@ -114,7 +121,13 @@ const NoteStudio = () => {
   const commandOpenRef = useRef(false);
 
   const editor = useEditor({
-    extensions: [StarterKit, Placeholder.configure({ placeholder: "'/'를 누르거나 내용을 입력하세요." })],
+    extensions: [
+      StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
+      Underline,
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      Placeholder.configure({ placeholder: "'/'를 누르거나 내용을 입력하세요." })
+    ],
     content: { type: 'doc', content: [{ type: 'paragraph' }] },
     immediatelyRender: false,
     editorProps: {
@@ -130,6 +143,12 @@ const NoteStudio = () => {
               let chain = editor.chain().focus().deleteRange({ from, to });
               if (shortcut === 'ordered-list') chain = chain.toggleOrderedList();
               if (shortcut === 'bullet-list') chain = chain.toggleBulletList();
+              if (shortcut === 'task-list') chain = chain.toggleTaskList();
+              if (shortcut === 'heading-1') chain = chain.toggleHeading({ level: 1 });
+              if (shortcut === 'heading-2') chain = chain.toggleHeading({ level: 2 });
+              if (shortcut === 'heading-3') chain = chain.toggleHeading({ level: 3 });
+              if (shortcut === 'quote') chain = chain.toggleBlockquote();
+              if (shortcut === 'code-block') chain = chain.toggleCodeBlock();
               if (shortcut === 'divider') chain = chain.setHorizontalRule();
               chain.run();
             }, 0);
@@ -550,8 +569,10 @@ const NoteStudio = () => {
       paragraph: () => chain.setParagraph().run(),
       'heading-1': () => chain.toggleHeading({ level: 1 }).run(),
       'heading-2': () => chain.toggleHeading({ level: 2 }).run(),
+      'heading-3': () => chain.toggleHeading({ level: 3 }).run(),
       'bullet-list': () => chain.toggleBulletList().run(),
       'ordered-list': () => chain.toggleOrderedList().run(),
+      'task-list': () => chain.toggleTaskList().run(),
       quote: () => chain.toggleBlockquote().run(),
       'code-block': () => chain.toggleCodeBlock().run(),
       divider: () => chain.setHorizontalRule().run()
