@@ -29,6 +29,23 @@ const withService = async (run) => {
   finally { service.stop(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 };
 
+test('queues burst work at the global reservation safety line', () => withService(async ({ service, users }) => {
+  const secondUser = { userUid: 'u-2', loginId: 'beta', storageQuotaBytes: 20 * GIB };
+  users.push(secondUser);
+  await service.dashboard(metrics());
+  const first = service.reserve({ user: users[0], requested: { cpuPercent: 25, memoryBytes: 512 * 1024 * 1024 }, metrics: metrics() });
+  const second = service.reserve({ user: secondUser, requested: { cpuPercent: 25, memoryBytes: 512 * 1024 * 1024 }, metrics: metrics() });
+  const thirdUser = { userUid: 'u-3', loginId: 'gamma', storageQuotaBytes: 20 * GIB };
+  users.push(thirdUser);
+  const third = service.reserve({ user: thirdUser, requested: { cpuPercent: 25, memoryBytes: 512 * 1024 * 1024 }, metrics: metrics() });
+  assert.equal(first.state, 'available');
+  assert.equal(second.state, 'available');
+  assert.equal(third.state, 'queued');
+  assert.ok(third.reasons.includes('GLOBAL_CPU_RESERVE_SOFT'));
+  service.release(first.jobId);
+  service.release(second.jobId);
+}));
+
 test('derives conservative automatic limits from detected hardware', () => {
   const policy = calculateAutomaticPolicy(metrics(), 5);
   assert.equal(policy.detected.logicalCores, 8);

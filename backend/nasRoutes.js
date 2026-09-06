@@ -1460,7 +1460,9 @@ const resourceReasonMessage = (reasons = []) => {
     USER_CPU_LIMIT: '사용자 CPU 작업 한도', USER_MEMORY_LIMIT: '사용자 메모리 작업 한도',
     USER_CONCURRENCY_LIMIT: '사용자 동시 작업 한도', CPU_HARD: '서버 CPU', LOAD_HARD: '서버 부하',
     MEMORY_HARD: '서버 가용 메모리', SWAP_HARD: '서버 스왑', TEMPERATURE_HARD: '서버 온도',
-    DISK_RESERVE: 'NAS 여유 공간'
+    DISK_RESERVE: 'NAS 여유 공간', GLOBAL_CPU_RESERVE_HARD: '전체 CPU 예약 한도',
+    GLOBAL_CPU_RESERVE_SOFT: '전체 CPU 안전 예약선', GLOBAL_MEMORY_RESERVE_HARD: '전체 RAM 예약 한도',
+    GLOBAL_MEMORY_RESERVE_SOFT: '전체 RAM 안전 예약선'
   };
   return reasons.map((reason) => labels[reason] || reason).join(', ');
 };

@@ -175,6 +175,7 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
   };
 
   const usageFor = (userUid) => [...reservations.values()].filter((item) => item.userUid === userUid).reduce((total, item) => ({ cpuPercent: total.cpuPercent + item.cpuPercent, memoryBytes: total.memoryBytes + item.memoryBytes, activeJobs: total.activeJobs + 1 }), { cpuPercent: 0, memoryBytes: 0, activeJobs: 0 });
+  const globalUsage = () => [...reservations.values()].reduce((total, item) => ({ cpuPercent: total.cpuPercent + item.cpuPercent, memoryBytes: total.memoryBytes + item.memoryBytes, activeJobs: total.activeJobs + 1 }), { cpuPercent: 0, memoryBytes: 0, activeJobs: 0 });
 
   const usersSnapshot = (metrics = lastMetrics || {}, { refreshStorage = false } = {}) => {
     const users = getUsers();
@@ -311,15 +312,29 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
     if (!userUid) throw Object.assign(new Error('사용자 식별자가 필요합니다.'), { status: 400 });
     const limits = userLimit(user, effective);
     const current = usageFor(userUid);
+    const global = globalUsage();
     const { cpuPercent, memoryBytes } = normalizeRequestedResources(requested);
     const violations = [];
     if (current.cpuPercent + cpuPercent > limits.cpuPercent) violations.push('USER_CPU_LIMIT');
     if (current.memoryBytes + memoryBytes > limits.memoryBytes) violations.push('USER_MEMORY_LIMIT');
     if (current.activeJobs + 1 > limits.maxConcurrentJobs) violations.push('USER_CONCURRENCY_LIMIT');
-    if (!effective.enforcementEnabled) return { state: 'available', reasons: [], observedReasons: [...violations, ...pressure.hardReasons, ...pressure.softReasons], limits, current, monitorOnly: true };
+    const globalHard = [];
+    const globalSoft = [];
+    const projectedCpu = global.cpuPercent + cpuPercent;
+    const totalMemory = Number(metrics.memory?.totalBytes || effective.detected?.totalMemoryBytes || 0);
+    const projectedMemory = global.memoryBytes + memoryBytes;
+    if (projectedCpu > effective.system.cpuHardPercent) globalHard.push('GLOBAL_CPU_RESERVE_HARD');
+    else if (projectedCpu > effective.system.cpuSoftPercent) globalSoft.push('GLOBAL_CPU_RESERVE_SOFT');
+    if (totalMemory > 0) {
+      if (projectedMemory > totalMemory - effective.system.hardMinAvailableMemoryBytes) globalHard.push('GLOBAL_MEMORY_RESERVE_HARD');
+      else if (projectedMemory > totalMemory - effective.system.minAvailableMemoryBytes) globalSoft.push('GLOBAL_MEMORY_RESERVE_SOFT');
+    }
+    if (!effective.enforcementEnabled) return { state: 'available', reasons: [], observedReasons: [...violations, ...globalHard, ...globalSoft, ...pressure.hardReasons, ...pressure.softReasons], limits, current, global, monitorOnly: true };
     if (violations.length) return { state: 'blocked', reasons: violations, limits, current };
+    if (globalHard.length) return { state: 'blocked', reasons: globalHard, limits, current, global };
+    if (globalSoft.length) return { state: 'queued', reasons: globalSoft, limits, current, global };
     if (pressure.state !== 'available') return { state: pressure.state, reasons: [...pressure.hardReasons, ...pressure.softReasons], limits, current };
-    return { state: 'available', reasons: [], limits, current };
+    return { state: 'available', reasons: [], limits, current, global };
   };
 
   const reserve = ({ jobId = crypto.randomUUID(), user, requested = {}, metrics = lastMetrics || {} }) => {
