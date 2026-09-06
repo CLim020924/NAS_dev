@@ -19,11 +19,12 @@ const {
 const {
   createPlan: createProjectPathPlan,
   applyPlan: applyProjectPathPlan,
-  undoTransaction: undoProjectPathTransaction
+  undoTransaction: undoProjectPathTransaction,
+  updatePlanMapping: updateProjectPathMapping
 } = require('./project-path-portability');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.11.2';
+const AGENT_VERSION = '1.11.3';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -3729,7 +3730,35 @@ function verifiedProfileDriveRoots(config) {
 function readManagedPathJson(file, expectedParent) {
   const resolved = path.resolve(String(file || ''));
   if (!isSameOrChildLocalPath(expectedParent, resolved)) throw new Error('NAS Drive가 생성한 경로 검토 파일만 사용할 수 있습니다.');
+  if (!fs.existsSync(resolved) || fs.lstatSync(resolved).isSymbolicLink()) throw new Error('경로 검토 파일이 없거나 안전하지 않습니다.');
+  if (!isSameOrChildLocalPath(fs.realpathSync(expectedParent), fs.realpathSync(resolved))) throw new Error('경로 검토 파일의 실제 위치가 안전하지 않습니다.');
   return readJson(resolved, null);
+}
+
+function inspectProjectLocalAvailability(projectRoot) {
+  if (process.platform !== 'win32') return { verified: true, unavailableRelativePaths: [] };
+  const script = [
+    "$root = [IO.Path]::GetFullPath($env:NAS_PROJECT_SCAN_ROOT)",
+    "$items = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction Stop",
+    "$blocked = foreach ($item in $items) {",
+    "  $bits = [int64]$item.Attributes",
+    "  if (($bits -band 0x1000) -or ($bits -band 0x40000) -or ($bits -band 0x400000)) {",
+    "    $item.FullName.Substring($root.Length).TrimStart('\\')",
+    "  }",
+    "}",
+    "$blocked | ConvertTo-Json -Compress"
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    windowsHide: true, encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, NAS_PROJECT_SCAN_ROOT: projectRoot }
+  });
+  if (result.error || result.status !== 0) return { verified: false, unavailableRelativePaths: [] };
+  const raw = String(result.stdout || '').trim();
+  if (!raw) return { verified: true, unavailableRelativePaths: [] };
+  try {
+    const parsed = JSON.parse(raw);
+    return { verified: true, unavailableRelativePaths: Array.isArray(parsed) ? parsed : [parsed] };
+  } catch { return { verified: false, unavailableRelativePaths: [] }; }
 }
 
 async function runProjectPathCommand(config) {
@@ -3738,8 +3767,22 @@ async function runProjectPathCommand(config) {
     const projectRoot = path.resolve(getCommandArgument('--project-root') || '');
     const driveRoots = verifiedProfileDriveRoots(config);
     if (!driveRoots.some(root => isSameOrChildLocalPath(root, projectRoot))) throw new Error('연결된 NAS Drive 안의 프로젝트 폴더만 분석할 수 있습니다.');
-    const plan = createProjectPathPlan({ projectRoot, allowedRoots: driveRoots, stateDir: STATE_DIR });
+    const availability = inspectProjectLocalAvailability(projectRoot);
+    const plan = createProjectPathPlan({ projectRoot, allowedRoots: driveRoots, stateDir: STATE_DIR,
+      unavailableRelativePaths: availability.unavailableRelativePaths, availabilityVerified: availability.verified });
     process.stdout.write(JSON.stringify(plan));
+    return true;
+  }
+  if (process.argv.includes('--path-map-json')) {
+    const planFile = getCommandArgument('--plan-file');
+    const plan = readManagedPathJson(planFile, path.join(stateRoot, 'plans'));
+    if (!plan) throw new Error('경로 변경 미리보기를 읽을 수 없습니다. 다시 분석해 주세요.');
+    const driveRoots = verifiedProfileDriveRoots(config);
+    if (!driveRoots.some(root => isSameOrChildLocalPath(root, plan.projectRoot))) throw new Error('현재 연결된 NAS Drive 프로젝트가 아닙니다.');
+    plan.allowedRoots = driveRoots;
+    const updated = updateProjectPathMapping({ plan, candidateId: getCommandArgument('--candidate-id'), targetPath: getCommandArgument('--target-path') });
+    writeJson(planFile, updated);
+    process.stdout.write(JSON.stringify(updated));
     return true;
   }
   if (process.argv.includes('--path-apply-json')) {
@@ -3748,6 +3791,7 @@ async function runProjectPathCommand(config) {
     if (!plan) throw new Error('경로 변경 미리보기를 읽을 수 없습니다. 다시 분석해 주세요.');
     const driveRoots = verifiedProfileDriveRoots(config);
     if (!driveRoots.some(root => isSameOrChildLocalPath(root, plan.projectRoot))) throw new Error('현재 연결된 NAS Drive 프로젝트가 아닙니다.');
+    plan.allowedRoots = driveRoots;
     const ids = String(getCommandArgument('--candidate-ids') || '').split(',').filter(Boolean);
     const transaction = applyProjectPathPlan({ plan, candidateIds: ids, stateDir: STATE_DIR });
     process.stdout.write(JSON.stringify(transaction));
@@ -3757,6 +3801,14 @@ async function runProjectPathCommand(config) {
     const transactionFile = getCommandArgument('--transaction-file');
     const transaction = readManagedPathJson(transactionFile, path.join(stateRoot, 'transactions'));
     if (!transaction) throw new Error('복구 기록을 읽을 수 없습니다.');
+    const driveRoots = verifiedProfileDriveRoots(config);
+    if (!driveRoots.some(root => isSameOrChildLocalPath(root, transaction.projectRoot))) throw new Error('현재 연결된 NAS Drive 프로젝트가 아닙니다.');
+    const transactionDir = path.dirname(path.resolve(transactionFile));
+    for (const item of transaction.files || []) {
+      if (item.backup && (!isSameOrChildLocalPath(transactionDir, item.backup) || !fs.existsSync(item.backup) || fs.lstatSync(item.backup).isSymbolicLink())) {
+        throw new Error('안전하지 않은 복구 기록입니다.');
+      }
+    }
     const result = undoProjectPathTransaction(transaction);
     process.stdout.write(JSON.stringify(result));
     return true;

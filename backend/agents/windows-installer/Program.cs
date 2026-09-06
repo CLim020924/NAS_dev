@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.11.2.0")]
-[assembly: AssemblyFileVersion("1.11.2.0")]
+[assembly: AssemblyVersion("1.11.3.0")]
+[assembly: AssemblyFileVersion("1.11.3.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.11.2";
+        internal const string ProductVersion = "1.11.3";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
@@ -135,12 +135,13 @@ namespace NasDriveSetup
                 var previewPlan = new Dictionary<string, object>
                 {
                     { "projectRoot", @"C:\Users\Preview\NAS Drive\sample-project" },
-                    { "summary", new Dictionary<string, object> { { "safe", 2 }, { "review", 1 }, { "unresolved", 1 } } },
+                    { "scanComplete", true },
+                    { "summary", new Dictionary<string, object> { { "safe", 2 }, { "review", 1 }, { "unresolved", 1 }, { "skippedUnavailable", 3 }, { "skippedEncoding", 1 }, { "skippedSensitive", 2 } } },
                     { "candidates", new object[]
                         {
-                            new Dictionary<string, object> { { "id", "a" }, { "file", "src\\main.py" }, { "line", 18 }, { "confidence", "safe" }, { "selectedByDefault", true }, { "oldPath", @"C:\Users\OldPC\Desktop\sample-project\data\input.csv" }, { "suggestedPath", @"C:\Users\Preview\NAS Drive\sample-project\data\input.csv" }, { "reason", "프로젝트 내부의 동일한 하위 경로가 확인됨" } },
-                            new Dictionary<string, object> { { "id", "b" }, { "file", "config\\train.yaml" }, { "line", 7 }, { "confidence", "review" }, { "selectedByDefault", false }, { "oldPath", @"D:\Shared\models\labels.json" }, { "suggestedPath", @"C:\Users\Preview\NAS Drive\공유 자료\models\labels.json" }, { "reason", "허용된 NAS Drive 범위에서 유일한 외부 대상이 확인됨" } },
-                            new Dictionary<string, object> { { "id", "c" }, { "file", "tools\\export.py" }, { "line", 42 }, { "confidence", "unresolved" }, { "selectedByDefault", false }, { "oldPath", @"E:\Unknown\output" }, { "suggestedPath", "" }, { "reason", "대상이 없거나 둘 이상이어서 자동 변경하지 않음" } }
+                            new Dictionary<string, object> { { "id", "a" }, { "file", "src\\main.py" }, { "line", 18 }, { "confidence", "safe" }, { "selectedByDefault", true }, { "oldPath", @"C:\Users\OldPC\Desktop\sample-project\data\input.csv" }, { "replacementDisplay", @"C:\Users\Preview\NAS Drive\sample-project\data\input.csv" }, { "reason", "프로젝트 내부의 동일한 하위 경로가 확인됨" } },
+                            new Dictionary<string, object> { { "id", "b" }, { "file", "config\\train.yaml" }, { "line", 7 }, { "confidence", "review" }, { "selectedByDefault", false }, { "oldPath", @"D:\Shared\models\labels.json" }, { "replacementDisplay", @"C:\Users\Preview\NAS Drive\공유 자료\models\labels.json" }, { "reason", "허용된 NAS Drive 범위에서 유일한 외부 대상이 확인됨" } },
+                            new Dictionary<string, object> { { "id", "c" }, { "file", "tools\\export.py" }, { "line", 42 }, { "confidence", "unresolved" }, { "selectedByDefault", false }, { "oldPath", @"E:\Unknown\output" }, { "replacementDisplay", "" }, { "reason", "대상이 없거나 둘 이상이어서 자동 변경하지 않음" } }
                         }
                     }
                 };
@@ -2348,11 +2349,13 @@ namespace NasDriveSetup
     {
         private static readonly Color BrandBlue = Color.FromArgb(26, 86, 219);
         private readonly string agentExe;
-        private readonly Dictionary<string, object> plan;
+        private Dictionary<string, object> plan;
         private readonly ListView candidates = new ListView();
         private readonly Label detail = new Label();
+        private readonly Label summaryLabel = new Label();
         private readonly Button applyButton = new Button();
         private string transactionFile = "";
+        private bool suppressChecks;
 
         internal NativeProjectPathReviewForm(string installedAgentExe, Dictionary<string, object> pathPlan)
         {
@@ -2382,6 +2385,8 @@ namespace NasDriveSetup
             MinimumSize = new Size(900, 620);
             StartPosition = FormStartPosition.CenterParent;
             BackColor = Color.White;
+            KeyPreview = true;
+            KeyDown += HandleShortcut;
 
             var header = new Panel { Dock = DockStyle.Top, Height = 112, BackColor = Color.FromArgb(245, 248, 254) };
             header.Controls.Add(new Label { Text = "프로젝트 경로 확인", Location = new Point(28, 18), Size = new Size(500, 34), Font = Program.UiFont("Segoe UI Semibold", 18f), ForeColor = Color.FromArgb(30, 42, 68) });
@@ -2392,14 +2397,15 @@ namespace NasDriveSetup
             Dictionary<string, object> summary = null;
             object rawSummary;
             if (plan.TryGetValue("summary", out rawSummary)) summary = rawSummary as Dictionary<string, object>;
-            var summaryLabel = new Label {
-                Text = "안전한 자동 변경  " + Value(summary, "safe") + "개     직접 확인  " + Value(summary, "review") + "개     변경 안 함  " + Value(summary, "unresolved") + "개",
-                Location = new Point(28, 128), Size = new Size(980, 32), Font = Program.UiFont("Segoe UI Semibold", 10.5f), ForeColor = Color.FromArgb(34, 51, 78)
-            };
+            summaryLabel.Text = "안전한 자동 변경  " + Value(summary, "safe") + "개     직접 확인  " + Value(summary, "review") + "개     변경 안 함  " + Value(summary, "unresolved") + "개";
+            summaryLabel.Location = new Point(28, 128);
+            summaryLabel.Size = new Size(980, 32);
+            summaryLabel.Font = Program.UiFont("Segoe UI Semibold", 10.5f);
+            summaryLabel.ForeColor = Color.FromArgb(34, 51, 78);
             Controls.Add(summaryLabel);
 
             candidates.Location = new Point(28, 166);
-            candidates.Size = new Size(984, 365);
+            candidates.Size = new Size(984, 320);
             candidates.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             candidates.View = View.Details;
             candidates.FullRowSelect = true;
@@ -2410,32 +2416,28 @@ namespace NasDriveSetup
             candidates.Columns.Add("기존 경로", 300);
             candidates.Columns.Add("이 PC 경로", 330);
             candidates.SelectedIndexChanged += (sender, args) => ShowSelectedDetail();
-            object rawCandidates;
-            object[] rows = plan.TryGetValue("candidates", out rawCandidates) ? rawCandidates as object[] : null;
-            if (rows != null) foreach (object row in rows)
-            {
-                var item = row as Dictionary<string, object>;
-                if (item == null) continue;
-                string confidence = Value(item, "confidence");
-                string status = confidence == "safe" ? "자동 적용" : confidence == "review" ? "확인 필요" : "변경 안 함";
-                var view = new ListViewItem(Value(item, "file") + ":" + Value(item, "line"));
-                view.SubItems.Add(status);
-                view.SubItems.Add(Value(item, "oldPath"));
-                view.SubItems.Add(Value(item, "suggestedPath"));
-                view.Checked = BoolValue(item, "selectedByDefault");
-                view.Tag = item;
-                if (confidence == "unresolved") view.ForeColor = Color.DimGray;
-                candidates.Items.Add(view);
-            }
+            candidates.ItemCheck += (sender, args) => {
+                if (suppressChecks) return;
+                var item = candidates.Items[args.Index].Tag as Dictionary<string, object>;
+                if (Value(item, "confidence") == "unresolved" && args.NewValue == CheckState.Checked) args.NewValue = CheckState.Unchecked;
+                BeginInvoke(new Action(UpdateApplyButton));
+            };
+            PopulateCandidates();
             Controls.Add(candidates);
 
-            detail.Location = new Point(28, 544);
-            detail.Size = new Size(984, 54);
+            detail.Location = new Point(28, 496);
+            detail.Size = new Size(984, 46);
             detail.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             detail.Font = Program.UiFont("Segoe UI", 9f);
             detail.ForeColor = Color.FromArgb(70, 78, 94);
             detail.Text = candidates.Items.Count == 0 ? "변경이 필요한 고정 경로를 찾지 못했습니다." : "항목을 선택하면 판단 근거를 볼 수 있습니다.";
             Controls.Add(detail);
+
+            Controls.Add(UtilityButton("안전 항목만", 28, SelectSafe));
+            Controls.Add(UtilityButton("선택 해제", 154, ClearSelection));
+            Controls.Add(UtilityButton("위치 직접 선택", 280, ChooseTarget));
+            Controls.Add(UtilityButton("다시 분석", 424, Reanalyze));
+            Controls.Add(UtilityButton("단축키", 550, ShowShortcutHelp));
 
             var keep = new Button { Text = "변경하지 않고 열기", Location = new Point(28, 628), Size = new Size(190, 44), Anchor = AnchorStyles.Bottom | AnchorStyles.Left, Font = Program.UiFont("Segoe UI Semibold", 9.5f) };
             keep.Click += (sender, args) => { OpenProject(); Close(); };
@@ -2455,6 +2457,97 @@ namespace NasDriveSetup
             applyButton.Font = Program.UiFont("Segoe UI Semibold", 9.5f);
             applyButton.Click += (sender, args) => ApplyOrUndo();
             Controls.Add(applyButton);
+            UpdateApplyButton();
+        }
+
+        private Button UtilityButton(string text, int x, Action action)
+        {
+            var button = new Button { Text = text, Location = new Point(x, 558), Size = new Size(116, 36), Anchor = AnchorStyles.Bottom | AnchorStyles.Left, Font = Program.UiFont("Segoe UI Semibold", 9f), FlatStyle = FlatStyle.Flat, BackColor = Color.White };
+            button.FlatAppearance.BorderColor = Color.FromArgb(204, 212, 226);
+            button.Click += (sender, args) => action();
+            return button;
+        }
+
+        private void PopulateCandidates()
+        {
+            suppressChecks = true;
+            candidates.Items.Clear();
+            object rawCandidates;
+            object[] rows = plan.TryGetValue("candidates", out rawCandidates) ? rawCandidates as object[] : null;
+            if (rows != null) foreach (object row in rows)
+            {
+                var item = row as Dictionary<string, object>;
+                if (item == null) continue;
+                string confidence = Value(item, "confidence");
+                string status = confidence == "safe" ? "자동 적용" : confidence == "review" ? "확인 필요" : "변경 안 함";
+                var view = new ListViewItem(Value(item, "file") + ":" + Value(item, "line"));
+                view.SubItems.Add(status);
+                view.SubItems.Add(Value(item, "oldPath"));
+                view.SubItems.Add(Value(item, "replacementDisplay"));
+                view.Checked = BoolValue(item, "selectedByDefault");
+                view.Tag = item;
+                if (confidence == "unresolved") view.ForeColor = Color.DimGray;
+                candidates.Items.Add(view);
+            }
+            suppressChecks = false;
+            UpdateSummary();
+            UpdateApplyButton();
+        }
+
+        private void UpdateSummary()
+        {
+            Dictionary<string, object> summary = null; object raw;
+            if (plan.TryGetValue("summary", out raw)) summary = raw as Dictionary<string, object>;
+            summaryLabel.Text = "안전 " + Value(summary, "safe") + "   직접 확인 " + Value(summary, "review") + "   변경 안 함 " + Value(summary, "unresolved")
+                + "   |   온라인 전용 제외 " + Value(summary, "skippedUnavailable") + "   인코딩 제외 " + Value(summary, "skippedEncoding") + "   민감 파일 제외 " + Value(summary, "skippedSensitive")
+                + (BoolValue(plan, "scanComplete") ? "" : "   |   일부만 분석됨");
+        }
+
+        private int CheckedCount() { int count = 0; foreach (ListViewItem item in candidates.Items) if (item.Checked) count++; return count; }
+        private void UpdateApplyButton() { if (string.IsNullOrWhiteSpace(transactionFile)) applyButton.Text = CheckedCount() + "개 경로 적용하고 열기"; }
+        private void SelectSafe() { suppressChecks = true; foreach (ListViewItem view in candidates.Items) view.Checked = Value(view.Tag as Dictionary<string, object>, "confidence") == "safe"; suppressChecks = false; UpdateApplyButton(); }
+        private void ClearSelection() { suppressChecks = true; foreach (ListViewItem view in candidates.Items) view.Checked = false; suppressChecks = false; UpdateApplyButton(); }
+
+        private void ChooseTarget()
+        {
+            if (candidates.SelectedItems.Count != 1) { MessageBox.Show("경로 항목 하나를 먼저 선택해 주세요.", "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            var item = candidates.SelectedItems[0].Tag as Dictionary<string, object>;
+            string target = "";
+            var choice = MessageBox.Show("파일을 선택하려면 예, 폴더를 선택하려면 아니요를 누르세요.", "대상 종류", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (choice == DialogResult.Cancel) return;
+            if (choice == DialogResult.Yes) { using (var picker = new OpenFileDialog { Title = "NAS Drive 안의 대상 파일 선택", CheckFileExists = true }) if (picker.ShowDialog(this) == DialogResult.OK) target = picker.FileName; }
+            else { using (var picker = new FolderBrowserDialog { Description = "NAS Drive 안의 대상 폴더 선택", ShowNewFolderButton = false }) if (picker.ShowDialog(this) == DialogResult.OK) target = picker.SelectedPath; }
+            if (string.IsNullOrWhiteSpace(target)) return;
+            try
+            {
+                plan = RunAgentJson("--path-map-json --plan-file " + Program.QuoteArgument(Value(plan, "planFile")) + " --candidate-id " + Program.QuoteArgument(Value(item, "id")) + " --target-path " + Program.QuoteArgument(target));
+                PopulateCandidates();
+            }
+            catch (Exception error) { MessageBox.Show(error.Message, "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        private void Reanalyze()
+        {
+            if (!string.IsNullOrWhiteSpace(transactionFile)) { MessageBox.Show("먼저 방금 변경을 되돌리거나 창을 다시 여세요.", "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            try { plan = RunAgentJson("--path-plan-json --project-root " + Program.QuoteArgument(Value(plan, "projectRoot"))); PopulateCandidates(); detail.Text = "현재 디스크 상태로 다시 분석했습니다."; }
+            catch (Exception error) { MessageBox.Show(error.Message, "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        private void ShowShortcutHelp()
+        {
+            MessageBox.Show("Ctrl+Enter  선택 경로 적용\nCtrl+Z  방금 변경 되돌리기\nCtrl+A  변경 가능한 항목 모두 선택\nCtrl+Shift+A  선택 해제\nSpace  선택 행 체크 전환\nF5  다시 분석\nF1  단축키 보기\nEsc  닫기", "프로젝트 경로 단축키", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void HandleShortcut(object sender, KeyEventArgs args)
+        {
+            if (args.Control && args.KeyCode == Keys.Enter) { ApplyOrUndo(); args.SuppressKeyPress = true; }
+            else if (args.Control && args.KeyCode == Keys.Z) { if (!string.IsNullOrWhiteSpace(transactionFile)) ApplyOrUndo(); args.SuppressKeyPress = true; }
+            else if (args.Control && args.Shift && args.KeyCode == Keys.A) { ClearSelection(); args.SuppressKeyPress = true; }
+            else if (args.Control && args.KeyCode == Keys.A) { suppressChecks = true; foreach (ListViewItem view in candidates.Items) view.Checked = Value(view.Tag as Dictionary<string, object>, "confidence") != "unresolved"; suppressChecks = false; UpdateApplyButton(); args.SuppressKeyPress = true; }
+            else if (args.KeyCode == Keys.F5) { Reanalyze(); args.SuppressKeyPress = true; }
+            else if (args.KeyCode == Keys.F1) { ShowShortcutHelp(); args.SuppressKeyPress = true; }
+            else if (args.KeyCode == Keys.Escape) Close();
+            else if (args.KeyCode == Keys.Space && candidates.Focused) { suppressChecks = true; foreach (ListViewItem view in candidates.SelectedItems) if (Value(view.Tag as Dictionary<string, object>, "confidence") != "unresolved") view.Checked = !view.Checked; suppressChecks = false; UpdateApplyButton(); args.SuppressKeyPress = true; }
         }
 
         private void ShowSelectedDetail()
@@ -2475,7 +2568,7 @@ namespace NasDriveSetup
             {
                 string output = process.StandardOutput.ReadToEnd();
                 string error = process.StandardError.ReadToEnd();
-                if (!process.WaitForExit(60000)) { try { process.Kill(); } catch { } throw new InvalidOperationException("경로 확인 작업 시간이 초과되었습니다."); }
+                if (!process.WaitForExit(120000)) { try { process.Kill(); } catch { } throw new InvalidOperationException("경로 확인 작업 시간이 초과되었습니다."); }
                 if (process.ExitCode != 0) throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? "경로 작업을 완료하지 못했습니다." : error);
                 return new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 }.DeserializeObject(output) as Dictionary<string, object> ?? new Dictionary<string, object>();
             }
@@ -2489,18 +2582,20 @@ namespace NasDriveSetup
                 {
                     RunAgentJson("--path-undo-json --transaction-file " + Program.QuoteArgument(transactionFile));
                     transactionFile = "";
-                    applyButton.Text = "선택한 경로 적용하고 열기";
+                    UpdateApplyButton();
                     MessageBox.Show("변경 전 내용으로 안전하게 되돌렸습니다.", "프로젝트 경로", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
                 var ids = new List<string>();
+                int reviewCount = 0;
                 foreach (ListViewItem view in candidates.Items)
                 {
                     if (!view.Checked) continue;
                     var item = view.Tag as Dictionary<string, object>;
-                    if (Value(item, "confidence") != "unresolved") ids.Add(Value(item, "id"));
+                    if (Value(item, "confidence") != "unresolved") { ids.Add(Value(item, "id")); if (Value(item, "confidence") == "review") reviewCount++; }
                 }
                 if (ids.Count == 0) { OpenProject(); Close(); return; }
+                if (reviewCount > 0 && MessageBox.Show("직접 확인이 필요한 경로 " + reviewCount + "개가 포함되어 있습니다. 표시된 대상이 맞을 때만 계속하세요.", "경로 적용 확인", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
                 string planFile = Value(plan, "planFile");
                 var result = RunAgentJson("--path-apply-json --plan-file " + Program.QuoteArgument(planFile) + " --candidate-ids " + Program.QuoteArgument(string.Join(",", ids.ToArray())));
                 transactionFile = Value(result, "transactionFile");
