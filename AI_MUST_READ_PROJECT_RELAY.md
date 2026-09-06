@@ -1070,3 +1070,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 강제 한도: 애플리케이션 계산만으로는 Docker·로그·관리자 직접 쓰기를 막지 못하므로 최종 구현은 ext4 project quota 같은 파일시스템 강제 한도와 애플리케이션 용량 원장을 함께 쓰는 것이 안전하다. 현재 project quota가 비활성이라 이를 도입하는 일회성 유지보수 단계와 재부팅 검증이 먼저 필요하다.
 - 구현 영향: 다중 볼륨 registry, 볼륨별 전체·사용·예약·할당 가능 용량, 계정/파일별 배치 위치, 업로드·공유·검색·휴지통·버전·Agent 동기화·backup의 교차 볼륨 경계, 볼륨 장애 시 읽기/쓰기 상태를 함께 설계해야 한다. 초기에는 기존 `/mnt/nas` 데이터를 이동하지 않고 신규 계정 또는 선택한 큰 폴더만 보조 볼륨에 배치하는 방식이 가장 안전하다.
 - 검증 및 상태: 파일시스템과 코드 구조를 읽기 전용으로 확인했으며 파티션, mount, quota, 사용자 데이터, 서비스 설정은 변경하지 않았다. 이 항목은 설계 검토 완료·구현 미착수 상태다. 다음 안전 조치는 보호 여유 공간과 보조 볼륨 배치 대상을 확정한 뒤 유지보수 창에서 project quota 기반을 먼저 준비하는 것이다.
+
+## 2026-09-06 보류 작업 원장 및 계정별 파일 관리자 경로 격리
+
+- 사용자 요청: 앞으로 미룬 문제를 계속 기록할 `보류 작업` 시트를 만들고, A 계정에서 b 폴더를 연 뒤 로그아웃해 K 계정으로 로그인했을 때 A 계정의 b 경로가 파일 관리자에 남았던 계정 경계 문제를 해결한다.
+- 원인: 서버는 새 로그인 세션의 `getAccessBasePath`와 `resolveInside`로 파일 접근을 다시 제한해 A 계정 파일을 K 계정에 보내지 않았지만, 브라우저의 `WindowProvider`가 로그인 화면보다 바깥에서 계속 살아 있었다. 현재 파일 관리자 경로도 모든 계정이 공유하는 `nas_file_manager_path` 키였고 열린 창·작업표시줄 순서·포커스·z-index를 로그아웃이나 계정 전환 때 비우지 않아 이전 계정의 경로 문자열이 남았다.
+- 수정: `windowWorkspaceIdentity.js`에 `userUid → loginId → id → username` 순서의 계정 식별과 계정별 현재 경로 키를 추가했다. legacy 전역 경로 키는 폐기했다. `WindowContext`는 사용자 변경 이벤트와 500ms 보조 검사를 함께 사용해 로그아웃·계정 교체를 감지하고 열린 창, 작업표시줄 순서, 포커스, z-index, 현재 경로를 목적 계정 상태 또는 루트로 함께 전환한다. 일반 로그아웃과 401 강제 로그아웃은 즉시 변경 이벤트를 발생시킨다.
+- 보류 원장: `docs/NAS_PROJECT_LOG.xlsx`에 `보류 작업` 시트를 추가했다. 보류 ID, 등록일, 상태, 기능 ID, 요청·문제, 보류 이유, 현재 확인, 재개 조건, 다음 안전 작업, 관련 기록, 최근 갱신일을 기록하며 상태 선택 목록을 제공한다. 최초 항목은 20GiB quota 전환, 시스템 디스크 1TiB 보조 볼륨, AI 파일 에이전트 3건이다. 재개·완료 시 삭제하거나 새 행을 중복 생성하지 않고 같은 보류 ID의 상태와 근거를 갱신한다. `AGENTS.md`, 메모리 정책, README, Memory_Process, Do_Not_Break, Feature/Relation/Code/Patch/Request/Generated 시트에도 운영 규칙과 이번 변경을 연결했다.
+- 검증: 로컬과 NAS Linux에서 legacy 전역 경로 비상속, A→K 계정 전환, A→로그아웃 루트 초기화 회귀 3/3을 통과했다. 양쪽 production build와 PDF.js API/Worker 4.8.69 검사를 통과했다. workbook은 artifact-tool로 import/edit/export했고 신규·변경 시트를 렌더해 표와 줄바꿈을 확인했으며 formula error 0, replacement character와 `????` 0건, xlsx ZIP 무결성, 상태 validation을 확인했다.
+- 운영 배포: 기능 commit `b0beba1`을 GitHub와 NAS live branch에 clean fast-forward하고 NAS에서 frontend를 다시 빌드했다. PM2 restart/save 뒤 `msp-backend`는 online이며 `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active다. 내부 3030과 공개 HTTPS는 200이다.
+- 남은 확인: 실제 사용자 자격 증명과 파일은 테스트에 사용하지 않았다. 다음 실제 A→K 전환 때 A의 열린 창과 경로가 사라지고 K의 루트 또는 K 전용 저장 경로만 표시되는지 화면에서 한 번 체감 확인한다. 서버 경계와 자동 회귀·build·운영 배포는 완료됐다.
