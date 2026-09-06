@@ -1120,4 +1120,4 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 
 - 순차 구현: M1 핵심 저장/API의 운영 smoke가 통과한 뒤에만 다음 묶음을 시작했다. 노트 `parentId`를 트리 순서와 들여쓰기로 표시하고 목록 우클릭에서 하위 노트를 만들거나 최상위로 이동할 수 있게 했다. 서버는 자기 자신뿐 아니라 모든 자손 아래로 이동하는 순환 구조를 추적해 409 `NOTE_TREE_CYCLE`로 차단한다.
 - 공통 명령: 블록 편집기에서 `/` 또는 Ctrl/Cmd+K로 같은 명령 목록을 열고 본문, 제목 1/2, 글머리표·번호 목록, 인용, 코드 블록, 구분선을 실행한다. 명령 정의·검색과 트리 평탄화는 `noteStudioCommands.js`의 순수 registry로 분리해 마우스·키보드 UI가 같은 동작을 사용한다.
-- 검증: backend 계층/순환 회귀를 포함한 note service 8/8, command 검색·부모 우선 트리·legacy orphan/cycle 가시성 3/3, frontend production build가 통과했다. 로그인된 실화면의 우클릭·한글 IME·slash 위치 검증은 운영 배포 후 남은 육안 gate다.
+- 검증·배포: backend 계층/순환 회귀를 포함한 note service 8/8, command 검색·부모 우선 트리·legacy orphan/cycle 가시성 3/3, NAS frontend production/PDF.js build가 통과했다. commit `7e8caaa`를 GitHub와 NAS clean branch에 반영하고 live `main.4dc2a7ae.js`, 내부·공개 HTTP 200, 필수 서비스 6개 active, PM2 online을 확인했다. 로그인된 실화면의 우클릭·한글 IME·slash 위치 검증은 사용자의 브라우저 세션이 필요해 남은 육안 gate다.
