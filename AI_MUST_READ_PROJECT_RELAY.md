@@ -1282,3 +1282,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 로컬 검증: mock OpenAI pause/resume 2건과 immutable recipient 1건을 추가했고 전체 backend 57개 중 55 pass, 외부 변환 환경 의존 2 skip, 0 fail이다. Node syntax와 frontend production build(`main.3616ee17.js`)가 통과했다. 첫 NAS 검증에서는 신규 recipient 테스트가 root 소유 운영 `backend/data/ai`에 임시 계정을 만들려 해 EACCES로 실패했다. 제품 동작 실패가 아니라 테스트 격리 결함으로 확인해 `AI_AGENT_DATA_ROOT` 테스트 전용 경계를 추가하고 OS 임시 폴더 subprocess로 옮겼다. 실제 OpenAI API와 사용자 파일·친구·채팅 작업은 호출하지 않았다. `docs/NAS_PROJECT_LOG.xlsx`는 artifact-tool로 관련 10개 시트를 갱신하고 formula error 0, 한글/문자 깨짐 0, 변경 범위 렌더와 출력 hash 일치를 확인했다.
 - 운영 반영 경계: commits `74acbab`, `3068d0a`를 GitHub에 push하고 NAS checkout에도 clean fast-forward했다. NAS Linux 전체 57/57이 통과해 문서 변환 통합 2건도 실제 성공했다. 첫 실행에서 운영 data 소유권을 침범한 테스트 격리 문제도 수정 후 NAS에서 통과했다. 그러나 frontend build 도중 NAS가 Tailscale 목록에는 active로 남은 채 ping·SSH에 응답하지 않았고 공개 origin도 HTTP 530이 됐다. 따라서 `/var/www/html` live bundle 반영, PM2 재시작, 서비스·HTTP·로그인 UI 최종 검증은 수행하지 않았으며 완료로 표시하지 않는다.
 - 남은 작업: NAS 전원·네트워크가 복귀하면 같은 clean checkout의 build 상태를 먼저 확인하고 live 정적 배포·PM2·서비스·HTTP·로그인 화면을 마친다. 그 다음 deterministic prompt-injection/최신 사용자 의도 guardrail, 정확한 token reservation, 관리자·노트·문서 전용 도구를 진행한다. 제공된 관리자 자격 증명은 채팅 밖 파일·로그·Git·릴레이·워크북에 저장하거나 출력하지 않는다.
+
+## 2026-09-07 미구현 핵심 목록의 근거와 현재 상태 정정
+
+- 사용자 질문: 이전 답변의 미구현 핵심 8개 항목을 어디에서 미구현이라고 말했는지 확인한다.
+- 근거: 해당 목록은 사용자 발언을 인용한 것이 아니라 `docs/AUDITS/2026-09-06_FINAL_VALIDATION.md`의 판정표 16~25행, AI 위험 37~45행, 권장 순서 57~64행과 이 릴레이의 2026-09-06 최종 교차 검증 기록을 요약한 것이다.
+- 현재 정정: 목록 작성 뒤 `AI-AGENT-DURABLE-RUN` 작업으로 1번 중 exact-call 승인 후 대화 재개, stale 실행/응답 복구, 대상 사용자 UID 고정은 구현·NAS Linux 57/57 검증까지 완료됐다. deterministic prompt-injection/최신 사용자 의도 guardrail은 아직 남아 있다. 2~8번은 최종 감사에 기록된 완료 경계가 그대로이며, 구현 완료로 바뀐 증거가 생기면 감사 문서와 보류 원장을 함께 갱신한다.
+- 변경/검증: 이번 요청에서는 코드·설정·운영 서비스를 변경하지 않고 기록 위치와 이후 구현 내역만 대조했다. NAS live 배포 중단 경계도 유지한다.
