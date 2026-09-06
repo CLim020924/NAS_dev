@@ -9,9 +9,12 @@ let previousCpuSample = null;
 
 const clampPercent = (value) => Math.max(0, Math.min(100, Math.round(Number(value) * 10) / 10));
 
+// Linux pseudo-files can report size 0 and fs.promises.readFile may return only
+// the first generated chunk (observed with /proc/cpuinfo on this NAS).
+// These inputs are all tiny, so a synchronous complete read is intentional.
 const readText = async (filePath) => {
   try {
-    return (await fs.promises.readFile(filePath, 'utf8')).trim();
+    return fs.readFileSync(filePath, 'utf8').trim();
   } catch (err) {
     return '';
   }

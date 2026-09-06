@@ -13,6 +13,11 @@ const cpuInfo = [
 ].join('\n\n');
 assert.strictEqual(_test.parsePhysicalCoreCount(cpuInfo), 2);
 
+const fourCoreEightThreadCpuInfo = Array.from({ length: 8 }, (_, processor) => (
+  `processor\t: ${processor}\nphysical id\t: 0\ncore id\t\t: ${processor % 4}`
+)).join('\n\n');
+assert.strictEqual(_test.parsePhysicalCoreCount(fourCoreEightThreadCpuInfo), 4);
+
 const flat = _test.flattenBlockDevices([{ name: 'disk0', model: 'Safe Model', children: [{ name: 'disk0p1' }] }]);
 assert.strictEqual(flat[1].model, 'Safe Model');
 
