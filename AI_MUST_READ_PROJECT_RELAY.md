@@ -1,6 +1,6 @@
 # AI 필독 — NAS 프로젝트 작업 인계 및 시작 규칙
 
-최종 갱신: 2026-08-28 — Windows NAS Drive 1.9.17 웹→Explorer placeholder 생성·자동 새로고침 실검증 완료
+최종 갱신: 2026-09-06 — NAS 물리 디스크 인벤토리 및 향후 갱신 규칙 확정
 
 이 문서는 새 대화에서 NAS 프로젝트를 이어가는 AI가 가장 먼저 읽어야 하는 인계 진입점이다. 상세하고 최신인 단일 기억 저장소는 같은 폴더의 `NAS_PROJECT_LOG.xlsx`이며, 이 문서만 읽고 변경을 시작하면 안 된다.
 
@@ -24,6 +24,29 @@
 - PM2 root 프로세스 `msp-backend` online, 변경 뒤 `sudo pm2 save`
 - `filemanager-nas.com`/`www`는 Cloudflare Tunnel, `upload.filemanager-nas.com`은 `1.234.92.152` DNS-only A 레코드다. 관련 작업이 아니면 DNS/nginx/Cloudflare를 변경하지 않는다.
 - OnlyOffice는 Docker host 8080→container 80이며 backend `/onlyoffice`, `/cache` 프록시를 유지한다. HWP는 `/api/hwp/render` server-render-first이고 Viewer effect에서 parent dirty/window state를 반복 변경하지 않는다.
+
+## NAS 물리 디스크 인벤토리 — 필수 유지
+
+확인 기준: 2026-09-06. 아래 두 2TB NVMe는 서로 합쳐진 4TB pool이 아니며 각각 독립된 ext4 파일시스템 역할을 가진다.
+
+| 물리 장치 | 모델·표기 용량 | 파티션·파일시스템 | 현재 역할 | 마운트·식별자 |
+|---|---|---|---|---|
+| `/dev/nvme1n1` | Seagate FireCuda 520 SSD, 2,000,398,934,016 bytes(제조사 2TB) | `p1` vfat 512MiB, `p2` ext4 약 1.8TiB, `p3` swap 약 977MiB | Debian OS, NAS backend checkout, frontend 배포, Docker, PM2, 시스템 로그 | `p1` `/boot/efi` UUID `39CE-F971`; `p2` `/` UUID `62d2e08b-5847-48df-8d99-46100465605b`; `p3` swap UUID `6825d88d-23d0-40c3-8d52-995022b77c85` |
+| `/dev/nvme0n1` | Crucial CT2000P3PSSD8, 2,000,398,934,016 bytes(제조사 2TB) | `p1` ext4 약 1.8TiB | 사용자 파일, 계정 root, backup, upload/Agent 임시 저장소를 포함한 NAS 데이터 전용 | `/mnt/nas`, UUID `5d6f2c61-121b-4ce1-afdb-37d0daf49941`, fstab 옵션 `defaults,nofail` |
+
+2026-09-06 측정값:
+
+- 시스템 `/`: filesystem 1,966,309,933,056 bytes, 사용 165,614,030,848 bytes, 가용 1,700,737,302,528 bytes, `df` 사용률 9%.
+- NAS 데이터 `/mnt/nas`: filesystem 1,967,845,998,592 bytes, 사용 87,256,711,168 bytes, 가용 1,780,552,622,080 bytes, `df` 사용률 5%.
+- `/etc/fstab`은 현재 UUID가 아니라 `/dev/nvme1n1p2`, `/dev/nvme1n1p1`, `/dev/nvme0n1p1` 장치명으로 기록되어 있다. 디스크 추가·슬롯 변경 시 장치명이 바뀔 위험이 있으므로 먼저 fstab/부팅 영향과 UUID 전환 필요성을 검토하고, 확인 없이 디스크 순서나 mount를 변경하지 않는다.
+
+인수인계 규칙:
+
+1. 물리 디스크 추가·제거·교체, 파티션 변경, filesystem 변경, mount 위치·역할 변경이 있으면 작업 전후에 `lsblk -b -o NAME,SIZE,TYPE,FSTYPE,FSAVAIL,FSUSE%,MOUNTPOINTS,MODEL`, `df -B1`, `findmnt --fstab --evaluate`, `blkid`를 확인한다.
+2. 이 인벤토리 표와 측정일을 실제 상태에 맞게 갱신하고 `NAS_PROJECT_LOG.xlsx`의 `Network_Config` 및 `Do_Not_Break`에도 변경 이유·검증·rollback 정보를 기록한다.
+3. 새 디스크에는 모델, 표기/실제 bytes, 파티션, filesystem, UUID, mount, 담당 데이터, backup 여부, RAID/LVM/pool 관계를 기록한다. 장치명만 신뢰하지 않는다.
+4. 기존 데이터 디스크를 format·mount 변경·pool 편입하거나 데이터를 이동하기 전에는 복구 가능한 backup과 대상 UUID를 다시 확인한다. 새 디스크가 생겼다는 이유만으로 자동 format, RAID/LVM 편입, 기존 데이터 이동을 수행하지 않는다.
+5. 용량 UI와 quota 계산은 사용자 파일이 실제로 있는 `/mnt/nas` filesystem 통계를 사용한다. 시스템 `/`의 남는 용량을 NAS 사용자 할당 가능량에 합산하지 않는다.
 
 ## NAS Drive 구현 릴레이
 
