@@ -1,6 +1,6 @@
 # AI 필독 — NAS 프로젝트 작업 인계 및 시작 규칙
 
-최종 갱신: 2026-09-06 — NAS 물리 디스크 인벤토리 및 향후 갱신 규칙 확정
+최종 갱신: 2026-09-06 — 실행형 NAS AI 에이전트 1차 도구·승인·비용 경계 구현
 
 이 문서는 새 대화에서 NAS 프로젝트를 이어가는 AI가 가장 먼저 읽어야 하는 인계 진입점이다. 상세하고 최신인 단일 기억 저장소는 같은 폴더의 `NAS_PROJECT_LOG.xlsx`이며, 이 문서만 읽고 변경을 시작하면 안 된다.
 
@@ -1250,3 +1250,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 상태별 키 우선순위: slash menu가 열리면 Tab은 후보 확정, 목록에서는 중첩, 표에서는 다음 셀, 코드 편집에서는 들여쓰기, Python edit/command mode에서는 Jupyter 호환 동작, dialog/form에서는 일반 focus 이동을 우선한다. 빈 목록 항목의 Enter는 중첩이면 먼저 outdent하고 최상위이면 목록을 종료한다. 전역·rich text·Monaco·Python adapter가 같은 keydown을 이중 처리하지 않게 가장 안쪽 활성 문맥 하나만 명령을 소유한다.
 - 추가 조사 목록: Ctrl+B/I/U, Ctrl+Shift+S, Ctrl+E/K/M, Enter/Shift+Enter, 목록 종료·중첩, `@`·`[[`·`+` mention/link, 표 Tab, Shift+F10 context menu, F1 문맥별 도움말을 원장에 추가했다. 슬래시 위치·IME·비동기 취소·접근성·포인터 깜빡임·input rule round-trip·Tab 상태 우선순위·브라우저/OS/Monaco/Python 충돌을 독립 E2E 항목으로 만들었다.
 - 기록과 다음 gate: master `NAS_PROJECT_LOG.xlsx`의 Patch/Request와 전용 `NAS_NOTE_STUDIO_SPEC.xlsx`의 Decisions/Keyboard/Slash/Test/Implementation/Source/Change에 모두 `조사·설계 완료 / 구현 전`으로 기록했다. 다음 단계는 Dialog를 제거하고 프로젝트 소유 Tiptap Suggestion extension을 작게 구현한 뒤, 로그인된 실제 브라우저에서 한글 IME·DPI/zoom·키보드·포인터·스크린리더 E2E를 통과시키는 것이다.
+
+## 2026-09-06 실행형 NAS AI 에이전트 1차 구현
+
+- 사용자 요청: 기존 AI처럼 계획만 안내하거나 실제 대화를 기억한다고 꾸미지 않고, ChatGPT 에이전트처럼 현재 로그인 사용자가 NAS에서 할 수 있는 파일·친구·채팅 작업을 실제 수행한다. 관리자/마스터도 자신의 서버 권한 범위에서 사용할 수 있어야 하며, 향후 Python과 다른 언어 프로젝트의 오류 진단·실행으로 확장한다. OpenAI API 비용이 발생하므로 자동 테스트에서 실 API를 소비하지 않는다.
+- 확정 원인: 기존 `backend/aiAgentRoutes.js`는 최근 20개 메시지를 평문 prompt로 합치고 OpenAI 응답 텍스트만 받았다. tool schema와 function-call 실행 반복이 전혀 없었고 system prompt가 파일 변경을 직접 수행하지 말라고 명시했다. 따라서 모델이 NAS API를 호출할 방법이 없었고, 긴 대화의 정확한 문장도 검색할 수 없어 기억을 추측했다.
+- 1차 실행 도구: Responses API strict function tools로 폴더 목록, 파일명 검색, 텍스트/코드 읽기, 최대 5000개 계정별 AI 대화 키워드 검색, 폴더 생성, 텍스트 새 작성/추가, 파일·폴더 복사/이동/휴지통, 수정일 기준 날짜·월 폴더 정리, 친구 요청, 차단/해제, 채팅 메시지, NAS 파일·폴더 채팅 첨부까지 15개 도구를 제공한다. OpenAI가 직접 filesystem이나 DB를 만지지 않고 현재 브라우저의 로그인 cookie로 고정된 내부 NAS API만 호출하므로 기존 친구 관계·채팅 참가자·quota·휴지통·계정 root 검사가 매 실행마다 다시 적용된다.
+- 승인과 감사: 계정별 `ask_each`, `auto_safe`, `auto_reversible`, `auto_all` 네 모드를 제공한다. safe는 폴더/텍스트, reversible은 복사·이동·30일 휴지통, external은 친구·차단·채팅/전송이다. 모든 변경은 call ID idempotency key와 pending/executing/completed/failed/rejected 상태, 실제 결과와 오류를 계정별 action 원장에 남긴다. 덮어쓰기는 `.ai_backups`에 기존 파일을 보존한다. UI는 모델이 만든 가짜 진행 단계가 아니라 반환된 실제 tool event와 승인 대기 작업의 승인·거절을 표시한다.
+- 절대 자동화 금지: `auto_all`이어도 영구 삭제, 계정 삭제, 역할·용량·보안 설정 변경, credential/비밀 조회, 임의 shell·코드 실행은 자동화하지 않는다. 관리 기능은 도메인별 전용 tool과 서버 API 권한 검사를 추가한 뒤만 연다. 대상 사용자는 표시 이름/로그인 ID가 정확히 한 명일 때만 확정하며 중복 이름이면 로그인 ID를 다시 요구한다.
+- 비용 경계: 기본 모델 `gpt-4.1-mini`를 유지하고 최근 대화 8개를 항목당 1200자로 제한하며 정확한 오래된 대화는 검색 tool로 가져온다. `store:false`, 병렬 tool call 비활성, 요청당 output 900 token, 최대 8 tool call·6 turn, 계정별 기본 일일 50,000 token 상한과 실제 input/output/total usage 원장을 추가했다. 단위 테스트는 mock fetch로 Responses function call 왕복을 검사해 실제 OpenAI API 호출은 0회였다.
+- 로컬 검증: 신규 AI 단위 4/4, 전체 backend 49 pass, 외부 문서 변환 조건부 2 skip과 Windows 권한상 symlink 1 skip, Node syntax, `git diff --check`, frontend production build와 PDF.js API/Worker 4.8.69 검증을 통과했다. 로컬의 중복 ESLint plugin 설치 문제 때문에 운영 빌드는 `DISABLE_ESLINT_PLUGIN=true`로 수행했으며 컴파일 자체는 성공했다.
+- 다음 단계와 보류: 운영 NAS 배포, PM2/HTTP, 로그인된 실제 계정에서 파일 검색→승인→실행, 대화 검색, 친구·채팅·첨부 전송 UI E2E가 먼저다. 그 뒤 날짜별 대량 정리의 전체 preflight/rollback, Note Studio·Document Workspace, 관리자 설정 tool을 작은 도메인별로 추가한다. Python/다언어는 `PENDING-MANAGED-WORKER-CGROUP-2026-09-06`의 non-root cgroup v2, network none, time/PID/RAM/CPU/disk/output 제한과 자원 admission이 완성되기 전 실행 tool로 노출하지 않는다.

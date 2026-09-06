@@ -80,5 +80,9 @@ module.exports = {
   AI_PROVIDER: text('AI_PROVIDER', 'openai'),
   OPENAI_API_KEY: text('OPENAI_API_KEY', ''),
   OPENAI_MODEL: text('OPENAI_MODEL', 'gpt-4.1-mini'),
+  AI_MAX_OUTPUT_TOKENS: number('AI_MAX_OUTPUT_TOKENS', 900),
+  AI_MAX_TOOL_CALLS: number('AI_MAX_TOOL_CALLS', 8),
+  AI_MAX_AGENT_TURNS: number('AI_MAX_AGENT_TURNS', 6),
+  AI_DEFAULT_DAILY_TOKEN_LIMIT: number('AI_DEFAULT_DAILY_TOKEN_LIMIT', 50000),
   AI_ENABLED: bool('AI_ENABLED', false) && !!text('OPENAI_API_KEY', ''),
 };

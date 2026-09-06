@@ -1,11 +1,13 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const config = require('./config/env');
 const {
   getAiStatus,
   summarizeMeetingMessages,
+  callOpenAIAgent,
 } = require('./services/aiService');
 const {
   appendMessages,
@@ -15,7 +17,16 @@ const {
   updateAction,
   getPreferences,
   setPreferences,
+  getUsage,
+  recordUsage,
 } = require('./aiAgentStore');
+const {
+  TOOL_DEFINITIONS,
+  normalizePreferences,
+  createPlatformCaller,
+  executeAction: executeRuntimeAction,
+  runTool,
+} = require('./aiAgentRuntime');
 const {
   normalizeQuotaFields,
   findMemberByAnyId,
@@ -238,9 +249,13 @@ const buildAgentSystemPrompt = (user, preferences = {}) => {
     '항상 한국어로 답한다.',
     `현재 사용자: ${user.nickname || user.displayName || user.loginId || user.id}`,
     `현재 권한: ${role}`,
-    '너는 서버가 제공한 컨텍스트와 사용자가 접근 가능한 자료만 근거로 답한다.',
-    '파일 생성/수정/삭제/이동은 직접 수행했다고 말하지 말고, 승인 가능한 작업 계획이 필요하다고 안내한다.',
-    '위험하거나 범위가 큰 작업은 단계별로 나누고 먼저 확인을 받는다.',
+    '너는 서버가 제공한 도구를 사용해 실제 NAS 작업을 수행하는 실행형 에이전트다.',
+    '조회가 필요하면 추측하지 말고 반드시 조회 도구를 사용한다. 과거 대화의 정확한 문장을 묻는 경우 대화 검색 도구를 사용한다.',
+    '파일·친구·채팅 작업은 반드시 해당 도구로만 수행한다. 도구 결과가 completed일 때만 완료했다고 말한다.',
+    '도구 결과가 pending_approval이면 작업이 승인 대기 중이라고 정확히 말하고 작업 이름을 알려준다.',
+    '지원 도구가 없는 작업은 할 수 있다고 꾸미지 말고, 현재 불가능한 범위와 필요한 다음 구현을 명시한다.',
+    '영구 삭제, 계정 삭제, 역할·용량·보안 설정 변경, 비밀정보 조회, 임의 명령·코드 실행은 절대 시도하지 않는다.',
+    `현재 승인 모드: ${preferences.approvalMode || 'ask_each'}`,
     preferences.tone ? `사용자 선호 말투: ${preferences.tone}` : '',
   ].filter(Boolean).join('\n');
 };
@@ -261,7 +276,8 @@ router.get('/ai/history', (req, res) => {
     res.json({
       messages: listMessages(user, Number(req.query.limit) || 80),
       actions: listActions(user).slice(0, 50),
-      preferences: getPreferences(user),
+      preferences: normalizePreferences(getPreferences(user)),
+      usage: getUsage(user),
     });
   } catch (err) {
     res.status(err.status || 401).json({ error: err.message });
@@ -271,7 +287,8 @@ router.get('/ai/history', (req, res) => {
 router.patch('/ai/preferences', (req, res) => {
   try {
     const user = getUserFromRequest(req);
-    res.json({ preferences: setPreferences(user, req.body || {}) });
+    const allowed = normalizePreferences({ ...getPreferences(user), ...(req.body || {}) });
+    res.json({ preferences: setPreferences(user, allowed) });
   } catch (err) {
     res.status(err.status || 401).json({ error: err.message });
   }
@@ -306,13 +323,27 @@ router.post('/ai/actions', (req, res) => {
   }
 });
 
-router.post('/ai/actions/:actionId/execute', (req, res) => {
+router.post('/ai/actions/:actionId/execute', async (req, res) => {
   try {
     const user = getUserFromRequest(req);
-    const action = executeAction(user, req.params.actionId);
+    const action = await executeRuntimeAction(user, req.params.actionId, {
+      platformCall: createPlatformCaller(getToken(req)),
+    });
     res.json({ action });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/ai/actions/:actionId/reject', (req, res) => {
+  try {
+    const user = getUserFromRequest(req);
+    const action = listActions(user).find((item) => item.actionId === req.params.actionId);
+    if (!action) return res.status(404).json({ error: 'AI 작업을 찾을 수 없습니다.' });
+    if (action.status !== 'pending') return res.status(409).json({ error: '승인 대기 중인 작업만 거절할 수 있습니다.' });
+    return res.json({ action: updateAction(user, action.actionId, { status: 'rejected', rejectedAt: new Date().toISOString() }) });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -341,19 +372,31 @@ router.post('/ai/chat', async (req, res) => {
       contextLines.push(`회의 메시지 요약:\n${summary}`);
     }
 
-    const preferences = getPreferences(user);
-    const history = listMessages(user, 20).map((item) => `${item.role}: ${item.content}`).join('\n');
+    const preferences = normalizePreferences(getPreferences(user));
+    const today = new Date().toISOString().slice(0, 10);
+    const todayUsage = getUsage(user).days?.[today] || { totalTokens: 0 };
+    if (Number(todayUsage.totalTokens || 0) >= preferences.dailyTokenLimit) {
+      return res.status(429).json({ error: '오늘 설정한 AI 토큰 한도에 도달했습니다. AI 설정에서 한도를 조정할 수 있습니다.' });
+    }
+    const history = listMessages(user, 8).map((item) => ({ role: item.role, content: String(item.content || '').slice(0, 1200) }));
     const prompt = [
-      history ? `최근 대화:\n${history}` : '',
       contextLines.length ? `서버 컨텍스트:\n${contextLines.join('\n\n')}` : '',
       `사용자 요청:\n${message}`,
     ].filter(Boolean).join('\n\n');
 
-    const { callOpenAIResponses } = require('./services/aiService');
-    const answer = await callOpenAIResponses({
+    const agentRunId = crypto.randomUUID();
+    const agentResult = await callOpenAIAgent({
       systemPrompt: buildAgentSystemPrompt(user, preferences),
-      userPrompt: prompt,
+      input: [...history, { role: 'user', content: prompt }],
+      tools: TOOL_DEFINITIONS,
+      onToolCall: (name, args, callId) => runTool(user, name, args, {
+        callId,
+        idempotencyKey: `${agentRunId}:${callId}`,
+        platformCall: createPlatformCaller(getToken(req)),
+      }),
     });
+    const answer = agentResult.text;
+    recordUsage(user, agentResult.usage);
 
     const saved = appendMessages(user, [
       { role: 'user', content: message, createdAt: new Date().toISOString(), context },
@@ -364,8 +407,13 @@ router.post('/ai/chat', async (req, res) => {
       answer,
       messages: saved.slice(-80),
       actions: listActions(user).slice(0, 50),
+      toolEvents: agentResult.events,
+      usage: getUsage(user),
     });
   } catch (err) {
+    try {
+      if (err.usage) recordUsage(getUserFromRequest(req), err.usage);
+    } catch (usageErr) {}
     res.status(err.status || 500).json({ error: err.message || 'AI 요청에 실패했습니다.' });
   }
 });

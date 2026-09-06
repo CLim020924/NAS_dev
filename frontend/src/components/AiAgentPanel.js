@@ -22,6 +22,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import SettingsIcon from '@mui/icons-material/Settings';
 import axios from 'axios';
 
 const formatSize = (bytes) => {
@@ -50,6 +51,9 @@ const AiAgentPanel = ({ open, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [agentJob, setAgentJob] = useState(null);
+  const [preferences, setPreferences] = useState({ approvalMode: 'ask_each', dailyTokenLimit: 50000 });
+  const [usage, setUsage] = useState({ days: {} });
+  const [toolEvents, setToolEvents] = useState([]);
   const progressTimerRef = useRef(null);
 
   const clearProgressTimer = () => {
@@ -65,16 +69,6 @@ const AiAgentPanel = ({ open, onClose }) => {
     clearProgressTimer();
     const safeSteps = steps.length ? steps : ['요청 준비', '처리 중', '완료'];
     setAgentJob({ title, steps: safeSteps, activeIndex: 0, completed: false });
-    progressTimerRef.current = setInterval(() => {
-      setAgentJob((current) => {
-        if (!current || current.completed) return current;
-        const maxWorkingIndex = Math.max(0, current.steps.length - 2);
-        return {
-          ...current,
-          activeIndex: Math.min(current.activeIndex + 1, maxWorkingIndex),
-        };
-      });
-    }, 850);
   };
 
   const finishAgentJob = (ok = true, finalTitle = '') => {
@@ -102,6 +96,8 @@ const AiAgentPanel = ({ open, onClose }) => {
     setStatus(statusRes.data);
     setMessages(historyRes.data?.messages || []);
     setActions(historyRes.data?.actions || []);
+    setPreferences(historyRes.data?.preferences || { approvalMode: 'ask_each', dailyTokenLimit: 50000 });
+    setUsage(historyRes.data?.usage || { days: {} });
   };
 
   useEffect(() => {
@@ -152,6 +148,8 @@ const AiAgentPanel = ({ open, onClose }) => {
         .concat({ role: 'assistant', content: res.data?.answer || '응답이 비어 있습니다.', createdAt: new Date().toISOString() }));
     }
     setActions(res.data?.actions || []);
+    setToolEvents(res.data?.toolEvents || []);
+    if (res.data?.usage) setUsage(res.data.usage);
   }, 'AI가 요청을 처리하는 중', ['요청 확인', '계정 권한 확인', '컨텍스트 수집', 'OpenAI 응답 생성', '대화 기록 저장']);
 
   const searchFiles = () => run(async () => {
@@ -190,6 +188,19 @@ const AiAgentPanel = ({ open, onClose }) => {
     const res = await axios.post(`/api/ai/actions/${actionId}/execute`, {}, { withCredentials: true });
     setActions((prev) => prev.map((item) => item.actionId === actionId ? res.data.action : item));
   }, '승인된 AI 작업 실행 중', ['작업 불러오기', '권한 재검사', '기존 파일 백업', '파일 시스템 반영', '결과 저장']);
+
+  const rejectAction = (actionId) => run(async () => {
+    const res = await axios.post(`/api/ai/actions/${actionId}/reject`, {}, { withCredentials: true });
+    setActions((prev) => prev.map((item) => item.actionId === actionId ? res.data.action : item));
+  }, 'AI 작업 거절 중', ['승인 대기 상태 확인', '거절 기록 저장']);
+
+  const savePreferences = () => run(async () => {
+    const res = await axios.patch('/api/ai/preferences', preferences, { withCredentials: true });
+    setPreferences(res.data.preferences);
+  }, 'AI 권한 설정 저장 중', ['설정 검증', '계정별 설정 저장']);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayUsage = usage.days?.[today] || { totalTokens: 0, requests: 0 };
 
   const progressValue = agentJob
     ? Math.round(((agentJob.activeIndex + 1) / agentJob.steps.length) * 100)
@@ -242,12 +253,23 @@ const AiAgentPanel = ({ open, onClose }) => {
           <Tab value="files" label="파일" />
           <Tab value="read" label="읽기" />
           <Tab value="actions" label="작업" />
+          <Tab value="settings" icon={<SettingsIcon sx={{ fontSize: 18 }} />} iconPosition="start" label="설정" />
         </Tabs>
 
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 2 }}>
           {tab === 'chat' && (
             <Stack spacing={1.5}>
-              <Alert severity="info">AI는 현재 로그인 계정 권한 안의 자료만 사용할 수 있고, 파일 변경은 승인 작업으로만 실행됩니다.</Alert>
+              <Alert severity="info">AI는 현재 로그인 계정 권한 안의 자료만 사용합니다. 변경 작업은 설정한 승인 방식에 따라 즉시 실행되거나 승인 대기로 남습니다.</Alert>
+              {toolEvents.length > 0 && (
+                <Paper variant="outlined" sx={{ p: 1.25 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 900 }}>최근 실제 작업</Typography>
+                  {toolEvents.map((event) => (
+                    <Typography key={event.callId} variant="caption" sx={{ display: 'block', mt: 0.5 }} color={event.ok ? 'success.main' : 'error.main'}>
+                      {event.ok ? '완료' : '실패'} · {event.name} · {event.result?.status || event.result?.error || '조회 완료'}
+                    </Typography>
+                  ))}
+                </Paper>
+              )}
               {messages.map((item, index) => (
                 <Paper key={`${item.createdAt || index}-${index}`} variant="outlined" sx={{ p: 1.25, bgcolor: item.role === 'user' ? 'action.hover' : 'background.paper' }}>
                   <Typography variant="caption" color="text.secondary">{item.role === 'user' ? '나' : 'AI'}</Typography>
@@ -316,12 +338,31 @@ const AiAgentPanel = ({ open, onClose }) => {
                       <Chip size="small" label={action.status} color={action.status === 'completed' ? 'success' : 'warning'} sx={{ mt: 1 }} />
                       {action.backupPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>백업: {action.backupPath}</Typography>}
                     </Box>
-                    {action.status === 'pending' && (
-                      <Button size="small" startIcon={<PlayArrowIcon />} onClick={() => executeAction(action.actionId)}>실행</Button>
-                    )}
+                    {action.status === 'pending' && <Stack spacing={0.5}>
+                      <Button size="small" startIcon={<PlayArrowIcon />} onClick={() => executeAction(action.actionId)}>승인·실행</Button>
+                      <Button size="small" color="inherit" onClick={() => rejectAction(action.actionId)}>거절</Button>
+                    </Stack>}
                   </Stack>
                 </Paper>
               ))}
+            </Stack>
+          )}
+
+          {tab === 'settings' && (
+            <Stack spacing={1.5}>
+              <Alert severity="info">전체 자동 승인도 현재 계정 권한 안에서만 동작합니다. 영구 삭제·계정/권한/보안 설정·임의 코드 실행은 자동 승인되지 않습니다.</Alert>
+              <TextField select SelectProps={{ native: true }} size="small" label="작업 승인 방식" value={preferences.approvalMode || 'ask_each'} onChange={(e) => setPreferences((prev) => ({ ...prev, approvalMode: e.target.value }))}>
+                <option value="ask_each">모든 변경 작업마다 승인</option>
+                <option value="auto_safe">폴더·텍스트 작업 자동 승인</option>
+                <option value="auto_reversible">복사·이동·휴지통까지 자동 승인</option>
+                <option value="auto_all">채팅·친구·차단까지 자동 승인</option>
+              </TextField>
+              <TextField size="small" type="number" label="하루 토큰 상한" value={preferences.dailyTokenLimit || 50000} inputProps={{ min: 1000, max: 1000000, step: 1000 }} onChange={(e) => setPreferences((prev) => ({ ...prev, dailyTokenLimit: Number(e.target.value) }))} />
+              <Paper variant="outlined" sx={{ p: 1.25 }}>
+                <Typography variant="body2" sx={{ fontWeight: 900 }}>오늘 사용량</Typography>
+                <Typography variant="caption" color="text.secondary">{Number(todayUsage.totalTokens || 0).toLocaleString()} 토큰 · {Number(todayUsage.requests || 0).toLocaleString()}회 요청</Typography>
+              </Paper>
+              <Button variant="contained" onClick={savePreferences}>설정 저장</Button>
             </Stack>
           )}
         </Box>

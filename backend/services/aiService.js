@@ -40,8 +40,8 @@ const extractChatText = (data = {}) => {
   return String(content || '').trim();
 };
 
-const fetchJson = async (url, body) => {
-  const response = await fetch(url, {
+const fetchJson = async (url, body, fetchImpl = fetch) => {
+  const response = await fetchImpl(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.OPENAI_API_KEY}`,
@@ -58,6 +58,101 @@ const fetchJson = async (url, body) => {
     throw error;
   }
   return data;
+};
+
+const normalizeUsage = (usage = {}) => ({
+  inputTokens: Number(usage.input_tokens ?? usage.prompt_tokens ?? 0),
+  outputTokens: Number(usage.output_tokens ?? usage.completion_tokens ?? 0),
+  totalTokens: Number(usage.total_tokens ?? 0),
+});
+
+const addUsage = (left, right) => ({
+  inputTokens: left.inputTokens + right.inputTokens,
+  outputTokens: left.outputTokens + right.outputTokens,
+  totalTokens: left.totalTokens + right.totalTokens,
+});
+
+const callOpenAIAgent = async ({
+  systemPrompt,
+  input,
+  tools = [],
+  onToolCall,
+  maxTurns = config.AI_MAX_AGENT_TURNS,
+  maxOutputTokens = config.AI_MAX_OUTPUT_TOKENS,
+  fetchImpl = fetch,
+}) => {
+  if (!isAiConfigured()) {
+    const error = new Error('AI 설정이 필요합니다.');
+    error.status = 503;
+    throw error;
+  }
+
+  let responseInput = Array.isArray(input) ? input : [{ role: 'user', content: String(input || '') }];
+  let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const events = [];
+  let toolCallCount = 0;
+
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    let data;
+    try {
+      data = await fetchJson('https://api.openai.com/v1/responses', {
+        model: config.OPENAI_MODEL,
+        instructions: systemPrompt,
+        input: responseInput,
+        tools,
+        parallel_tool_calls: false,
+        max_output_tokens: maxOutputTokens,
+        store: false,
+      }, fetchImpl);
+    } catch (err) {
+      err.usage = usage;
+      throw err;
+    }
+    usage = addUsage(usage, normalizeUsage(data.usage));
+
+    const calls = (data.output || []).filter((item) => item.type === 'function_call');
+    if (calls.length === 0) {
+      const text = extractResponsesText(data);
+      if (!text) {
+        const error = new Error('AI 응답이 비어 있습니다.');
+        error.status = 502;
+        error.usage = usage;
+        throw error;
+      }
+      return { text, usage, events };
+    }
+
+    if (toolCallCount + calls.length > config.AI_MAX_TOOL_CALLS) {
+      const error = new Error('AI 도구 호출 상한에 도달했습니다. 요청을 더 작은 단위로 나눠주세요.');
+      error.status = 429;
+      error.usage = usage;
+      throw error;
+    }
+    toolCallCount += calls.length;
+
+    const outputs = [];
+    for (const call of calls) {
+      let args = {};
+      try { args = JSON.parse(call.arguments || '{}'); } catch (err) {
+        args = { _invalidArguments: true };
+      }
+      try {
+        const result = await onToolCall(call.name, args, call.call_id);
+        events.push({ callId: call.call_id, name: call.name, ok: true, result });
+        outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: true, result }) });
+      } catch (err) {
+        const failure = { error: err.message || '도구 실행에 실패했습니다.', code: err.code || null };
+        events.push({ callId: call.call_id, name: call.name, ok: false, result: failure });
+        outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: false, ...failure }) });
+      }
+    }
+    responseInput = [...responseInput, ...(data.output || []), ...outputs];
+  }
+
+  const error = new Error('AI 도구 실행 횟수 제한에 도달했습니다. 요청을 더 작은 단위로 나눠주세요.');
+  error.status = 429;
+  error.usage = usage;
+  throw error;
 };
 
 const callOpenAIResponses = async ({ systemPrompt, userPrompt, temperature = 0.2 }) => {
@@ -181,5 +276,7 @@ module.exports = {
   isAiConfigured,
   getAiStatus,
   callOpenAIResponses,
+  callOpenAIAgent,
   summarizeMeetingMessages,
+  _test: { extractResponsesText, normalizeUsage },
 };
