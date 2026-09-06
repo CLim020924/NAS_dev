@@ -509,10 +509,17 @@ const NoteStudio = () => {
       const { data } = await axios.post('/api/note-studio/notes', {
         title: '새 하위 페이지', type: 'block', notebookId: current.notebookId, parentId: current.id
       }, { withCredentials: true });
-      editor?.chain().focus().insertContent([
+      const inserted = editor?.chain().focus().insertContent([
         { type: 'noteLink', attrs: { noteId: data.note.id, label: data.note.title } },
         { type: 'paragraph' }
       ]).run();
+      if (!inserted) {
+        await axios.delete(`/api/note-studio/notes/${encodeURIComponent(data.note.id)}`, {
+          data: { expectedRevision: data.note.revision },
+          withCredentials: true
+        }).catch(() => {});
+        throw new Error('현재 위치에 링크를 삽입하지 못해 새 하위 페이지 생성을 취소했습니다.');
+      }
       await loadList();
       setMessage({ severity: 'success', text: '현재 위치에 새 하위 페이지 링크를 만들었습니다.' });
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '하위 페이지를 만들지 못했습니다.') }); }
