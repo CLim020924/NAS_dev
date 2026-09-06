@@ -293,7 +293,13 @@ const executeAction = async (user, actionId, { platformCall }) => {
       moved.forEach((plan) => { invalidateUsageCache(plan.from); invalidateUsageCache(plan.to); });
       result = { movedCount: moved.length, destinationFolder: action.destinationFolder, granularity: action.granularity };
     } else {
-      const target = await resolveExactUser(platformCall, action.targetUser);
+      const target = await resolveExactUser(platformCall, action.targetUserLoginId || action.targetUser);
+      if (action.targetUserUid && target.userUid !== action.targetUserUid) {
+        const err = new Error('승인 후 대상 계정 식별 정보가 달라져 외부 작업을 중단했습니다. 새 작업을 만들어 다시 승인해주세요.');
+        err.status = 409;
+        err.code = 'AI_TARGET_IDENTITY_CHANGED';
+        throw err;
+      }
       if (action.actionType === 'send_friend_request') result = await platformCall('POST', '/friends/request', { targetUserUid: target.userUid });
       else if (action.actionType === 'set_user_blocked') result = await platformCall('POST', '/friends/block', { targetUserUid: target.userUid, blocked: !!action.blocked });
       else if (action.actionType === 'send_chat_message') {
@@ -330,9 +336,16 @@ const runTool = async (user, name, args, context) => {
     spec.plannedItems = buildOrganizationPlan(user, args.folder_path, args.destination_folder, args.granularity);
     spec.preview = { itemCount: spec.plannedItems.length, items: spec.plannedItems.slice(0, 50) };
   }
+  if (['send_friend_request', 'set_user_blocked', 'send_chat_message', 'send_file_to_user'].includes(name)) {
+    const target = await resolveExactUser(context.platformCall, args.user);
+    spec.targetUserUid = target.userUid;
+    spec.targetUserLoginId = target.loginId || target.username || '';
+    spec.targetUserDisplayName = target.displayName || target.nickname || target.loginId || target.username || '';
+    spec.targetUser = spec.targetUserLoginId || spec.targetUserDisplayName;
+  }
   const preferences = normalizePreferences(getPreferences(user));
   const action = createAction(user, { ...spec, idempotencyKey: context.idempotencyKey || context.callId, requestedByAgent: true });
-  if (!mayAutoExecute(spec.risk, preferences.approvalMode)) return { status: 'pending_approval', actionId: action.actionId, title: action.title, risk: action.risk };
+  if (context.forceApproval || !mayAutoExecute(spec.risk, preferences.approvalMode)) return { status: 'pending_approval', actionId: action.actionId, title: action.title, risk: action.risk };
   const completed = await executeAction(user, action.actionId, context);
   return { status: 'completed', actionId: completed.actionId, title: completed.title, result: completed.result };
 };

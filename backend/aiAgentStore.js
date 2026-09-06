@@ -40,6 +40,7 @@ const writeJson = (filePath, value) => {
 };
 
 const nowIso = () => new Date().toISOString();
+const MAX_RUN_STATE_BYTES = 768 * 1024;
 
 const createId = (prefix) => {
   if (typeof crypto.randomUUID === 'function') {
@@ -122,6 +123,92 @@ const setPreferences = (user, preferences = {}) => {
   return next;
 };
 
+const listAgentRuns = (user) => {
+  const runs = readJson(fileFor(user, 'runs.json'), []);
+  return Array.isArray(runs) ? runs : [];
+};
+
+const assertRunSize = (run) => {
+  if (Buffer.byteLength(JSON.stringify(run), 'utf8') > MAX_RUN_STATE_BYTES) {
+    const err = new Error('AI 작업 재개 상태가 안전 저장 한도를 초과했습니다. 요청을 더 작은 단위로 나눠주세요.');
+    err.status = 413;
+    throw err;
+  }
+};
+
+const createAgentRun = (user, run) => {
+  const runs = listAgentRuns(user).filter((item) => item.runId !== run.runId);
+  const nextRun = {
+    runId: run.runId || createId('airun'),
+    status: 'waiting_approval',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    requestedByUid: user.userUid || '',
+    ...run,
+  };
+  assertRunSize(nextRun);
+  runs.unshift(nextRun);
+  writeJson(fileFor(user, 'runs.json'), runs.slice(0, 40));
+  return nextRun;
+};
+
+const getAgentRun = (user, runId) => listAgentRuns(user).find((item) => item.runId === runId) || null;
+
+const updateAgentRun = (user, runId, updater) => {
+  const runs = listAgentRuns(user);
+  const idx = runs.findIndex((item) => item.runId === runId);
+  if (idx < 0) return null;
+  const next = {
+    ...runs[idx],
+    ...(typeof updater === 'function' ? updater(runs[idx]) : updater),
+    updatedAt: nowIso(),
+  };
+  assertRunSize(next);
+  runs[idx] = next;
+  writeJson(fileFor(user, 'runs.json'), runs.slice(0, 40));
+  return next;
+};
+
+const recoverStaleActions = (user, maxAgeMs = 5 * 60 * 1000) => {
+  const actions = listActions(user);
+  const cutoff = Date.now() - maxAgeMs;
+  let changed = false;
+  const next = actions.map((action) => {
+    if (action.status !== 'executing') return action;
+    const started = Date.parse(action.startedAt || action.updatedAt || action.createdAt || '');
+    if (Number.isFinite(started) && started > cutoff) return action;
+    changed = true;
+    return {
+      ...action,
+      status: 'recovery_required',
+      recoveryReason: '서버 중단 중 실행 결과를 확정할 수 없어 자동 재실행하지 않았습니다.',
+      updatedAt: nowIso(),
+    };
+  });
+  if (changed) writeJson(fileFor(user, 'actions.json'), next);
+  return next;
+};
+
+const recoverStaleRuns = (user, maxAgeMs = 5 * 60 * 1000) => {
+  const runs = listAgentRuns(user);
+  const cutoff = Date.now() - maxAgeMs;
+  let changed = false;
+  const next = runs.map((run) => {
+    if (run.status !== 'resuming') return run;
+    const started = Date.parse(run.resumeStartedAt || run.updatedAt || '');
+    if (Number.isFinite(started) && started > cutoff) return run;
+    changed = true;
+    return {
+      ...run,
+      status: 'response_pending',
+      lastError: '서버 중단 중 후속 응답 상태를 확정할 수 없어 자동 재요청하지 않았습니다.',
+      updatedAt: nowIso(),
+    };
+  });
+  if (changed) writeJson(fileFor(user, 'runs.json'), next);
+  return next;
+};
+
 const getUsage = (user) => {
   const usage = readJson(fileFor(user, 'usage.json'), { days: {} });
   return usage && typeof usage === 'object' ? usage : { days: {} };
@@ -152,6 +239,12 @@ module.exports = {
   listActions,
   createAction,
   updateAction,
+  listAgentRuns,
+  createAgentRun,
+  getAgentRun,
+  updateAgentRun,
+  recoverStaleActions,
+  recoverStaleRuns,
   getPreferences,
   setPreferences,
   getUsage,

@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { TOOL_DEFINITIONS, normalizePreferences, assertToolPathAllowed, _test } = require('../aiAgentRuntime');
+const { TOOL_DEFINITIONS, normalizePreferences, assertToolPathAllowed, runTool, executeAction, _test } = require('../aiAgentRuntime');
+const { DATA_ROOT, listActions, setPreferences } = require('../aiAgentStore');
 
 test('AI 도구 스키마는 strict이며 임의 속성을 허용하지 않는다', () => {
   assert.ok(TOOL_DEFINITIONS.length >= 10);
@@ -69,5 +70,34 @@ test('날짜별 정리는 승인 후 원본이 바뀌면 실행 계획을 거부
     assert.equal(result.status, 0, result.stderr || result.stdout);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('외부 사용자 작업은 승인 전에 UID를 고정하고 실행 때 달라지면 중단한다', async () => {
+  const loginId = `target-binding-${Date.now()}`;
+  const user = { loginId, userUid: loginId, role: 'USER' };
+  const dataDir = path.join(DATA_ROOT, 'users', loginId);
+  const firstTarget = { userUid: 'uid-original', loginId: 'recipient', displayName: '받는 사람' };
+  try {
+    setPreferences(user, { approvalMode: 'auto_all' });
+    const pending = await runTool(user, 'send_chat_message', { user: 'recipient', text: '안녕하세요' }, {
+      callId: 'bound-call', idempotencyKey: `${loginId}:bound-call`, forceApproval: true,
+      platformCall: async (method, apiPath) => {
+        assert.equal(method, 'GET');
+        assert.match(apiPath, /friends\/search/);
+        return { results: [firstTarget] };
+      },
+    });
+    assert.equal(pending.status, 'pending_approval');
+    const stored = listActions(user).find((item) => item.actionId === pending.actionId);
+    assert.equal(stored.targetUserUid, 'uid-original');
+    assert.equal(stored.targetUserLoginId, 'recipient');
+
+    await assert.rejects(() => executeAction(user, pending.actionId, {
+      platformCall: async () => ({ results: [{ ...firstTarget, userUid: 'uid-changed' }] }),
+    }), { code: 'AI_TARGET_IDENTITY_CHANGED' });
+    assert.equal(listActions(user).find((item) => item.actionId === pending.actionId).status, 'failed');
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });

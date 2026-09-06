@@ -90,6 +90,8 @@ const addUsage = (left, right) => ({
 const callOpenAIAgent = async ({
   systemPrompt,
   input,
+  resumeState = null,
+  resumeOutputs = [],
   tools = [],
   onToolCall,
   maxTurns = config.AI_MAX_AGENT_TURNS,
@@ -102,12 +104,23 @@ const callOpenAIAgent = async ({
     throw error;
   }
 
-  let responseInput = Array.isArray(input) ? input : [{ role: 'user', content: String(input || '') }];
+  let responseInput = resumeState?.responseInput || (
+    Array.isArray(input) ? input : [{ role: 'user', content: String(input || '') }]
+  );
+  if (!Array.isArray(responseInput)) {
+    const error = new Error('저장된 AI 작업 상태가 올바르지 않습니다.');
+    error.status = 409;
+    throw error;
+  }
+  if (Array.isArray(resumeOutputs) && resumeOutputs.length > 0) {
+    responseInput = [...responseInput, ...resumeOutputs];
+  }
   let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const events = [];
-  let toolCallCount = 0;
+  let toolCallCount = Number(resumeState?.toolCallCount || 0);
+  const firstTurn = Number(resumeState?.nextTurn || 0);
 
-  for (let turn = 0; turn < maxTurns; turn += 1) {
+  for (let turn = firstTurn; turn < maxTurns; turn += 1) {
     let data;
     try {
       data = await fetchJson('https://api.openai.com/v1/responses', {
@@ -146,6 +159,7 @@ const callOpenAIAgent = async ({
     toolCallCount += calls.length;
 
     const outputs = [];
+    const interruptions = [];
     for (const call of calls) {
       let args = {};
       try {
@@ -160,12 +174,35 @@ const callOpenAIAgent = async ({
       try {
         const result = await onToolCall(call.name, args, call.call_id);
         events.push({ callId: call.call_id, name: call.name, ok: true, result });
-        outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: true, result }) });
+        if (result?.status === 'pending_approval' && result?.actionId) {
+          interruptions.push({
+            callId: call.call_id,
+            name: call.name,
+            actionId: result.actionId,
+            title: result.title || result.action?.title || call.name,
+          });
+        } else {
+          outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: true, result }) });
+        }
       } catch (err) {
         const failure = { error: err.message || '도구 실행에 실패했습니다.', code: err.code || null };
         events.push({ callId: call.call_id, name: call.name, ok: false, result: failure });
         outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: false, ...failure }) });
       }
+    }
+    if (interruptions.length > 0) {
+      return {
+        paused: true,
+        interruptions,
+        continuation: {
+          version: 1,
+          responseInput: [...responseInput, ...(data.output || []), ...outputs],
+          nextTurn: turn + 1,
+          toolCallCount,
+        },
+        usage,
+        events,
+      };
     }
     responseInput = [...responseInput, ...(data.output || []), ...outputs];
   }

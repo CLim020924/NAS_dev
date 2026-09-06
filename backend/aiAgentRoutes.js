@@ -14,6 +14,11 @@ const {
   listActions,
   createAction,
   updateAction,
+  createAgentRun,
+  getAgentRun,
+  updateAgentRun,
+  recoverStaleActions,
+  recoverStaleRuns,
   getPreferences,
   setPreferences,
   getUsage,
@@ -263,6 +268,102 @@ const buildAgentSystemPrompt = (user, preferences = {}) => {
   ].filter(Boolean).join('\n');
 };
 
+const toolOutput = (callId, payload) => ({
+  type: 'function_call_output',
+  call_id: callId,
+  output: JSON.stringify(payload),
+});
+
+const pendingAnswer = (interruptions = []) => {
+  const titles = interruptions.map((item) => item.title || item.name).filter(Boolean);
+  return `승인이 필요한 작업이 ${interruptions.length}개 있습니다${titles.length ? `: ${titles.join(', ')}` : ''}. 작업 탭에서 승인하거나 거절하면 이 요청의 답변을 그대로 이어갑니다.`;
+};
+
+const bindPausedActions = (user, runId, interruptions = []) => interruptions.map((item) => {
+  updateAction(user, item.actionId, { agentRunId: runId, toolCallId: item.callId });
+  return { ...item, decision: null, output: null };
+});
+
+const continueStoredRun = async (user, run, req, { forceApproval = false } = {}) => {
+  const unresolved = (run.interruptions || []).filter((item) => !item.decision);
+  if (unresolved.length > 0) {
+    return { status: 'waiting_approval', remaining: unresolved.length };
+  }
+
+  updateAgentRun(user, run.runId, { status: 'resuming', resumeStartedAt: new Date().toISOString() });
+  try {
+    const agentResult = await callOpenAIAgent({
+      systemPrompt: run.systemPrompt,
+      resumeState: run.continuation,
+      resumeOutputs: (run.interruptions || []).map((item) => toolOutput(item.callId, item.output)),
+      tools: TOOL_DEFINITIONS,
+      onToolCall: (name, args, callId) => runTool(user, name, args, {
+        callId,
+        idempotencyKey: `${run.runId}:${callId}`,
+        platformCall: createPlatformCaller(getToken(req)),
+        forceApproval,
+      }),
+    });
+    recordUsage(user, agentResult.usage);
+
+    if (agentResult.paused) {
+      (run.interruptions || []).forEach((item) => updateAction(user, item.actionId, { continuationStatus: null }));
+      const interruptions = bindPausedActions(user, run.runId, agentResult.interruptions);
+      const answer = pendingAnswer(interruptions);
+      updateAgentRun(user, run.runId, {
+        status: 'waiting_approval',
+        continuation: agentResult.continuation,
+        interruptions,
+        lastError: null,
+      });
+      const messages = appendMessages(user, [{
+        role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId: run.runId, pendingApproval: true,
+      }]);
+      return { status: 'waiting_approval', answer, messages, toolEvents: agentResult.events };
+    }
+
+    const answer = agentResult.text;
+    (run.interruptions || []).forEach((item) => updateAction(user, item.actionId, { continuationStatus: null }));
+    updateAgentRun(user, run.runId, {
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      continuation: null,
+      interruptions: [],
+      lastError: null,
+    });
+    const messages = appendMessages(user, [{
+      role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId: run.runId,
+    }]);
+    return { status: 'completed', answer, messages, toolEvents: agentResult.events };
+  } catch (err) {
+    if (err.usage) recordUsage(user, err.usage);
+    updateAgentRun(user, run.runId, {
+      status: 'response_pending',
+      lastError: err.message || '승인 후 AI 답변을 이어받지 못했습니다.',
+      resumeFailedAt: new Date().toISOString(),
+    });
+    (run.interruptions || []).forEach((item) => updateAction(user, item.actionId, { continuationStatus: 'response_pending' }));
+    return {
+      status: 'response_pending',
+      error: '작업 처리는 기록되었지만 AI의 후속 답변 연결에 실패했습니다. 작업 결과는 다시 실행하지 않으며 답변만 재개할 수 있습니다.',
+      detail: err.message,
+    };
+  }
+};
+
+const resolveRunDecision = async (user, action, decision, output, req) => {
+  if (!action?.agentRunId || !action?.toolCallId) return null;
+  const run = getAgentRun(user, action.agentRunId);
+  if (!run) return { status: 'run_missing', error: '연결된 AI 요청 기록을 찾지 못했습니다.' };
+  const interruptions = (run.interruptions || []).map((item) => (
+    item.actionId === action.actionId
+      ? { ...item, decision, output, decidedAt: new Date().toISOString() }
+      : item
+  ));
+  const updated = updateAgentRun(user, run.runId, { interruptions });
+  return continueStoredRun(user, updated, req);
+};
+
 router.get('/ai/status', (req, res) => {
   const status = getAiStatus();
   res.json({
@@ -276,6 +377,8 @@ router.get('/ai/status', (req, res) => {
 router.get('/ai/history', (req, res) => {
   try {
     const user = getUserFromRequest(req);
+    recoverStaleActions(user);
+    recoverStaleRuns(user);
     res.json({
       messages: listMessages(user, Number(req.query.limit) || 80),
       actions: listActions(user).slice(0, 50),
@@ -327,24 +430,79 @@ router.post('/ai/actions', (req, res) => {
 });
 
 router.post('/ai/actions/:actionId/execute', async (req, res) => {
+  let user = null;
   try {
-    const user = getUserFromRequest(req);
+    user = getUserFromRequest(req);
+    recoverStaleActions(user);
     const action = await executeRuntimeAction(user, req.params.actionId, {
       platformCall: createPlatformCaller(getToken(req)),
     });
-    res.json({ action });
+    const continuation = await resolveRunDecision(user, action, 'approved', {
+      ok: true, status: 'completed', actionId: action.actionId, result: action.result || null,
+    }, req);
+    res.json({
+      action,
+      continuation,
+      messages: continuation?.messages?.slice(-80),
+      actions: listActions(user).slice(0, 50),
+      usage: getUsage(user),
+    });
   } catch (err) {
+    if (user) {
+      const failed = listActions(user).find((item) => item.actionId === req.params.actionId);
+      if (failed?.status === 'failed') {
+        const continuation = await resolveRunDecision(user, failed, 'execution_failed', {
+          ok: false, status: 'execution_failed', actionId: failed.actionId, error: failed.error || err.message,
+        }, req);
+        return res.json({
+          action: failed,
+          continuation: { ...continuation, error: `작업 실행 실패: ${failed.error || err.message}` },
+          messages: continuation?.messages?.slice(-80),
+          actions: listActions(user).slice(0, 50),
+          usage: getUsage(user),
+        });
+      }
+    }
     res.status(err.status || 500).json({ error: err.message });
   }
 });
 
-router.post('/ai/actions/:actionId/reject', (req, res) => {
+router.post('/ai/runs/:runId/resume', async (req, res) => {
+  try {
+    const user = getUserFromRequest(req);
+    recoverStaleRuns(user);
+    const run = getAgentRun(user, req.params.runId);
+    if (!run) return res.status(404).json({ error: 'AI 요청 기록을 찾을 수 없습니다.' });
+    if (run.status !== 'response_pending') return res.status(409).json({ error: '후속 답변 재개가 필요한 요청만 다시 시도할 수 있습니다.' });
+    const continuation = await continueStoredRun(user, run, req, { forceApproval: true });
+    return res.json({
+      continuation,
+      messages: continuation?.messages?.slice(-80),
+      actions: listActions(user).slice(0, 50),
+      usage: getUsage(user),
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post('/ai/actions/:actionId/reject', async (req, res) => {
   try {
     const user = getUserFromRequest(req);
     const action = listActions(user).find((item) => item.actionId === req.params.actionId);
     if (!action) return res.status(404).json({ error: 'AI 작업을 찾을 수 없습니다.' });
     if (action.status !== 'pending') return res.status(409).json({ error: '승인 대기 중인 작업만 거절할 수 있습니다.' });
-    return res.json({ action: updateAction(user, action.actionId, { status: 'rejected', rejectedAt: new Date().toISOString() }) });
+    const rejected = updateAction(user, action.actionId, { status: 'rejected', rejectedAt: new Date().toISOString() });
+    const continuation = await resolveRunDecision(user, rejected, 'rejected', {
+      ok: false, status: 'rejected_by_user', actionId: rejected.actionId,
+    }, req);
+    return res.json({
+      action: rejected,
+      continuation,
+      messages: continuation?.messages?.slice(-80),
+      actions: listActions(user).slice(0, 50),
+      usage: getUsage(user),
+    });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message });
   }
@@ -392,8 +550,9 @@ router.post('/ai/chat', async (req, res) => {
     ].filter(Boolean).join('\n\n');
 
     const agentRunId = crypto.randomUUID();
+    const systemPrompt = buildAgentSystemPrompt(user, preferences);
     const agentResult = await callOpenAIAgent({
-      systemPrompt: buildAgentSystemPrompt(user, preferences),
+      systemPrompt,
       input: [...history, { role: 'user', content: prompt }],
       tools: TOOL_DEFINITIONS,
       onToolCall: (name, args, callId) => runTool(user, name, args, {
@@ -402,12 +561,24 @@ router.post('/ai/chat', async (req, res) => {
         platformCall: createPlatformCaller(getToken(req)),
       }),
     });
-    const answer = agentResult.text;
+    const answer = agentResult.paused ? pendingAnswer(agentResult.interruptions) : agentResult.text;
     recordUsage(user, agentResult.usage);
+
+    if (agentResult.paused) {
+      const interruptions = bindPausedActions(user, agentRunId, agentResult.interruptions);
+      createAgentRun(user, {
+        runId: agentRunId,
+        status: 'waiting_approval',
+        systemPrompt,
+        continuation: agentResult.continuation,
+        interruptions,
+        originalMessageHash: crypto.createHash('sha256').update(message).digest('hex'),
+      });
+    }
 
     const saved = appendMessages(user, [
       { role: 'user', content: message, createdAt: new Date().toISOString(), context },
-      { role: 'assistant', content: answer, createdAt: new Date().toISOString() },
+      { role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId, pendingApproval: !!agentResult.paused },
     ]);
 
     res.json({
@@ -416,6 +587,7 @@ router.post('/ai/chat', async (req, res) => {
       actions: listActions(user).slice(0, 50),
       toolEvents: agentResult.events,
       usage: getUsage(user),
+      continuation: agentResult.paused ? { status: 'waiting_approval', remaining: agentResult.interruptions.length } : { status: 'completed' },
     });
   } catch (err) {
     try {

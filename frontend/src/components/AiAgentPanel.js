@@ -186,13 +186,28 @@ const AiAgentPanel = ({ open, onClose }) => {
 
   const executeAction = (actionId) => run(async () => {
     const res = await axios.post(`/api/ai/actions/${actionId}/execute`, {}, { withCredentials: true });
-    setActions((prev) => prev.map((item) => item.actionId === actionId ? res.data.action : item));
+    setActions(res.data?.actions || ((prev) => prev.map((item) => item.actionId === actionId ? res.data.action : item)));
+    if (res.data?.messages?.length) setMessages(res.data.messages);
+    if (res.data?.usage) setUsage(res.data.usage);
+    if (res.data?.continuation?.error) setError(res.data.continuation.error);
   }, '승인된 AI 작업 실행 중', ['작업 불러오기', '권한 재검사', '기존 파일 백업', '파일 시스템 반영', '결과 저장']);
 
   const rejectAction = (actionId) => run(async () => {
     const res = await axios.post(`/api/ai/actions/${actionId}/reject`, {}, { withCredentials: true });
-    setActions((prev) => prev.map((item) => item.actionId === actionId ? res.data.action : item));
+    setActions(res.data?.actions || ((prev) => prev.map((item) => item.actionId === actionId ? res.data.action : item)));
+    if (res.data?.messages?.length) setMessages(res.data.messages);
+    if (res.data?.usage) setUsage(res.data.usage);
+    if (res.data?.continuation?.error) setError(res.data.continuation.error);
   }, 'AI 작업 거절 중', ['승인 대기 상태 확인', '거절 기록 저장']);
+
+  const resumeRun = (runId) => run(async () => {
+    const res = await axios.post(`/api/ai/runs/${runId}/resume`, {}, { withCredentials: true });
+    if (res.data?.messages?.length) setMessages(res.data.messages);
+    if (res.data?.actions?.length) setActions(res.data.actions);
+    if (res.data?.usage) setUsage(res.data.usage);
+    if (res.data?.continuation?.error) setError(res.data.continuation.error);
+    setTab('chat');
+  }, 'AI 후속 답변 복구 중', ['저장된 요청 확인', '완료된 작업 결과 연결', '추가 작업은 승인 대기로 고정', '답변 저장']);
 
   const savePreferences = () => run(async () => {
     const res = await axios.patch('/api/ai/preferences', preferences, { withCredentials: true });
@@ -338,13 +353,15 @@ const AiAgentPanel = ({ open, onClose }) => {
                       {action.sourcePath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>원본: {action.sourcePath}</Typography>}
                       {action.destinationPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>이동 위치: {action.destinationPath}</Typography>}
                       {action.destinationFolder && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>대상 폴더: {action.destinationFolder}</Typography>}
-                      {action.targetUser && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>사용자: {action.targetUser}</Typography>}
+                      {(action.targetUserDisplayName || action.targetUser) && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>사용자: {action.targetUserDisplayName || action.targetUser}{action.targetUserLoginId && action.targetUserLoginId !== action.targetUserDisplayName ? ` (${action.targetUserLoginId})` : ''}</Typography>}
                       {action.text && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.5 }}>메시지: {action.text}</Typography>}
                       {action.content && <Paper variant="outlined" sx={{ p: 0.75, mt: 0.75, maxHeight: 140, overflow: 'auto' }}><Typography variant="caption" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{action.content}</Typography></Paper>}
                       {action.preview?.itemCount !== undefined && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>승인 대상: {action.preview.itemCount}개 {action.preview.itemCount > 50 ? '(처음 50개만 아래 표시)' : ''}</Typography>}
                       {(action.preview?.items || []).map((item) => <Typography key={`${item.sourcePath}-${item.destinationPath}`} variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>{item.sourcePath} → {item.destinationPath}</Typography>)}
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>위험 등급: {action.risk || '수동 요청'}</Typography>
                       <Chip size="small" label={action.status} color={action.status === 'completed' ? 'success' : 'warning'} sx={{ mt: 1 }} />
+                      {action.recoveryReason && <Alert severity="warning" sx={{ mt: 1 }}>{action.recoveryReason}</Alert>}
+                      {action.continuationStatus === 'response_pending' && action.agentRunId && <Button size="small" sx={{ mt: 1 }} onClick={() => resumeRun(action.agentRunId)}>작업 재실행 없이 답변만 이어받기</Button>}
                       {action.backupPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>백업: {action.backupPath}</Typography>}
                     </Box>
                     {action.status === 'pending' && <Stack spacing={0.5}>
