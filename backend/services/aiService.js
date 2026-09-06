@@ -41,14 +41,29 @@ const extractChatText = (data = {}) => {
 };
 
 const fetchJson = async (url, body, fetchImpl = fetch) => {
-  const response = await fetchImpl(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const timeoutError = new Error('AI 응답 시간이 초과되었습니다. 같은 요청을 자동 재실행하지 않았습니다.');
+      timeoutError.status = 504;
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -133,8 +148,14 @@ const callOpenAIAgent = async ({
     const outputs = [];
     for (const call of calls) {
       let args = {};
-      try { args = JSON.parse(call.arguments || '{}'); } catch (err) {
-        args = { _invalidArguments: true };
+      try {
+        args = JSON.parse(call.arguments || '{}');
+        if (!args || Array.isArray(args) || typeof args !== 'object') throw new Error('arguments must be an object');
+      } catch (err) {
+        const failure = { error: '도구 인자가 올바른 JSON 객체가 아니어서 실행하지 않았습니다.', code: 'AI_TOOL_ARGUMENTS_INVALID' };
+        events.push({ callId: call.call_id, name: call.name, ok: false, result: failure });
+        outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: false, ...failure }) });
+        continue;
       }
       try {
         const result = await onToolCall(call.name, args, call.call_id);

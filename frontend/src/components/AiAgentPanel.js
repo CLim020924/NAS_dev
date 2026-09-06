@@ -334,7 +334,16 @@ const AiAgentPanel = ({ open, onClose }) => {
                   <Stack direction="row" spacing={1} alignItems="flex-start">
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Typography variant="body2" sx={{ fontWeight: 900 }}>{action.title}</Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>{action.targetPath}</Typography>
+                      {action.targetPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>대상: {action.targetPath}</Typography>}
+                      {action.sourcePath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>원본: {action.sourcePath}</Typography>}
+                      {action.destinationPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>이동 위치: {action.destinationPath}</Typography>}
+                      {action.destinationFolder && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>대상 폴더: {action.destinationFolder}</Typography>}
+                      {action.targetUser && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>사용자: {action.targetUser}</Typography>}
+                      {action.text && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.5 }}>메시지: {action.text}</Typography>}
+                      {action.content && <Paper variant="outlined" sx={{ p: 0.75, mt: 0.75, maxHeight: 140, overflow: 'auto' }}><Typography variant="caption" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{action.content}</Typography></Paper>}
+                      {action.preview?.itemCount !== undefined && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>승인 대상: {action.preview.itemCount}개 {action.preview.itemCount > 50 ? '(처음 50개만 아래 표시)' : ''}</Typography>}
+                      {(action.preview?.items || []).map((item) => <Typography key={`${item.sourcePath}-${item.destinationPath}`} variant="caption" color="text.secondary" sx={{ display: 'block', wordBreak: 'break-all' }}>{item.sourcePath} → {item.destinationPath}</Typography>)}
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>위험 등급: {action.risk || '수동 요청'}</Typography>
                       <Chip size="small" label={action.status} color={action.status === 'completed' ? 'success' : 'warning'} sx={{ mt: 1 }} />
                       {action.backupPath && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>백업: {action.backupPath}</Typography>}
                     </Box>

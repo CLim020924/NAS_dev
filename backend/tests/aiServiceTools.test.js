@@ -35,3 +35,31 @@ test('Responses function call을 실행하고 결과를 다음 응답에 전달�
   }
 });
 
+test('형식이 깨진 도구 인자는 실행하지 않고 실패 결과로 모델에 돌려준다', async () => {
+  const previousKey = config.OPENAI_API_KEY;
+  config.OPENAI_API_KEY = 'test-only-key';
+  let count = 0;
+  let called = false;
+  const bodies = [];
+  const fetchImpl = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    count += 1;
+    const payload = count === 1
+      ? { output: [{ type: 'function_call', name: 'trash_item', call_id: 'bad_1', arguments: '{not-json' }], usage: {} }
+      : { output_text: '잘못된 요청을 실행하지 않았습니다.', output: [], usage: {} };
+    return { ok: true, json: async () => payload };
+  };
+
+  try {
+    const result = await callOpenAIAgent({
+      systemPrompt: 'test', input: 'test', tools: [], fetchImpl,
+      onToolCall: async () => { called = true; },
+    });
+    assert.equal(called, false);
+    assert.equal(result.events[0].ok, false);
+    assert.equal(result.events[0].result.code, 'AI_TOOL_ARGUMENTS_INVALID');
+    assert.match(bodies[1].input.find((item) => item.type === 'function_call_output').output, /AI_TOOL_ARGUMENTS_INVALID/);
+  } finally {
+    config.OPENAI_API_KEY = previousKey;
+  }
+});

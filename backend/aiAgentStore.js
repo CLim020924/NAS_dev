@@ -30,7 +30,13 @@ const readJson = (filePath, fallback) => {
 
 const writeJson = (filePath, value) => {
   ensureDir(path.dirname(filePath));
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    try { if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true }); } catch (err) {}
+  }
 };
 
 const nowIso = () => new Date().toISOString();

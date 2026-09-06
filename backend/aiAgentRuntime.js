@@ -19,6 +19,9 @@ const {
 const APPROVAL_MODES = new Set(['ask_each', 'auto_safe', 'auto_reversible', 'auto_all']);
 const TEXT_EXTS = new Set(['.txt', '.md', '.json', '.csv', '.tsv', '.log', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.xml', '.yml', '.yaml', '.env', '.ini', '.conf', '.py', '.sql', '.sh']);
 const MAX_READ_BYTES = 180 * 1024;
+const MAX_ORGANIZE_ITEMS = 500;
+const INTERNAL_PATH_PARTS = new Set(['.nas_trash', '.agent_trash', '.agent_versions', '.ai_backups', '.note_studio', '.agent_incoming', 'chat_tmp']);
+const SENSITIVE_NAMES = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|credentials?(?:\.[^.]+)?|secrets?(?:\.[^.]+)?|.*\.(?:pem|key|pfx|p12))$/i;
 
 const schema = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const stringProp = (description) => ({ type: 'string', description });
@@ -49,22 +52,37 @@ const normalizePreferences = (value = {}) => ({
 });
 
 const getSafePath = (user, requested = '/') => resolveInside(getAccessBasePath(user), requested || '/');
+const assertToolPathAllowed = (requested, { allowRoot = true } = {}) => {
+  const normalized = String(requested || '/').replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  if (!allowRoot && parts.length === 0) throw new Error('계정 루트 자체에는 이 작업을 수행할 수 없습니다.');
+  if (parts.some((part) => part.startsWith('.') || INTERNAL_PATH_PARTS.has(part) || SENSITIVE_NAMES.test(part))) {
+    const err = new Error('AI는 내부 저장소나 인증정보 가능성이 있는 경로를 읽거나 변경할 수 없습니다.');
+    err.status = 403;
+    err.code = 'AI_SENSITIVE_PATH_BLOCKED';
+    throw err;
+  }
+  return normalized;
+};
 const toRelative = (user, fullPath) => {
   const rel = path.relative(getAccessBasePath(user), fullPath).replace(/\\/g, '/');
   return rel ? `/${rel}` : '/';
 };
 
 const assertExistingPathSafe = (user, requested) => {
+  assertToolPathAllowed(requested);
   const base = getAccessBasePath(user);
   const full = resolveInside(base, requested || '/');
   if (!fs.existsSync(full)) { const err = new Error('대상 경로가 존재하지 않습니다.'); err.status = 404; throw err; }
   const realBase = fs.realpathSync(base);
   const realTarget = fs.realpathSync(full);
   if (!isSameOrChild(realBase, realTarget)) { const err = new Error('심볼릭 링크가 계정 접근 범위를 벗어납니다.'); err.status = 403; throw err; }
+  assertToolPathAllowed(toRelative(user, realTarget));
   return full;
 };
 
 const assertWritablePathSafe = (user, requested) => {
+  assertToolPathAllowed(requested, { allowRoot: false });
   const base = getAccessBasePath(user);
   const full = resolveInside(base, requested || '/');
   let cursor = fs.existsSync(full) ? full : path.dirname(full);
@@ -72,6 +90,7 @@ const assertWritablePathSafe = (user, requested) => {
   const realBase = fs.realpathSync(base);
   const realParent = fs.realpathSync(cursor);
   if (!isSameOrChild(realBase, realParent)) { const err = new Error('심볼릭 링크가 계정 접근 범위를 벗어납니다.'); err.status = 403; throw err; }
+  assertToolPathAllowed(toRelative(user, realParent));
   return full;
 };
 
@@ -140,6 +159,46 @@ const actionSpec = (name, args) => {
   return map[name];
 };
 
+const buildOrganizationPlan = (user, folderPath, destinationFolder, granularity) => {
+  const source = assertExistingPathSafe(user, folderPath);
+  if (!fs.statSync(source).isDirectory()) throw new Error('정리 원본은 폴더여야 합니다.');
+  const destination = assertWritablePathSafe(user, destinationFolder);
+  const entries = fs.readdirSync(source, { withFileTypes: true }).filter((entry) => entry.isFile() && !entry.name.startsWith('.'));
+  if (entries.length > MAX_ORGANIZE_ITEMS) throw new Error(`한 번에 정리할 수 있는 파일은 ${MAX_ORGANIZE_ITEMS}개까지입니다.`);
+  const plannedTargets = new Set();
+  return entries.map((entry) => {
+    const from = path.join(source, entry.name);
+    const stat = fs.statSync(from);
+    const date = stat.mtime.toISOString().slice(0, granularity === 'month' ? 7 : 10);
+    const folder = path.join(destination, date);
+    let to = path.join(folder, entry.name);
+    let suffix = 2;
+    while (fs.existsSync(to) || plannedTargets.has(to)) {
+      const ext = path.extname(entry.name);
+      const stem = path.basename(entry.name, ext);
+      to = path.join(folder, `${stem} (${suffix})${ext}`);
+      suffix += 1;
+    }
+    plannedTargets.add(to);
+    return { sourcePath: toRelative(user, from), destinationPath: toRelative(user, to), size: stat.size, modifiedAtMs: Math.trunc(stat.mtimeMs) };
+  });
+};
+
+const resolveOrganizationPlans = (user, plannedItems) => {
+  if (!Array.isArray(plannedItems) || plannedItems.length > MAX_ORGANIZE_ITEMS) {
+    throw new Error('승인된 날짜별 정리 계획이 없거나 허용 개수를 초과했습니다. 새 계획을 만들어 다시 승인해주세요.');
+  }
+  return plannedItems.map((item) => {
+    const from = assertExistingPathSafe(user, item.sourcePath);
+    const to = assertWritablePathSafe(user, item.destinationPath);
+    const stat = fs.statSync(from);
+    if (!stat.isFile() || stat.size !== item.size || Math.trunc(stat.mtimeMs) !== item.modifiedAtMs || fs.existsSync(to)) {
+      throw new Error('승인 후 파일 상태가 변경되어 날짜별 정리를 중단했습니다. 새 계획을 만들어 다시 승인해주세요.');
+    }
+    return { from, folder: path.dirname(to), to };
+  });
+};
+
 const mayAutoExecute = (risk, mode) => (
   (risk === 'safe' && ['auto_safe', 'auto_reversible', 'auto_all'].includes(mode)) ||
   (risk === 'reversible' && ['auto_reversible', 'auto_all'].includes(mode)) ||
@@ -147,11 +206,19 @@ const mayAutoExecute = (risk, mode) => (
 );
 
 const createPlatformCaller = (token, fetchImpl = fetch) => async (method, apiPath, body) => {
-  const response = await fetchImpl(`http://127.0.0.1:${config.BACKEND_PORT}/api${apiPath}`, {
-    method,
-    headers: { 'Content-Type': 'application/json', Cookie: `token=${encodeURIComponent(token)}` },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  let response;
+  try {
+    response = await fetchImpl(`http://127.0.0.1:${config.BACKEND_PORT}/api${apiPath}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Cookie: `token=${encodeURIComponent(token)}` },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) { const err = new Error(data.error || 'NAS 작업 API가 거부했습니다.'); err.status = response.status; throw err; }
   return data;
@@ -211,28 +278,7 @@ const executeAction = async (user, actionId, { platformCall }) => {
       assertExistingPathSafe(user, action.targetPath);
       result = await platformCall('DELETE', `/file?path=${encodeURIComponent(action.targetPath)}`);
     } else if (action.actionType === 'organize_files_by_modified_date') {
-      const source = assertExistingPathSafe(user, action.sourcePath);
-      const destination = assertWritablePathSafe(user, action.destinationFolder);
-      if (!fs.statSync(source).isDirectory()) throw new Error('정리 원본은 폴더여야 합니다.');
-      fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
-      const plannedTargets = new Set();
-      const plans = fs.readdirSync(source, { withFileTypes: true })
-        .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
-        .map((entry) => {
-          const from = path.join(source, entry.name);
-          const date = fs.statSync(from).mtime.toISOString().slice(0, action.granularity === 'month' ? 7 : 10);
-          const folder = path.join(destination, date);
-          let to = path.join(folder, entry.name);
-          let suffix = 2;
-          while (fs.existsSync(to) || plannedTargets.has(to)) {
-            const ext = path.extname(entry.name);
-            const stem = path.basename(entry.name, ext);
-            to = path.join(folder, `${stem} (${suffix})${ext}`);
-            suffix += 1;
-          }
-          plannedTargets.add(to);
-          return { from, folder, to };
-        });
+      const plans = resolveOrganizationPlans(user, action.plannedItems);
       const moved = [];
       try {
         plans.forEach((plan) => {
@@ -280,6 +326,10 @@ const runTool = async (user, name, args, context) => {
   if (!spec) throw new Error('허용되지 않은 도구입니다.');
   if (name === 'move_item' && String(args.source_path || '').trim() === '/') throw new Error('계정 루트 자체는 이동할 수 없습니다.');
   if (name === 'organize_files_by_modified_date' && !['day', 'month'].includes(args.granularity)) throw new Error('정리 단위는 day 또는 month여야 합니다.');
+  if (name === 'organize_files_by_modified_date') {
+    spec.plannedItems = buildOrganizationPlan(user, args.folder_path, args.destination_folder, args.granularity);
+    spec.preview = { itemCount: spec.plannedItems.length, items: spec.plannedItems.slice(0, 50) };
+  }
   const preferences = normalizePreferences(getPreferences(user));
   const action = createAction(user, { ...spec, idempotencyKey: context.idempotencyKey || context.callId, requestedByAgent: true });
   if (!mayAutoExecute(spec.risk, preferences.approvalMode)) return { status: 'pending_approval', actionId: action.actionId, title: action.title, risk: action.risk };
@@ -298,5 +348,6 @@ module.exports = {
   listFiles,
   searchFiles,
   readTextFile,
-  _test: { mayAutoExecute, actionSpec },
+  assertToolPathAllowed,
+  _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans },
 };
