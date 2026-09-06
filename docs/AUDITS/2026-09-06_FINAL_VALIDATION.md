@@ -22,7 +22,7 @@
 | Python 혼합 페이지 | 설계만 완료 | `.py`+`.md` 로컬 투영과 rich block 보존 원칙, 자원/권한 정책 문서 | kernel worker, 실행/중단/재시작, network none, cgroup, 출력 제한, ipynb round-trip, master 권한 부여 UI 모두 미구현 |
 | 프로젝트 경로 이동 보조 | 2차 구현·자동 검증 완료, 새 Windows E2E 필요 | VS Code/JetBrains portable adapter, 사전검증, transaction rollback/undo, BOM·placeholder·비밀 경계 | 완전 hydration marker와 자동 알림, 새 PC의 CFAPI/파일 선택/UI/단축키 실제 시험 |
 | 문서 변환·작업대 연동 | 기존 핵심 구현 유지 | 형식 선택, 변환/합치기/일괄 생성, 문서 작업대와 기본 저장 흐름 | Note Studio에서 Office 생성→기본 위치 저장→다른 NAS 위치로 이동해도 stable reference 유지하는 통합은 설계만 완료. 이번 로컬 변환 2건은 LibreOffice 부재로 skip |
-| 실행형 AI 에이전트 | 1차 실행 도구 완료, 제품 수준은 아직 아님 | 15개 조회/파일/친구/채팅 도구, strict schema, 4단계 승인, action 원장, 대화 검색, 일일 token cap | 승인 후 같은 AI run 재개, crash recovery, prompt-injection guardrail, immutable recipient UID, streaming, 관리자/노트/문서 도구, 의미 검색, Python 진단·실행이 남음 |
+| 실행형 AI 에이전트 | 1차 실행 도구 완료, 제품 수준은 아직 아님 | 15개 조회/파일/친구/채팅 도구, strict schema, 4단계 승인, action 원장, 대화 검색, 일일 token cap | 승인 후 같은 AI run 재개, crash recovery, prompt-injection guardrail, immutable recipient UID, streaming, 관리자/노트/문서 도구, 의미 검색, Python 진단·실행이 남음. 업그레이드 전의 틀린 답변은 기록 보존 때문에 그대로이므로 ‘이전 AI 응답’ 경계 표시가 필요 |
 
 ## 이번 최종 점검에서 발견해 즉시 보강한 AI 결함
 
@@ -49,7 +49,9 @@
 - 로컬 backend: 54 tests, 52 pass, 2 document integration skip, 0 fail
 - AI 보강 단위: sensitive path 차단, 승인 후 파일 변경 거부, malformed arguments fail-closed 포함 7/7 pass
 - 실제 OpenAI 과금 호출: 0회. 모든 agent loop 시험은 mock fetch 사용
-- 운영 화면: 로그인된 Chrome에서 AI 패널, 과거 대화, 대화/파일/읽기/작업 UI를 직접 확인했다. 배포 뒤 새 bundle로 다시 로드해 설정/승인 상세를 재확인한다.
+- NAS 실장비: 54/54 pass로 로컬에서 skip된 LibreOffice 변환 2건까지 성공했다. production build와 PDF.js API/Worker 4.8.69 검증을 통과해 `main.b651dca7.js`를 운영 정적 경로에 반영했다.
+- 운영 서비스: `msp-backend` online/save, ssh·tailscaled·nginx·docker·pm2-root·cloudflared active, 내부·공개 HTTP 200, 무인증 AI history 401이다.
+- 운영 화면: 로그인된 Chrome을 새 bundle로 새로고침하고 AI 패널의 대화/파일/읽기/작업/설정 5개 탭, 4개 승인 모드, 일일 50,000 token 설정, 오늘 0 token/0회 표시를 실제 DOM과 화면으로 확인했다. 승인 작업 데이터는 만들지 않았고 과금 호출도 하지 않았다.
 - Windows 로컬 production build: 소스 오류가 아니라 현재 작업 폴더의 npm/pnpm 중복 eslint plugin 때문에 실패. 운영 NAS의 Linux 의존성으로 build/PDF.js 검증을 다시 수행한다.
 
 ## 다음 구현 권장 순서
@@ -60,4 +62,3 @@
 4. Note Studio Office stable reference 통합
 5. cgroup worker를 만든 뒤 Python 정적 진단, 마지막에 격리 실행
 6. 전용 테스트 계정/복제 데이터로 Windows 신규 PC·업데이트·재부팅·다중 계정 장시간 E2E
-
