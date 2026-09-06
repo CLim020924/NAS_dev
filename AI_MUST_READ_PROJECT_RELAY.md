@@ -1030,3 +1030,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 최근 계정 루트: 최근 승인 계정들은 `members.json`의 `personalRootPath=/users/<loginId>`와 실제 `/mnt/nas/users/<loginId>`가 일치하며 폴더도 존재한다. `rootPath`가 빈 값이어도 현재 접근 코드가 같은 소문자 `users/<loginId>`를 fallback으로 사용하므로 최근 계정 자체의 저장 위치는 정상이다.
 - 기존 구조 문제: 오래된 계정에는 `/mnt/nas/<loginId>`, `/mnt/nas/USERS/<loginId>`, `/mnt/nas/users/<loginId>`가 혼재한다. 일부 계정은 현재 유효 root와 별개인 과거 폴더가 동시에 남아 있고, 현재 어떤 계정에도 할당되지 않은 `users`/`USERS` 하위 폴더도 확인됐다. 합계가 수백 MiB 수준이라 디스크 부족의 주원인은 아니지만, 자동 이동·삭제 전에 소유권과 데이터 최신성을 별도로 확인해야 한다.
 - 판단: 관리 화면에서 작게 보인 값은 물리 디스크 여유가 아니라 1,401GiB의 논리 할당과 5% 시스템 reserve, 비계정 사용량을 차감한 `availableForAllocation`일 가능성이 높다. 다음 구현에서는 물리 사용량과 논리 할당량을 한 막대로 혼합하지 않고 네 가지 수치를 명시적으로 구분해야 한다.
+
+## 2026-09-06 Debian 시스템 디스크 사용량 추가 확인
+
+- 사용자 요청: NAS 데이터 디스크와 별도로 Debian 및 NAS 서버 프로그램이 설치된 시스템 디스크의 현재 사용량을 확인한다.
+- 확인 결과: 시스템 디스크는 Seagate FireCuda 520 2TB의 `/dev/nvme1n1p2` ext4이며 `/`에 마운트되어 있다. 총 1,966,309,933,056 bytes, 사용 165,613,916,160 bytes, 가용 1,700,737,417,216 bytes로 `df -h` 기준 1.8TiB 중 155GiB 사용, 1.6TiB 여유, 사용률 9%다. EFI 512MiB와 swap 977MiB 파티션이 별도로 있다.
+- 확인된 구성별 사용량: 프로젝트 checkout은 2.5GiB, `/var/www/html`은 77MiB, root PM2 상태는 3.6MiB다. Docker는 image 4.731GB, active container writable layer 835.1MB, volume 66.25MB이며 journal 로그는 2.1GiB다.
+- 운영 주의: `/` 전체 `du`는 장시간 디스크 순회를 유발해 수치 확인 후 중단했다. 시스템 디스크는 9% 사용으로 여유가 충분하며 현재 정리 작업은 필요하지 않다. 파일 삭제나 Docker prune은 수행하지 않았다.
