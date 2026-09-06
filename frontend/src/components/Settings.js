@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Alert, Box, Typography, Paper, Button, Switch, FormControlLabel, Tabs, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Select, MenuItem, Chip, IconButton, TextField, InputAdornment, useMediaQuery, Grid, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, LinearProgress, Tooltip } from '@mui/material';
+import { Alert, Box, Typography, Paper, Button, Switch, FormControlLabel, Tabs, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Select, MenuItem, Chip, IconButton, TextField, InputAdornment, useMediaQuery, Grid, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Tooltip } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import axios from 'axios';
 import { useCustomTheme } from '../contexts/ThemeContext';
 import { useWindows } from '../contexts/WindowContext';
+import ServerSettingsPanel from './ServerSettingsPanel';
+import StorageCapacityOverview from './StorageCapacityOverview';
 
 const Settings = () => {
   const { themeName, setThemeName } = useCustomTheme();
@@ -48,7 +50,7 @@ const Settings = () => {
   }, []);
 
   useEffect(() => {
-    if (!isManager && activeTab === 2) {
+    if (!isManager && activeTab >= 2) {
       setActiveTab(0);
     }
   }, [activeTab, isManager]);
@@ -228,10 +230,6 @@ const Settings = () => {
         }
       : user));
   };
-  const storageUsagePercent = storageCapacity?.totalBytes
-    ? Math.min(100, Math.round((Number(storageCapacity.usedBytes || 0) / Number(storageCapacity.totalBytes)) * 100))
-    : 0;
-
   const renderUserTable = (userList) => (
     isMobile ? (
       <Box sx={{ mt: 2 }}>
@@ -347,7 +345,7 @@ const Settings = () => {
       <Paper elevation={4} sx={{ borderRadius: 3, overflow: 'hidden' }}>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={isManager ? activeTab : Math.min(activeTab, 1)} onChange={(e, v) => setActiveTab(v)} textColor="primary" indicatorColor="primary" sx={{ px: 2 }}>
-            <Tab label="전역 설정" /><Tab label="파일 설정" />{isManager && <Tab label="사용자 관리" />}
+            <Tab label="전역 설정" /><Tab label="파일 설정" />{isManager && <Tab label="사용자 관리" />}{isManager && <Tab label="서버 설정" />}
           </Tabs>
         </Box>
         <Box sx={{ p: { xs: 2, md: 4 }, minHeight: '400px' }}>
@@ -397,38 +395,7 @@ const Settings = () => {
             <Box>
               <Typography variant="h6" sx={{ mb: 2 }}>NAS 저장공간 현황</Typography>
               {userManagementError && <Alert severity="error" onClose={() => setUserManagementError('')} sx={{ mb: 2 }}>{userManagementError}</Alert>}
-              {storageCapacity && (
-                <>
-                  {storageCapacity.overAllocatedBytes > 0 && (
-                    <Alert severity="error" sx={{ mb: 2 }}>
-                      현재 사용자·가입 대기자에게 약속된 용량이 안전 할당 가능 범위를 {formatStorage(storageCapacity.overAllocatedBytes)} 초과했습니다. 신규 가입과 추가 증설이 차단됩니다.
-                    </Alert>
-                  )}
-                  <Grid container spacing={2} sx={{ mb: 2 }}>
-                    {[
-                      ['전체 NAS', formatStorage(storageCapacity.totalBytes), `사용 ${formatStorage(storageCapacity.usedBytes)} · 여유 ${formatStorage(storageCapacity.freeBytes)}`],
-                      ['사용자 할당', formatStorage(storageCapacity.allocatedBytes), `가입 대기 예약 ${formatStorage(storageCapacity.pendingReservedBytes)}`],
-                      ['개인 공간 실사용', formatStorage(storageCapacity.actualUserBytes), `계정 ${storageCapacity.accountCount || 0}개`],
-                      ['추가 할당 가능', formatStorage(storageCapacity.availableForAllocationBytes), storageCapacity.signupAvailable ? '새 계정 50GB 제공 가능' : '신규 가입 차단']
-                    ].map(([label, value, detail]) => (
-                      <Grid item xs={12} sm={6} lg={3} key={label}>
-                        <Paper variant="outlined" sx={{ p: 2, height: '100%', borderRadius: 2 }}>
-                          <Typography variant="caption" color="text.secondary">{label}</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, my: 0.5 }}>{value}</Typography>
-                          <Typography variant="caption" color="text.secondary">{detail}</Typography>
-                        </Paper>
-                      </Grid>
-                    ))}
-                  </Grid>
-                  <Box sx={{ mb: 4 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.75 }}>
-                      <Typography variant="body2">물리 디스크 사용률 {storageUsagePercent}%</Typography>
-                      <Typography variant="caption" color="text.secondary">안전 여유분 {formatStorage(storageCapacity.systemReserveBytes)} 보호</Typography>
-                    </Box>
-                    <LinearProgress variant="determinate" value={storageUsagePercent} color={storageUsagePercent >= 90 ? 'error' : storageUsagePercent >= 75 ? 'warning' : 'primary'} sx={{ height: 10, borderRadius: 5 }} />
-                  </Box>
-                </>
-              )}
+              <StorageCapacityOverview storageCapacity={storageCapacity} />
               <Typography variant="h6" sx={{ mb: 2 }}>가입 승인 대기자 {pendingUsers.length > 0 && <Chip label={pendingUsers.length} color="error" size="small" />}</Typography>
               {pendingUsers.length > 0 && <Alert severity="info" sx={{ mb: 2 }}>가입 대기자 한 명마다 기본 50GB가 미리 예약되어 중복 승인을 해도 전체 용량을 초과하지 않습니다.</Alert>}
               <TableContainer component={Paper} sx={{ mb: 5, border: '1px solid #e2e8f0', borderRadius: 2 }} elevation={0}>
@@ -491,6 +458,7 @@ const Settings = () => {
               </Box>
             </Box>
           )}
+          {activeTab === 3 && isManager && <ServerSettingsPanel />}
         </Box>
       </Paper>
 

@@ -33,6 +33,7 @@ const {
 const { getAiStatus } = require('./services/aiService');
 const { hashPassword, verifyPassword } = require('./passwordSecurity');
 const { consumeDesktopWebSession } = require('./desktopWebSession');
+const { collectServerMetrics } = require('./serverMetrics');
 
 const app = express();
 const server = http.createServer(app);
@@ -1022,6 +1023,21 @@ app.get('/api/users/data', requireManager, (req, res) => {
     pendingUsers,
     storageCapacity: getStorageCapacitySummary(approvedUsers, signupRequests)
   });
+});
+
+// 관리자/마스터 전용 서버 자원 현황. 센서 원본 경로나 장치 일련번호는 반환하지 않는다.
+app.get('/api/system/metrics', requireManager, async (req, res) => {
+  try {
+    const metrics = await collectServerMetrics({ nasRoot: nasPath });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ...metrics,
+      storageCapacity: getStorageCapacitySummary(approvedUsers, signupRequests)
+    });
+  } catch (err) {
+    console.error('[system/metrics] failed', err.message);
+    res.status(503).json({ error: '서버 자원 정보를 수집하지 못했습니다.' });
+  }
 });
 
 // [권한 업데이트 & 강제 로그아웃 방송]
