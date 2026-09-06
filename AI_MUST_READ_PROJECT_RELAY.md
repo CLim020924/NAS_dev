@@ -1289,3 +1289,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 근거: 해당 목록은 사용자 발언을 인용한 것이 아니라 `docs/AUDITS/2026-09-06_FINAL_VALIDATION.md`의 판정표 16~25행, AI 위험 37~45행, 권장 순서 57~64행과 이 릴레이의 2026-09-06 최종 교차 검증 기록을 요약한 것이다.
 - 현재 정정: 목록 작성 뒤 `AI-AGENT-DURABLE-RUN` 작업으로 1번 중 exact-call 승인 후 대화 재개, stale 실행/응답 복구, 대상 사용자 UID 고정은 구현·NAS Linux 57/57 검증까지 완료됐다. deterministic prompt-injection/최신 사용자 의도 guardrail은 아직 남아 있다. 2~8번은 최종 감사에 기록된 완료 경계가 그대로이며, 구현 완료로 바뀐 증거가 생기면 감사 문서와 보류 원장을 함께 갱신한다.
 - 변경/검증: 이번 요청에서는 코드·설정·운영 서비스를 변경하지 않고 기록 위치와 이후 구현 내역만 대조했다. NAS live 배포 중단 경계도 유지한다.
+
+## 2026-09-07 현재 미구현·부분 구현 목록 재정리
+
+- 사용자 요청: 이미 완료된 AI exact-call 승인 재개·복구·UID 고정을 제외하고 현재 구현되지 않은 항목을 다시 열거한다.
+- 완전 미구현 또는 설계 단계: 신규·기존 계정 기본 20GiB 전환, 시스템 디스크 1TiB 보조 볼륨과 project quota/volume registry, non-root cgroup v2 Python 실행 worker와 kernel 제어, Note Studio Office stable reference transaction, 공인 Windows 코드 서명이다.
+- 부분 구현 뒤 남은 핵심: Note Studio의 caret `/` 드롭다운·Tab/목록/input rule·IME/포인터 E2E·댓글/멘션/협업, AI deterministic 사용자 의도/prompt-injection guardrail·token reservation·streaming/semantic search/citation·관리자/노트/문서 도구, Windows 신규 PC·재설치·업데이트·재부팅·다중 계정 장시간 E2E와 Explorer OS별 상태 확인, 완전 hydration marker/자동 알림, 과거 잘못된 AI 응답의 `이전 AI 응답` 구분 UI가 남았다.
+- 운영 경계: durable AI 코드는 GitHub와 NAS checkout에 있고 NAS Linux 57/57을 통과했지만, NAS origin 오프라인으로 새 frontend live bundle 반영·PM2·로그인 화면 최종 확인은 아직 끝나지 않았다.
