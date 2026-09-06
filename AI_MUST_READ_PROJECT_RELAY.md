@@ -1104,3 +1104,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 기존 프로젝트 관계: 마스터 `docs/NAS_PROJECT_LOG.xlsx`에는 `NOTE-STUDIO` 기능, `DNB-NOTE-STUDIO-001`, 프로그램별 상세 설계 메모리 규칙과 AUTH-ROLE, FILE-MANAGER, FILE-VERSIONING, STORAGE-CAPACITY-ALLOCATION, DOCUMENT-STUDIO, DOCUMENT-WORKSPACE, AI-AGENT, Windows NAS Drive 관계만 추가했다. 세부 기능의 단일 기준은 전용 XLSX다.
 - 검증: 전용 XLSX는 artifact-tool로 생성·재가져오기하고 formula error 0건을 확인했다. 32개 시트를 모두 PNG로 렌더한 뒤 4개 contact sheet로 표의 잘림·줄바꿈·한글 표시를 육안 검사했다. 마스터 workbook도 artifact-tool로 수정·렌더하고 formula error 0건을 확인했다. 이번 단계는 조사·설계 문서만 추가했으며 앱 코드, DB, 서비스, 사용자 파일, 운영 설정은 변경하지 않았다.
 - 다음 안전 순서: 사용자가 구현 시작을 지시하면 M0 기술 spike로 React 19에서 Tiptap/IME·Yjs·Monaco lazy-load를 검증하고, M1에서 노트 shell·계정 경계·블록/Markdown/TXT/코드·자동 저장·버전·휴지통·NAS 파일 선택을 먼저 완성한다. 협업은 M1.5, Python/데이터베이스는 보안·부하 gate가 있는 M2, PC 앱은 PWA 결과 뒤 M3로 진행한다.
+
+## 2026-09-06 노트 스튜디오 M1 핵심 기반 구현·로컬 검증
+
+- 사용자 요청: 조사에서 끝내지 않고 기능을 하나씩 구현한 뒤 해당 묶음의 부족한 점과 오류를 검토·검증하고, 완료된 다음에 다음 구현으로 넘어가 전체 노트 스튜디오를 완성한다.
+- 이번 구현 경계: 첫 묶음은 계정별 영속 저장과 기본 편집 흐름이다. 플랫폼 런처와 전역 앱 창에 `노트 스튜디오`를 등록하고 블록, Markdown, TXT, 코드 4종 노트를 생성·열기·편집할 수 있게 했다. 블록은 Tiptap/ProseMirror, 나머지는 기존 Monaco를 재사용한다.
+- 저장·충돌·복구: 모든 역할의 노트 저장소를 관리자 NAS-root 권한과 분리된 `getQuotaBasePath(user)/.note_studio`에 둔다. JSON은 임시 파일 뒤 rename으로 교체하며 노트당 5MB, 버전 최대 100개다. PATCH는 `expectedRevision`이 현재 revision과 정확히 같을 때만 저장하고 불일치는 409 `NOTE_REVISION_CONFLICT`로 중단한다. UI는 850ms 자동 저장과 Ctrl/Cmd+S, 저장 중 추가 입력의 후속 재저장, 저장 상태·충돌·오류 문구를 제공하고 실패해도 현재 창의 입력을 버리지 않는다.
+- 탐색·연계: 현재 계정 안에서 제목·본문 검색, 노트 휴지통·복원·확인 후 영구 삭제, 이전 버전을 새 revision으로 복원한다. 기존 NAS picker로 파일·폴더를 검증된 상대 경로 참조로 첨부하고 기존 파일/폴더 창으로 다시 연다. 5MB 이하 UTF-8 TXT·Markdown·일반 코드 파일 가져오기와 MD/TXT/코드/블록 JSON 내보내기를 제공한다.
+- 숨김 저장소 경계: `.note_studio`는 일반 파일 목록과 전체 검색뿐 아니라 Windows Agent 동기화 경로 검증, manifest, watcher에서도 제외했다. 내부 JSON과 버전 파일을 사용자가 일반 파일처럼 수정하거나 PC 양방향 동기화로 중복 처리하지 않는다.
+- 자동 검증: `noteStudioService`에서 4종 생성, 계정 root 격리, revision 충돌, 버전 보존·복원, 휴지통, 내용 검색, 첨부 revision, 5MB 제한, 100개 retention을 7개 테스트로 확인했다. 저장공간 경계 4개 회귀와 Node syntax, `git diff --check`, frontend production build가 통과했고 새 코드의 eslint warning은 없다. 전체 frontend의 기존 `App.test.js`는 로컬 Jest가 설치된 `react-router-dom`을 해석하지 못하는 기존 환경 문제로 실패하지만 production resolver/build는 성공했다.
+- 메모리 갱신: 마스터 workbook의 NOTE-STUDIO Feature/Code/API/Do_Not_Break/Patch/Request를 갱신했다. 전용 `NAS_NOTE_STUDIO_SPEC.xlsx`에는 `Implementation_Status` 시트를 추가하고 Roadmap·Change_Log를 0.2-m1-core 상태로 갱신했다. 두 workbook 모두 artifact-tool 재가져오기에서 formula error 0이며 새 문자의 replacement/mojibake는 확인되지 않았다.
+- 아직 완료로 보면 안 되는 항목: 이 기록 시점에는 NAS 운영 배포와 로그인된 실제 브라우저 입력·재로딩·첨부·휴지통·두 창 충돌 E2E가 남아 있다. M1의 계층 트리, slash/context command registry, 오프라인 queue도 다음 세부 묶음이다. M1.5 실시간 협업, M2 데이터베이스·Python, M3 PC 앱, M4 AI는 아직 구현하지 않았으며 Python은 격리·부하 gate 전 활성화 금지다.

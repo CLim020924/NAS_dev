@@ -61,6 +61,7 @@ const {
   sanitizeFileName: sanitizeDocumentStudioFileName
 } = require('./documentStudioService');
 const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankDocumentService');
+const { createNoteStudioStore } = require('./noteStudioService');
 const {
   SHARED_ROOT_NAME,
   normalizeRelativePath: normalizeAccountShareRelPath,
@@ -1117,6 +1118,141 @@ const getValidatedPath = (user, requestedPath) => {
 
 const getUserBasePath = (user) => getAccessBasePath(normalizeQuotaFields(user || {}));
 
+// Notes always live in the account's personal quota root. Administrator NAS-root
+// visibility must never merge note ownership between accounts.
+const getNoteStudioStore = (user) => createNoteStudioStore({
+  personalRootPath: getQuotaBasePath(normalizeQuotaFields(user || {}))
+});
+const noteStudioImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 5 * 1024 * 1024 }
+});
+
+const sendNoteStudioError = (res, error) => res.status(error.status || 500).json({
+  error: error.message || '노트 스튜디오 요청을 처리하지 못했습니다.',
+  code: error.code || undefined,
+  latest: error.latest || undefined
+});
+
+router.get('/note-studio/notes', verifyToken, (req, res) => {
+  try {
+    const notes = getNoteStudioStore(req.user).list({
+      deleted: req.query.deleted === 'true',
+      query: req.query.q || ''
+    });
+    return res.json({ success: true, notes });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.get('/note-studio/notes/:noteId', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, note: getNoteStudioStore(req.user).get(req.params.noteId, { includeDeleted: req.query.includeDeleted === 'true' }) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/notes', verifyToken, express.json({ limit: '6mb' }), (req, res) => {
+  try {
+    const note = getNoteStudioStore(req.user).create(req.body || {});
+    return res.status(201).json({ success: true, note });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/import', verifyToken, noteStudioImportUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: '가져올 파일을 선택해 주세요.' });
+    const extension = path.extname(req.file.originalname || '').toLowerCase();
+    const type = extension === '.md' || extension === '.markdown' ? 'markdown'
+      : ['.js', '.jsx', '.ts', '.tsx', '.py', '.json', '.html', '.css', '.sql', '.sh', '.yaml', '.yml'].includes(extension) ? 'code'
+        : 'text';
+    const languageByExtension = { '.js': 'javascript', '.jsx': 'javascript', '.ts': 'typescript', '.tsx': 'typescript', '.py': 'python', '.json': 'json', '.html': 'html', '.css': 'css', '.sql': 'sql', '.sh': 'shell', '.yaml': 'yaml', '.yml': 'yaml' };
+    const note = getNoteStudioStore(req.user).create({
+      title: path.basename(req.file.originalname, extension),
+      type,
+      language: languageByExtension[extension] || '',
+      content: req.file.buffer.toString('utf8')
+    });
+    return res.status(201).json({ success: true, note });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.get('/note-studio/notes/:noteId/export', verifyToken, (req, res) => {
+  try {
+    const note = getNoteStudioStore(req.user).get(req.params.noteId);
+    const extension = note.type === 'markdown' ? 'md' : note.type === 'block' ? 'json' : note.type === 'code' ? (note.language === 'python' ? 'py' : note.language === 'javascript' ? 'js' : 'txt') : 'txt';
+    const safeTitle = String(note.title || 'note').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 120) || 'note';
+    const body = note.type === 'block' ? JSON.stringify(note.content, null, 2) : String(note.content || '');
+    res.setHeader('Content-Type', note.type === 'block' ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`${safeTitle}.${extension}`)}`);
+    return res.send(body);
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.patch('/note-studio/notes/:noteId', verifyToken, express.json({ limit: '6mb' }), (req, res) => {
+  try {
+    const body = req.body || {};
+    const changes = { expectedRevision: body.expectedRevision, reason: body.reason };
+    for (const key of ['title', 'parentId', 'language', 'content']) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) changes[key] = body[key];
+    }
+    const note = getNoteStudioStore(req.user).update(req.params.noteId, changes);
+    return res.json({ success: true, note });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.delete('/note-studio/notes/:noteId', verifyToken, express.json(), (req, res) => {
+  try {
+    const note = getNoteStudioStore(req.user).moveToTrash(req.params.noteId, req.body?.expectedRevision);
+    return res.json({ success: true, note });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/notes/:noteId/restore', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, note: getNoteStudioStore(req.user).restore(req.params.noteId) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.delete('/note-studio/notes/:noteId/permanent', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, ...getNoteStudioStore(req.user).removePermanently(req.params.noteId) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.get('/note-studio/notes/:noteId/versions', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, versions: getNoteStudioStore(req.user).versions(req.params.noteId) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/notes/:noteId/versions/:versionId/restore', verifyToken, express.json(), (req, res) => {
+  try {
+    const note = getNoteStudioStore(req.user).restoreVersion(req.params.noteId, req.params.versionId, req.body?.expectedRevision);
+    return res.json({ success: true, note });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/notes/:noteId/attachments', verifyToken, express.json(), (req, res) => {
+  try {
+    const { basePath, targetPath } = getValidatedPath(req.user, req.body?.path || '');
+    if (!fs.existsSync(targetPath)) return res.status(404).json({ error: '첨부할 NAS 항목을 찾을 수 없습니다.' });
+    const stat = fs.statSync(targetPath);
+    const relativePath = path.relative(basePath, targetPath).replace(/\\/g, '/');
+    const result = getNoteStudioStore(req.user).addAttachment(req.params.noteId, {
+      name: path.basename(targetPath),
+      path: relativePath ? `/${relativePath}` : '/',
+      kind: stat.isDirectory() ? 'folder' : 'file'
+    }, req.body?.expectedRevision);
+    return res.status(201).json({ success: true, ...result });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.delete('/note-studio/notes/:noteId/attachments/:attachmentId', verifyToken, express.json(), (req, res) => {
+  try {
+    const note = getNoteStudioStore(req.user).removeAttachment(req.params.noteId, req.params.attachmentId, req.body?.expectedRevision);
+    return res.json({ success: true, note });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
 const getOnlyOfficeUser = (req) => {
   const access = verifyOfficeAccessToken(JWT_SECRET, req.query.officeToken);
   const latestOfficeUser = findMemberByAnyId({
@@ -1214,6 +1350,7 @@ const SEARCH_SKIP_NAMES = new Set([
   '.agent_trash',
   VERSION_ROOT_DIR,
   USER_TRASH_DIR,
+  '.note_studio',
   '.msp_chunk_uploads',
   '.msp_chunk_canceled'
 ]);
@@ -4672,7 +4809,8 @@ const listAgentManifestEntries = (linkedRoot) => {
       if (
         relPath === '.agent_trash' || relPath.startsWith('.agent_trash/') ||
         relPath === VERSION_ROOT_DIR || relPath.startsWith(VERSION_ROOT_DIR + '/') ||
-        relPath === USER_TRASH_DIR || relPath.startsWith(USER_TRASH_DIR + '/')
+        relPath === USER_TRASH_DIR || relPath.startsWith(USER_TRASH_DIR + '/') ||
+        relPath === '.note_studio' || relPath.startsWith('.note_studio/')
       ) continue;
 
       const stat = fs.statSync(fullPath);
@@ -4722,7 +4860,7 @@ const ensureAgentRootMonitor = (linkedRoot) => {
       directories.add(dir);
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        if (entry.name === '.agent_trash' || entry.name === VERSION_ROOT_DIR || entry.name === USER_TRASH_DIR) continue;
+        if (entry.name === '.agent_trash' || entry.name === VERSION_ROOT_DIR || entry.name === USER_TRASH_DIR || entry.name === '.note_studio') continue;
         walk(path.join(dir, entry.name));
       }
     };

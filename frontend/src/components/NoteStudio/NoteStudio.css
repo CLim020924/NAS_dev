@@ -1,0 +1,43 @@
+.note-studio-editor {
+  height: 100%;
+  overflow: auto;
+}
+
+.note-studio-editor .tiptap {
+  min-height: 100%;
+  padding: 28px clamp(20px, 5vw, 72px) 100px;
+  outline: none;
+  color: inherit;
+  caret-color: currentColor;
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.note-studio-editor .tiptap > *:first-child { margin-top: 0; }
+.note-studio-editor .tiptap h1 { font-size: 2rem; line-height: 1.25; }
+.note-studio-editor .tiptap h2 { font-size: 1.5rem; line-height: 1.35; }
+.note-studio-editor .tiptap blockquote {
+  border-left: 3px solid #8b5cf6;
+  margin-left: 0;
+  padding-left: 16px;
+  opacity: .85;
+}
+.note-studio-editor .tiptap code {
+  background: rgba(127, 127, 127, .13);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+.note-studio-editor .tiptap pre {
+  background: #151922;
+  color: #f4f7fb;
+  border-radius: 10px;
+  overflow-x: auto;
+  padding: 14px 16px;
+}
+.note-studio-editor .tiptap p.is-editor-empty:first-child::before {
+  color: #8a8f99;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

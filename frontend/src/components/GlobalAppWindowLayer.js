@@ -11,6 +11,7 @@ import { useWindows } from '../contexts/WindowContext';
 import MeetingApp from './MeetingApp';
 import DocumentStudio from './DocumentStudio/DocumentStudio';
 import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
+import NoteStudio from './NoteStudio/NoteStudio';
 import { getAppWindowLayerZIndex } from './windowLayerPolicy';
 
 class AppWindowErrorBoundary extends React.Component {
@@ -76,6 +77,9 @@ const GlobalAppWindowLayer = () => {
     }
     if (win.appId === 'document-workspace') {
       return <DocumentWorkspace />;
+    }
+    if (win.appId === 'note-studio') {
+      return <NoteStudio />;
     }
     return null;
   };

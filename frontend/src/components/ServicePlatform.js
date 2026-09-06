@@ -8,6 +8,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import AutoAwesomeMotionIcon from '@mui/icons-material/AutoAwesomeMotion';
 import ArticleIcon from '@mui/icons-material/Article';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useWindows } from '../contexts/WindowContext';
@@ -15,6 +16,7 @@ import socket from '../socket';
 import MeetingApp from './MeetingApp';
 import DocumentStudio from './DocumentStudio/DocumentStudio';
 import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
+import NoteStudio from './NoteStudio/NoteStudio';
 
 const appOpenMode = () => localStorage.getItem('platform_app_open_mode') || 'window';
 const DEVICE_OFFLINE_AFTER_MS = 30000;
@@ -396,6 +398,7 @@ function ServicePlatform() {
       { id: 'meeting', title: '화상회의', icon: VideocamIcon, component: MeetingApp, color: theme.palette.info.main, width: 920, height: 640 },
       { id: 'document-workspace', title: '문서 스튜디오', icon: ArticleIcon, component: DocumentWorkspace, color: '#6d4aff', width: 1100, height: 760 },
       { id: 'document-studio', title: '문서 변환', icon: AutoAwesomeMotionIcon, component: DocumentStudio, color: theme.palette.secondary.main, width: 1120, height: 760 },
+      { id: 'note-studio', title: '노트 스튜디오', icon: EditNoteIcon, component: NoteStudio, color: '#7c3aed', width: 1180, height: 780 },
       { id: 'settings', title: '설정', icon: SettingsIcon, route: '/settings', color: theme.palette.text.secondary }
     ];
 
@@ -448,7 +451,7 @@ function ServicePlatform() {
                 setInlineApp(null);
               }}
             />
-          ) : inlineApp.id === 'document-workspace' ? <DocumentWorkspace /> : inlineApp.id === 'document-studio' ? <DocumentStudio /> : null}
+          ) : inlineApp.id === 'document-workspace' ? <DocumentWorkspace /> : inlineApp.id === 'document-studio' ? <DocumentStudio /> : inlineApp.id === 'note-studio' ? <NoteStudio /> : null}
         </Box>
       </Box>
     );

@@ -1,0 +1,92 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const { createNoteStudioStore, MAX_VERSIONS_PER_NOTE } = require('../noteStudioService');
+
+const withStore = (run) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-note-studio-'));
+  try { return run(createNoteStudioStore({ personalRootPath: root }), root); }
+  finally { fs.rmSync(root, { recursive: true, force: true }); }
+};
+
+test('creates independent block, markdown, text and code notes', () => withStore((store, root) => {
+  const types = ['block', 'markdown', 'text', 'code'];
+  const notes = types.map((type) => store.create({ title: type, type, language: type === 'code' ? 'javascript' : '' }));
+  assert.deepEqual(store.list().map((note) => note.type).sort(), types.sort());
+  assert.equal(store.get(notes[0].id).content.type, 'doc');
+  assert.equal(store.get(notes[3].id).language, 'javascript');
+  assert.ok(fs.existsSync(path.join(root, '.note_studio', 'index.json')));
+}));
+
+test('requires an exact revision and preserves a version before saving', () => withStore((store) => {
+  const note = store.create({ title: '원본', type: 'text', content: 'one' });
+  const saved = store.update(note.id, { expectedRevision: 1, title: '수정', content: 'two', reason: 'manual' });
+  assert.equal(saved.revision, 2);
+  assert.equal(saved.content, 'two');
+  const versions = store.versions(note.id);
+  assert.equal(versions.length, 1);
+  assert.equal(versions[0].revision, 1);
+  assert.throws(() => store.update(note.id, { expectedRevision: 1, content: 'stale' }), (error) => error.status === 409 && error.code === 'NOTE_REVISION_CONFLICT');
+}));
+
+test('moves notes to trash, restores them and only permanently deletes trashed notes', () => withStore((store) => {
+  const note = store.create({ title: '삭제 테스트', type: 'markdown', content: '# hello' });
+  assert.throws(() => store.removePermanently(note.id), (error) => error.status === 409);
+  const trashed = store.moveToTrash(note.id, 1);
+  assert.equal(store.list().length, 0);
+  assert.equal(store.list({ deleted: true }).length, 1);
+  const restored = store.restore(note.id);
+  assert.equal(restored.deletedAt, null);
+  store.moveToTrash(note.id, restored.revision);
+  store.removePermanently(note.id);
+  assert.throws(() => store.get(note.id), (error) => error.status === 404);
+}));
+
+test('searches title and content without leaking another store', () => {
+  const rootA = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-note-a-'));
+  const rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-note-b-'));
+  try {
+    const a = createNoteStudioStore({ personalRootPath: rootA });
+    const b = createNoteStudioStore({ personalRootPath: rootB });
+    a.create({ title: '회의', type: 'text', content: '알파 일정' });
+    b.create({ title: '개인', type: 'text', content: '알파 비밀' });
+    assert.equal(a.list({ query: '알파' }).length, 1);
+    assert.equal(b.list({ query: '회의' }).length, 0);
+  } finally {
+    fs.rmSync(rootA, { recursive: true, force: true });
+    fs.rmSync(rootB, { recursive: true, force: true });
+  }
+});
+
+test('restores an immutable prior version as a new revision', () => withStore((store) => {
+  const note = store.create({ title: 'v1', type: 'text', content: 'first' });
+  const v2 = store.update(note.id, { expectedRevision: 1, title: 'v2', content: 'second' });
+  const firstVersion = store.versions(note.id).find((version) => version.revision === 1);
+  const restored = store.restoreVersion(note.id, firstVersion.versionId, v2.revision);
+  assert.equal(restored.title, 'v1');
+  assert.equal(restored.content, 'first');
+  assert.equal(restored.revision, 3);
+}));
+
+test('adds and removes opaque attachment records with revision checks', () => withStore((store) => {
+  const note = store.create({ title: '첨부', type: 'text' });
+  const added = store.addAttachment(note.id, { name: '보고서.pdf', path: '/업무/보고서.pdf', kind: 'file' }, 1);
+  assert.equal(added.note.revision, 2);
+  assert.equal(added.note.attachments.length, 1);
+  assert.match(added.attachment.id, /^[0-9a-f-]{36}$/i);
+  assert.throws(() => store.removeAttachment(note.id, added.attachment.id, 1), (error) => error.status === 409);
+  const removed = store.removeAttachment(note.id, added.attachment.id, 2);
+  assert.equal(removed.revision, 3);
+  assert.deepEqual(removed.attachments, []);
+}));
+
+test('rejects oversized notes and bounds retained history', () => withStore((store) => {
+  assert.throws(() => store.create({ type: 'text', content: 'x'.repeat(6 * 1024 * 1024) }), (error) => error.status === 413);
+  let note = store.create({ type: 'text', content: '0' });
+  for (let i = 0; i < MAX_VERSIONS_PER_NOTE + 3; i += 1) {
+    note = store.update(note.id, { expectedRevision: note.revision, content: String(i) });
+  }
+  assert.equal(store.versions(note.id).length, MAX_VERSIONS_PER_NOTE);
+}));
