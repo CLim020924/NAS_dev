@@ -2,6 +2,10 @@
 
 ## 2026-09-07 다른 PC Drive 로그인/부팅 트레이 미표시 진단
 
+- 후속 사용자 보고: 로그인 이후 웹에서 열기는 현재 개발 PC에서도 실패한다. 현재 PC에서 NAS-Drive, NAS-Sync-Agent, NAS-Drive-Provider 프로세스 실행을 직접 확인했다. launcher 파일 버전은 1.10.31.0이다. agent exe의 18.5.0 PE 표시는 Node runtime 버전이므로 제품 버전으로 판단하지 않는다.
+- 현재 PC 기록 확인: agent-health의 2026-09-07 01:42:39 UTC 상태는 up-to-date다. open-web-last의 마지막 기록은 2026-09-01 00:51:48 UTC, profile 단계 WEB_PROFILE_MISSING이다. 8월 31일 Agent 인증 실패 HTTP 403도 있으나 모두 과거 기록이며 현재 증상의 직접 원인으로 사용하지 않는다.
+- 웹 열기 경로는 장치 프로필/인증정보 조회, 별도 web-session 발급, 브라우저 실행 순서다. 현재 발생 오류를 기록과 대조하기 위해 사용자에게 이 PC의 NAS 웹 열기 재시도 및 오류 문구/화면을 요청했다. 아직 새 실패를 재현하지 못했으며 코드/설정/배포 변경 없이 진단 중이다.
+
 - 요청: 다른 PC에서 NAS 정상 상태에도 서버 연결 불가 안내가 나오고 부팅 후 트레이 아이콘이 안 보이는 이유 확인.
 - 확인: installer의 FriendlyError는 `연결`을 포함한 오류를 서버 전원/인터넷 확인 안내로 바꾼다. 로그인 이후 로컬 초기 구성 실패에도 이 문구가 포함되므로 안내만으로 서버 장애를 확정할 수 없다.
 - 자동 시작은 사용자별 HKCU Run에 native launcher --background를 등록한다. 연결 계정이 없어도 native tray는 실행하는 코드다. Node agent와 native tray가 분리되어 있어 아이콘 부재가 프로세스 부재를 증명하지는 않는다.
