@@ -1,8 +1,8 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { DEFAULT_IMAGE } = require('./pythonRuntimeCatalog');
 
-const DEFAULT_IMAGE = 'python:3.12-alpine';
 const MAX_CODE_BYTES = 128 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 

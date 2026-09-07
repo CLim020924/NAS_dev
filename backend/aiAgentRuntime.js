@@ -151,6 +151,7 @@ const TOOL_DEFINITIONS = [
   { type: 'function', name: 'list_notifications', description: '현재 계정의 알림 목록과 읽음 상태를 조회한다.', strict: true, parameters: schema({}) },
   { type: 'function', name: 'get_unread_notification_count', description: '현재 계정의 읽지 않은 알림 개수를 조회한다.', strict: true, parameters: schema({}) },
   { type: 'function', name: 'list_notebooks', description: 'Note Studio의 노트북 목록을 조회한다.', strict: true, parameters: schema({}) },
+  { type: 'function', name: 'get_python_runtime', description: 'Note Studio Python 실행기의 버전, 기본 설치 패키지와 실행 제한을 조회한다.', strict: true, parameters: schema({}) },
   { type: 'function', name: 'list_deleted_notes', description: 'Note Studio 휴지통에 있는 복구 가능한 노트를 조회한다.', strict: true, parameters: schema({ query: stringProp('검색어. 전체 목록은 빈 문자열') }, ['query']) },
   { type: 'function', name: 'list_note_versions', description: '정확한 Note Studio 노트의 저장 버전 목록을 조회한다.', strict: true, parameters: schema({ note_id: stringProp('노트 ID') }, ['note_id']) },
   { type: 'function', name: 'list_devices', description: '현재 계정에 연동된 NAS Driver PC와 연결·동기화 상태를 조회한다.', strict: true, parameters: schema({}) },
@@ -240,7 +241,7 @@ const SURFACE_HINTS = Object.freeze({
   friends: /(?:친구|사용자\s*검색|차단)/i,
   chat: /(?:채팅|메시지|대화방|받은\s*파일|방장|부방장|강퇴)/i,
   notifications: /(?:알림|읽지\s*않은)/i,
-  notes: /(?:노트|노트북|페이지|마크다운|코드|파이썬|python)/i,
+  notes: /(?:노트|노트북|페이지|마크다운|코드|파이썬|python|패키지|numpy|pandas|pip)/i,
   documents: /(?:문서\s*변환|PDF|PPTX|DOCX|HWPX?|XLSX|합치|병합|템플릿)/i,
   devices: /(?:연동\s*PC|NAS\s*Driver|나스\s*드라이버|장치|동기화|컴퓨터\s*연결)/i,
   shares: /(?:공유\s*링크|공개\s*링크)/i,
@@ -890,6 +891,7 @@ const runTool = async (user, name, args, context) => {
   if (name === 'list_notifications') return context.platformCall('GET', '/notifications');
   if (name === 'get_unread_notification_count') return context.platformCall('GET', '/notifications/unread-count');
   if (name === 'list_notebooks') return context.platformCall('GET', '/note-studio/notebooks');
+  if (name === 'get_python_runtime') return context.platformCall('GET', '/note-studio/python/runtime');
   if (name === 'list_deleted_notes') return context.platformCall('GET', `/note-studio/notes?deleted=true&q=${encodeURIComponent(args.query || '')}`);
   if (name === 'list_note_versions') return context.platformCall('GET', `/note-studio/notes/${encodeURIComponent(args.note_id)}/versions`);
   if (name === 'list_devices') return context.platformCall('GET', '/devices');

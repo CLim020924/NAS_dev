@@ -21,3 +21,9 @@ test('syntax, missing modules, and runtime faults are not labeled as server outa
   assert.equal(classifyCodeExecutionError({ language: 'python', error: { result: { stderr: "ModuleNotFoundError: No module named 'x'" } } }).category, 'missing-module');
   assert.match(classifyCodeExecutionError({ language: 'javascript', error: { result: { stderr: 'TypeError: bad value' } } }).userMessage, /서버 연결 문제는 아니며/);
 });
+
+test('Docker image and socket failures are classified as infrastructure', () => {
+  const missingImage = classifyCodeExecutionError({ language: 'python', error: { result: { stderr: "docker: Error response from daemon: pull access denied" } } });
+  assert.equal(missingImage.category, 'infrastructure');
+  assert.equal(missingImage.errorType, 'ContainerRuntimeError');
+});

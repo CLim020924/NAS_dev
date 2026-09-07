@@ -134,6 +134,9 @@ const NoteStudio = () => {
   const [officeLocationFormat, setOfficeLocationFormat] = useState('docx');
   const [codeRunning, setCodeRunning] = useState(false);
   const [codeResult, setCodeResult] = useState(null);
+  const [pythonRuntimeOpen, setPythonRuntimeOpen] = useState(false);
+  const [pythonRuntime, setPythonRuntime] = useState(null);
+  const [pythonRuntimeLoading, setPythonRuntimeLoading] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
   const selectedRef = useRef(null);
   const saveTimerRef = useRef(null);
@@ -697,6 +700,19 @@ const NoteStudio = () => {
     } finally { setCodeRunning(false); }
   };
 
+  const openPythonRuntime = async () => {
+    setPythonRuntimeOpen(true);
+    if (pythonRuntime || pythonRuntimeLoading) return;
+    setPythonRuntimeLoading(true);
+    try {
+      const { data } = await axios.get('/api/note-studio/python/runtime', { withCredentials: true });
+      setPythonRuntime(data);
+    } catch (error) {
+      setMessage({ severity: 'error', text: errorMessage(error, 'Python 패키지 정보를 불러오지 못했습니다.') });
+      setPythonRuntimeOpen(false);
+    } finally { setPythonRuntimeLoading(false); }
+  };
+
   const importFile = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -815,6 +831,7 @@ const NoteStudio = () => {
             {selected.type === 'code' && <Select size="small" value={selected.language || 'plaintext'} onChange={(event) => updateMeta({ language: event.target.value })} sx={{ minWidth: 118 }}>{languageOptions.map((language) => <MenuItem key={language} value={language}>{language}</MenuItem>)}</Select>}
             <Chip size="small" label={saveLabel} color={savingState === 'error' || savingState === 'conflict' ? 'warning' : savingState === 'saved' || savingState === 'idle' ? 'success' : 'default'} variant="outlined" />
             {selected.type === 'code' && ['python', 'javascript'].includes(String(selected.language || '').toLowerCase()) && !selected.deletedAt && <Button size="small" variant="contained" startIcon={codeRunning ? <CircularProgress size={15} color="inherit" /> : <PlayArrowIcon />} disabled={codeRunning || savingState === 'dirty' || savingState === 'saving'} onClick={runCode}>{codeRunning ? '실행 중' : `${selected.language === 'python' ? 'Python' : 'JavaScript'} 실행`}</Button>}
+            {selected.type === 'code' && selected.language === 'python' && !selected.deletedAt && <Button size="small" variant="outlined" onClick={openPythonRuntime}>패키지</Button>}
             {!selected.deletedAt && <Button size="small" variant="outlined" startIcon={<DescriptionIcon />} disabled={officeCreating || savingState === 'dirty' || savingState === 'saving'} onClick={(event) => setOfficeMenu({ anchorEl: event.currentTarget })}>문서 만들기</Button>}
             {!selected.deletedAt && <Tooltip title="버전 기록"><IconButton onClick={openVersions}><HistoryIcon /></IconButton></Tooltip>}
             {!selected.deletedAt && <Tooltip title="파일로 내보내기"><IconButton onClick={exportSelected}><DownloadIcon /></IconButton></Tooltip>}
@@ -896,11 +913,26 @@ const NoteStudio = () => {
         <DialogTitle sx={{ fontWeight: 900 }}>{codeResult?.displayName || '코드'} 격리 실행 결과</DialogTitle>
         <DialogContent dividers>
           {codeResult?.error && <Alert severity="error" sx={{ mb: 1.5 }}>{codeResult.error}{codeResult.errorType && <Typography component="span" variant="caption" sx={{ display: 'block', mt: 0.5 }}>분류: {codeResult.errorType}</Typography>}</Alert>}
-          <Typography variant="caption" color="text.secondary">네트워크 차단 · non-root · 읽기 전용 · 15초 · RAM 256MiB · PID 64</Typography>
+          <Typography variant="caption" color="text.secondary">네트워크 차단 · non-root · 읽기 전용 · {codeResult?.sandbox?.timeoutSeconds || 15}초 · RAM {codeResult?.sandbox?.memoryMiB || 256}MiB · PID {codeResult?.sandbox?.pids || 64}</Typography>
           <Box component="pre" sx={{ mt: 1.5, p: 1.5, minHeight: 120, maxHeight: 420, overflow: 'auto', bgcolor: 'grey.950', color: 'grey.100', borderRadius: 1, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{codeResult?.stdout || codeResult?.stderr || (codeResult?.error ? '' : '(출력 없음 · 정상 종료)')}</Box>
           {codeResult?.stdout && codeResult?.stderr && <Box component="pre" sx={{ mt: 1, p: 1.5, maxHeight: 180, overflow: 'auto', bgcolor: 'warning.light', color: 'warning.contrastText', borderRadius: 1, whiteSpace: 'pre-wrap' }}>{codeResult.stderr}</Box>}
         </DialogContent>
         <DialogActions><Button onClick={() => setCodeResult(null)}>닫기</Button></DialogActions>
+      </Dialog>
+      <Dialog open={pythonRuntimeOpen} onClose={() => setPythonRuntimeOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>Python 기본 패키지</DialogTitle>
+        <DialogContent dividers>
+          {pythonRuntimeLoading ? <Box sx={{ display: 'grid', placeItems: 'center', minHeight: 180 }}><CircularProgress /></Box> : <>
+            <Typography variant="body2" color="text.secondary">Python {pythonRuntime?.pythonVersion || '3.12'} · 런타임 {pythonRuntime?.runtimeVersion || '-'} · {pythonRuntime?.packageCount || 0}개 직접 제공 패키지</Typography>
+            <Alert severity="info" sx={{ mt: 1.5, borderRadius: 0 }}>패키지는 이미 NAS 실행 이미지에 설치되어 있으므로 코드에서 바로 import하면 됩니다. 실행 중 인터넷 연결과 pip install은 차단됩니다.</Alert>
+            {[...new Set((pythonRuntime?.packages || []).map((item) => item.category))].map((category) => <Box key={category} sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 0.75 }}>{category}</Typography>
+              <Stack direction="row" gap={0.75} flexWrap="wrap">{(pythonRuntime?.packages || []).filter((item) => item.category === category).map((item) => <Chip key={item.name} variant="outlined" label={`${item.name} ${item.version} · import ${item.imports.join(', ')}`} />)}</Stack>
+            </Box>)}
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>{pythonRuntime?.externalPackages?.message}</Typography>
+          </>}
+        </DialogContent>
+        <DialogActions><Button onClick={() => setPythonRuntimeOpen(false)}>닫기</Button></DialogActions>
       </Dialog>
       <NasItemPickerDialog open={attachmentPickerOpen} onClose={() => setAttachmentPickerOpen(false)} onSelect={addAttachment} title="노트에 NAS 항목 첨부" confirmLabel="첨부" allowCurrentFolder />
       <NasItemPickerDialog open={officeLocationPickerOpen} onClose={() => setOfficeLocationPickerOpen(false)} onSelect={chooseOfficeDestination} title="새 문서를 저장할 NAS 폴더" confirmLabel="여기에 만들기" folderOnly allowCurrentFolder />
