@@ -35,7 +35,7 @@ const newRequestId = () => {
   });
 };
 
-const AiAgentPanel = ({ open, onClose, context = {} }) => {
+const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
   const [status, setStatus] = useState(null);
   const [messages, setMessages] = useState([]);
   const [actions, setActions] = useState([]);
@@ -54,6 +54,13 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
   const followLatestRef = useRef(true);
   const activityClearTimerRef = useRef(null);
   const copyClearTimerRef = useRef(null);
+  const appliedDraftRequestRef = useRef('');
+
+  useEffect(() => {
+    if (!open || !draftRequest?.requestId || appliedDraftRequestRef.current === draftRequest.requestId) return;
+    appliedDraftRequestRef.current = draftRequest.requestId;
+    setMessage(String(draftRequest.draft || ''));
+  }, [open, draftRequest]);
 
   const clearActivityLater = (delay = 1800) => {
     if (activityClearTimerRef.current) window.clearTimeout(activityClearTimerRef.current);

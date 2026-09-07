@@ -43,6 +43,8 @@ import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
 import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, nextBlockIndent, normalizeBlockIndent, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
+import { copyTextToClipboard } from '../../utils/copyTextToClipboard';
+import { BLOCK_BACKGROUNDS, BLOCK_COLORS, BLOCK_TRANSFORMS, blockTextStats, findContextBlock } from './noteStudioBlockMenu';
 import './NoteStudio.css';
 
 const BlockIndent = Extension.create({
@@ -58,6 +60,16 @@ const BlockIndent = Extension.create({
             const level = normalizeBlockIndent(indentLevel);
             return level ? { 'data-indent-level': level, style: `margin-left: ${level * 1.5}rem` } : {};
           }
+        },
+        blockColor: {
+          default: null,
+          parseHTML: (element) => element.getAttribute('data-note-color') || null,
+          renderHTML: ({ blockColor }) => blockColor ? { 'data-note-color': blockColor } : {}
+        },
+        blockBackground: {
+          default: null,
+          parseHTML: (element) => element.getAttribute('data-note-background') || null,
+          renderHTML: ({ blockBackground }) => blockBackground ? { 'data-note-background': blockBackground } : {}
         }
       }
     }];
@@ -147,6 +159,7 @@ const NoteStudio = () => {
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false);
   const [notebookTitle, setNotebookTitle] = useState('');
   const [officeMenu, setOfficeMenu] = useState(null);
+  const [blockMenu, setBlockMenu] = useState(null);
   const [officeCreating, setOfficeCreating] = useState(false);
   const [officeLocationDialogOpen, setOfficeLocationDialogOpen] = useState(false);
   const [officeLocationPickerOpen, setOfficeLocationPickerOpen] = useState(false);
@@ -832,6 +845,125 @@ const NoteStudio = () => {
     setCommandOpen(false);
   };
 
+  const closeBlockMenu = (restoreFocus = true) => {
+    setBlockMenu(null);
+    if (restoreFocus) window.setTimeout(() => editor?.commands.focus(), 0);
+  };
+
+  const openBlockContextMenu = (event) => {
+    if (selected?.deletedAt || event.shiftKey) return;
+    event.preventDefault();
+    if (selected?.type !== 'block' || !editor) {
+      setOfficeMenu({ position: { top: event.clientY, left: event.clientX } });
+      return;
+    }
+    const hit = editor.view.posAtCoords({ left: event.clientX, top: event.clientY });
+    const maximum = Math.max(1, editor.state.doc.content.size - 1);
+    const position = Math.max(1, Math.min(hit?.pos ?? maximum, maximum));
+    editor.commands.setTextSelection(position);
+    setBlockMenu({ position: { top: event.clientY, left: event.clientX }, view: 'main' });
+  };
+
+  const transformCurrentBlock = (commandId) => {
+    if (!editor) return;
+    const actions = {
+      paragraph: () => editor.chain().focus().setParagraph().run(),
+      'heading-1': () => editor.chain().focus().setHeading({ level: 1 }).run(),
+      'heading-2': () => editor.chain().focus().setHeading({ level: 2 }).run(),
+      'heading-3': () => editor.chain().focus().setHeading({ level: 3 }).run(),
+      'bullet-list': () => editor.chain().focus().toggleBulletList().run(),
+      'ordered-list': () => editor.chain().focus().toggleOrderedList().run(),
+      'task-list': () => editor.chain().focus().toggleTaskList().run(),
+      quote: () => editor.chain().focus().toggleBlockquote().run(),
+      'code-block': () => editor.chain().focus().setCodeBlock().run(),
+    };
+    actions[commandId]?.();
+    closeBlockMenu(false);
+  };
+
+  const duplicateCurrentBlock = () => {
+    const target = editor && findContextBlock(editor.state);
+    if (!target) return;
+    editor.view.dispatch(editor.state.tr.insert(target.pos + target.node.nodeSize, target.node.copy(target.node.content)));
+    closeBlockMenu();
+  };
+
+  const moveCurrentBlock = (direction) => {
+    const target = editor && findContextBlock(editor.state);
+    if (!target) return;
+    const siblingIndex = target.index + direction;
+    if (siblingIndex < 0 || siblingIndex >= target.parent.childCount) return;
+    const sibling = target.parent.child(siblingIndex);
+    const insertAt = direction < 0 ? target.pos - sibling.nodeSize : target.pos + sibling.nodeSize;
+    const transaction = editor.state.tr.delete(target.pos, target.pos + target.node.nodeSize).insert(insertAt, target.node);
+    editor.view.dispatch(transaction);
+    closeBlockMenu();
+  };
+
+  const deleteCurrentBlock = () => {
+    const target = editor && findContextBlock(editor.state);
+    if (!target) return;
+    if (target.depth === 1 && target.parent.childCount === 1) editor.commands.clearContent();
+    else editor.view.dispatch(editor.state.tr.delete(target.pos, target.pos + target.node.nodeSize));
+    closeBlockMenu();
+  };
+
+  const indentCurrentBlock = (outdent = false) => {
+    if (!editor) return;
+    const { $from } = editor.state.selection;
+    const listItemType = [...Array($from.depth).keys()].reverse()
+      .map((offset) => $from.node(offset + 1)?.type?.name)
+      .find((name) => name === 'taskItem' || name === 'listItem');
+    if (listItemType) {
+      const chain = editor.chain().focus();
+      if (outdent) chain.liftListItem(listItemType).run();
+      else chain.sinkListItem(listItemType).run();
+    } else if (['paragraph', 'heading', 'codeBlock'].includes($from.parent.type.name)) {
+      const position = $from.before($from.depth);
+      const indentLevel = nextBlockIndent($from.parent.attrs.indentLevel, outdent);
+      editor.view.dispatch(editor.state.tr.setNodeMarkup(position, undefined, { ...$from.parent.attrs, indentLevel }));
+    }
+    closeBlockMenu(false);
+  };
+
+  const copyCurrentBlock = async (cut = false) => {
+    const target = editor && findContextBlock(editor.state);
+    if (!target) return;
+    const copied = await copyTextToClipboard(target.node.textContent || '');
+    if (!copied) {
+      setMessage({ severity: 'error', text: '블록 내용을 클립보드에 복사하지 못했습니다.' });
+      return;
+    }
+    if (cut) deleteCurrentBlock();
+    else closeBlockMenu();
+    setMessage({ severity: 'success', text: cut ? '블록을 잘라냈습니다.' : '블록 내용을 복사했습니다.' });
+  };
+
+  const setCurrentBlockAppearance = (attribute, value) => {
+    if (!editor) return;
+    const { $from } = editor.state.selection;
+    if (!['paragraph', 'heading', 'codeBlock'].includes($from.parent.type.name)) return;
+    const position = $from.before($from.depth);
+    editor.view.dispatch(editor.state.tr.setNodeMarkup(position, undefined, { ...$from.parent.attrs, [attribute]: value }));
+    closeBlockMenu(false);
+  };
+
+  const askAiAboutCurrentBlock = () => {
+    const target = editor && findContextBlock(editor.state);
+    if (!target) return;
+    window.dispatchEvent(new CustomEvent('nas:open-ai-agent', { detail: {
+      requestId: `${Date.now()}`,
+      context: { activeApp: 'note-studio', noteId: selected?.id || '', notebookId: selected?.notebookId || '' },
+      draft: `이 노트 블록을 도와줘.\n\n${(target.node.textContent || '').slice(0, 4000)}`,
+    } }));
+    closeBlockMenu(false);
+  };
+
+  const currentBlockStats = useMemo(() => {
+    if (!blockMenu || !editor) return { words: 0, characters: 0 };
+    return blockTextStats(findContextBlock(editor.state)?.node?.textContent || '');
+  }, [blockMenu, editor]);
+
   const moveNoteToRoot = async (note) => {
     try {
       const { data } = await axios.patch(`/api/note-studio/notes/${encodeURIComponent(note.id)}`, { expectedRevision: note.revision, parentId: null, reason: 'tree-move' }, { withCredentials: true });
@@ -885,7 +1017,7 @@ const NoteStudio = () => {
           </Stack>
           {selected.type === 'block' && <BlockToolbar editor={editor} />}
           {(selected.attachments || []).length > 0 && <Stack direction="row" spacing={0.75} sx={{ px: 1.25, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', overflowX: 'auto' }}>{selected.attachments.map((attachment) => <Chip key={attachment.id} icon={<AttachFileIcon />} label={attachment.name} onClick={() => openAttachment(attachment)} onDelete={selected.deletedAt ? undefined : () => removeAttachment(attachment)} deleteIcon={<CloseIcon />} sx={{ flex: '0 0 auto' }} />)}</Stack>}
-          <Box onContextMenu={(event) => { if (selected.deletedAt || event.shiftKey) return; event.preventDefault(); setOfficeMenu({ position: { top: event.clientY, left: event.clientX } }); }} sx={{ flex: 1, minHeight: 0, position: 'relative', bgcolor: 'background.paper' }}>
+          <Box onContextMenu={openBlockContextMenu} sx={{ flex: 1, minHeight: 0, position: 'relative', bgcolor: 'background.paper' }}>
             {selected.deletedAt && <Alert severity="warning" sx={{ borderRadius: 0 }}>휴지통의 노트는 읽기 전용입니다. 편집하려면 먼저 복원하세요.</Alert>}
             {selected.type === 'block' ? <Box ref={noteScrollRef} onScroll={saveBlockViewState} className="note-studio-editor" sx={{ height: '100%', pointerEvents: selected.deletedAt ? 'none' : 'auto', opacity: selected.deletedAt ? 0.72 : 1 }}><EditorContent editor={editor} /></Box> : <Editor key={selected.id} onMount={handleNoteMonacoMount} height="100%" language={selected.type === 'markdown' ? 'markdown' : selected.type === 'text' ? 'plaintext' : selected.language || 'plaintext'} value={plainContent} onChange={(value) => !selected.deletedAt && updatePlain(value ?? '')} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} options={{ readOnly: !!selected.deletedAt, minimap: { enabled: false }, wordWrap: selected.type === 'code' ? 'off' : 'on', fontSize: 15, padding: { top: 24 }, automaticLayout: true, scrollBeyondLastLine: false }} />}
           </Box>
@@ -907,6 +1039,63 @@ const NoteStudio = () => {
         <MenuItem onClick={() => createOfficeDocument('hwpx', '한글 문서')}><ListItemText primary="한글 문서" secondary="HWPX · RHWP" /></MenuItem>
         <Divider />
         <MenuItem onClick={() => { setOfficeMenu(null); setOfficeLocationDialogOpen(true); }}><ListItemText primary="다른 NAS 위치에 만들기…" secondary="형식과 저장 폴더를 직접 선택" /></MenuItem>
+      </Menu>
+      <Menu
+        open={!!blockMenu}
+        onClose={() => closeBlockMenu()}
+        anchorReference="anchorPosition"
+        anchorPosition={blockMenu?.position}
+        autoFocus={false}
+        disableRestoreFocus
+        MenuListProps={{ dense: true, sx: { width: 292, maxHeight: 'min(520px, 72vh)', py: 0.75 } }}
+      >
+        {blockMenu?.view !== 'main' && <MenuItem onClick={() => setBlockMenu((current) => ({ ...current, view: 'main' }))} sx={{ fontWeight: 900 }}>BACK</MenuItem>}
+        {blockMenu?.view === 'main' && <>
+          <MenuItem disabled><ListItemText primary="현재 블록" secondary={`${currentBlockStats.words}단어 · ${currentBlockStats.characters}자`} /></MenuItem>
+          <MenuItem onClick={() => setBlockMenu((current) => ({ ...current, view: 'insert' }))}><ListItemText primary="삽입" secondary="블록·페이지·파일·문서" /></MenuItem>
+          <MenuItem onClick={() => setBlockMenu((current) => ({ ...current, view: 'transform' }))}><ListItemText primary="블록 유형 변경" secondary="본문·제목·목록·인용·코드" /></MenuItem>
+          <MenuItem onClick={() => setBlockMenu((current) => ({ ...current, view: 'color' }))}><ListItemText primary="색상" secondary="글자색과 배경색" /></MenuItem>
+          <Divider />
+          <MenuItem onClick={duplicateCurrentBlock}>복제</MenuItem>
+          <MenuItem disabled={!findContextBlock(editor?.state)?.index} onClick={() => moveCurrentBlock(-1)}>위로 이동</MenuItem>
+          <MenuItem disabled={(findContextBlock(editor?.state)?.index ?? -1) >= ((findContextBlock(editor?.state)?.parent?.childCount ?? 0) - 1)} onClick={() => moveCurrentBlock(1)}>아래로 이동</MenuItem>
+          <MenuItem onClick={() => indentCurrentBlock(false)}>들여쓰기</MenuItem>
+          <MenuItem onClick={() => indentCurrentBlock(true)}>내어쓰기</MenuItem>
+          <Divider />
+          <MenuItem onClick={() => copyCurrentBlock(false)}>블록 텍스트 복사</MenuItem>
+          <MenuItem onClick={() => copyCurrentBlock(true)}>잘라내기</MenuItem>
+          <MenuItem onClick={askAiAboutCurrentBlock}>AI에게 이 블록 요청</MenuItem>
+          <Divider />
+          <MenuItem onClick={deleteCurrentBlock} sx={{ color: 'error.main' }}>삭제</MenuItem>
+        </>}
+        {blockMenu?.view === 'transform' && <>
+          <MenuItem disabled><ListItemText primary="블록 유형 변경" secondary="내용을 유지한 채 표현만 바꿉니다." /></MenuItem>
+          {BLOCK_TRANSFORMS.map((option) => <MenuItem key={option.id} onClick={() => transformCurrentBlock(option.id)}>{option.label}</MenuItem>)}
+        </>}
+        {blockMenu?.view === 'color' && <>
+          <MenuItem disabled>글자색</MenuItem>
+          {BLOCK_COLORS.map((option) => <MenuItem key={`text-${option.id}`} onClick={() => setCurrentBlockAppearance('blockColor', option.id === 'default' ? null : option.id)}>{option.label}</MenuItem>)}
+          <Divider />
+          <MenuItem disabled>배경색</MenuItem>
+          {BLOCK_BACKGROUNDS.map((option) => <MenuItem key={`background-${option.id}`} onClick={() => setCurrentBlockAppearance('blockBackground', option.id === 'default' ? null : option.id)}>{option.label}</MenuItem>)}
+        </>}
+        {blockMenu?.view === 'insert' && <>
+          <MenuItem disabled><ListItemText primary="현재 위치에 삽입" secondary="필요한 항목을 선택하세요." /></MenuItem>
+          {BLOCK_COMMANDS.filter((command) => command.id !== 'subpage').map((command) => <MenuItem key={command.id} onClick={() => { closeBlockMenu(false); runBlockCommand(command.id); }}>{command.label}</MenuItem>)}
+          <Divider />
+          <MenuItem onClick={() => { closeBlockMenu(false); createLinkedSubpage(); }}>하위 페이지</MenuItem>
+          <MenuItem onClick={() => { closeBlockMenu(false); setAttachmentPickerOpen(true); }}>NAS 파일 또는 폴더 연결</MenuItem>
+          <MenuItem onClick={() => setBlockMenu((current) => ({ ...current, view: 'document' }))}>Office 문서 생성…</MenuItem>
+        </>}
+        {blockMenu?.view === 'document' && <>
+          <MenuItem disabled><ListItemText primary="페이지 폴더에 문서 생성" secondary="저장 후 이 블록 위치에 연결됩니다." /></MenuItem>
+          <MenuItem onClick={() => { closeBlockMenu(false); createOfficeDocument('docx', '글 문서'); }}>글 문서 · DOCX</MenuItem>
+          <MenuItem onClick={() => { closeBlockMenu(false); createOfficeDocument('xlsx', '스프레드시트'); }}>스프레드시트 · XLSX</MenuItem>
+          <MenuItem onClick={() => { closeBlockMenu(false); createOfficeDocument('pptx', '프레젠테이션'); }}>프레젠테이션 · PPTX</MenuItem>
+          <MenuItem onClick={() => { closeBlockMenu(false); createOfficeDocument('hwpx', '한글 문서'); }}>한글 문서 · HWPX</MenuItem>
+          <Divider />
+          <MenuItem onClick={() => { closeBlockMenu(false); setOfficeLocationDialogOpen(true); }}>다른 NAS 위치에 만들기…</MenuItem>
+        </>}
       </Menu>
       <Menu open={!!contextMenu} onClose={() => setContextMenu(null)} anchorReference="anchorPosition" anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}>
         <MenuItem onClick={() => { const target = contextMenu.note; setContextMenu(null); openNote(target); }}>열기</MenuItem>

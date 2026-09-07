@@ -170,6 +170,7 @@ function AppContent() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationNavigation, setNotificationNavigation] = useState(null);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiPanelRequest, setAiPanelRequest] = useState(null);
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')));
   const [appSocket, setAppSocket] = useState(null);
   const [chatPreview, setChatPreview] = useState(null);
@@ -189,6 +190,20 @@ function AppContent() {
       documentJobId: activeWindow?.documentJobId || activeWindow?.payload?.jobId || '',
     };
   }, [openWindows, focusedContext, fileManagerPath, location.pathname, aiSelectedPaths]);
+
+  useEffect(() => {
+    const openAiAgent = (event) => {
+      const detail = event.detail || {};
+      setAiPanelRequest({
+        requestId: detail.requestId || `${Date.now()}`,
+        context: detail.context || {},
+        draft: String(detail.draft || ''),
+      });
+      setAiPanelOpen(true);
+    };
+    window.addEventListener('nas:open-ai-agent', openAiAgent);
+    return () => window.removeEventListener('nas:open-ai-agent', openAiAgent);
+  }, []);
 
   useEffect(() => {
     const checkUser = setInterval(() => {
@@ -401,9 +416,14 @@ function AppContent() {
                   chatPreview={chatPreview}
                   onChatPreviewClick={handleChatPreviewClick}
                   chatSidebarMode={chatSidebarMode}
-                  onOpenAi={() => setAiPanelOpen(true)}
+                  onOpenAi={() => { setAiPanelRequest(null); setAiPanelOpen(true); }}
                 />
-                <AiAgentPanel open={aiPanelOpen} onClose={() => setAiPanelOpen(false)} context={aiUiContext} />
+                <AiAgentPanel
+                  open={aiPanelOpen}
+                  onClose={() => { setAiPanelOpen(false); setAiPanelRequest(null); }}
+                  context={{ ...aiUiContext, ...(aiPanelRequest?.context || {}) }}
+                  draftRequest={aiPanelRequest}
+                />
                 <NotificationSidebar
                   open={notificationsOpen}
                   onClose={() => setNotificationsOpen(false)}

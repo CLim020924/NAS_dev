@@ -1535,3 +1535,15 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 데이터 경계: 복사 대상은 화면에 표시된 메시지 문자열뿐이다. action 객체, 파일 내용, 인증정보, tool metadata를 추가로 포함하지 않는다.
 - 검증·배포: 현대 Clipboard API 성공, 권한 거절 뒤 fallback, 복사 수단 없음의 3개 회귀와 기존 Note 단축키를 합쳐 로컬·NAS focused Jest 9/9가 통과했다. 양쪽 production build와 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate도 통과했다. 코드 커밋 `3a50ecc`를 GitHub와 NAS 활성 브랜치에 fast-forward했고 운영 build와 `/var/www/html`은 `main.81e0fc06.js`로 일치한다. 내부 3030·공개 HTTPS는 200, nginx·docker·tailscaled·cloudflared는 active, PM2 `msp-backend`는 online이다.
 - 검증 경계: 로그인 세션 없는 자동 브라우저에서는 OS 클립보드 내용을 육안 확인하지 못했다. 브라우저 API 두 경로와 DOM 정리, production compile, 운영 번들 반영은 자동 검증했다.
+
+## 2026-09-07 Note Studio Notion형 블록 우클릭 메뉴
+
+- 사용자 요청: 블록 노트 편집 바탕 우클릭 메뉴가 Office 파일 생성·연결뿐인 상태를 고치고, Notion의 실제 블록 UI와 편의 기능을 조사해 NAS 구조에 맞게 폭넓게 구현한다.
+- 조사 결과: 공식 Notion 문서의 블록 메뉴는 유형 변경, 색, 블록 링크, 복제, 이동, 삭제, 댓글·제안·AI와 단어·문자 수를 현재 블록에 적용한다. Tiptap은 메뉴 UI와 editor command/transaction을 분리하는 방식을 제공한다. 조사와 적용 경계는 `docs/NOTE_STUDIO_NOTION_CONTEXT_MENU_AUDIT.md`에 정리했다.
+- 원인: 기존 `NoteStudio.js`의 편집기 전체 `onContextMenu`가 좌표의 블록을 식별하지 않고 `officeMenu` 하나만 열었다. 따라서 문서 연결 요구는 처리했지만 블록 편집의 기본 작업 모델이 없었다.
+- 구현: 우클릭 좌표의 selection을 먼저 고정하고 main/insert/transform/color/document 5단 메뉴를 연다. 본문·H1~H3·불릿·번호·할 일·인용·코드 변환, 글자색·배경색, 단일 블록 복제·형제 위/아래 이동, 일반 블록 indent와 목록 sink/lift, 블록 텍스트 복사·잘라내기, 삭제, 단어·문자 수를 제공한다. 삽입에서는 기존 slash registry, 하위 페이지, NAS 첨부, DOCX/XLSX/PPTX/HWPX 생성·다른 NAS 위치 흐름을 재사용한다.
+- 안전·AI: 잘라내기는 클립보드 복사 성공 후에만 삭제한다. 마지막 블록 삭제는 빈 문단을 유지한다. 색은 허용된 이름만 JSON/DOM 속성으로 저장한다. `AI에게 이 블록 요청`은 현재 noteId/notebookId와 최대 4,000자 텍스트를 AI 패널 입력 초안으로 채울 뿐 자동 전송·실행하지 않아 API 비용을 발생시키지 않는다. Shift+우클릭은 브라우저 기본 메뉴를 유지한다.
+- 로컬 검증: 새 helper와 기존 Note command focused Jest 8/8, frontend production build와 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. 처음 pnpm test wrapper는 인자를 잘못 전달해 전체 Jest 설정 오류를 노출했으나 정확한 `react-scripts test` 대상으로 재실행해 통과했다. production build의 pnpm 중복 eslint 경로는 `DISABLE_ESLINT_PLUGIN=true`로 compile 자체를 검증했다.
+- 기록: 마스터 `NAS_PROJECT_LOG.xlsx`와 Note Studio 전용 명세의 feature, relation, code, context menu, source, test, change/status, request/patch 기록을 갱신했다. artifact-tool로 재열기·수식 오류 0건·변경 시트 렌더를 확인했다. 기존 문서의 `??` 문자열은 인코딩 방지 규칙과 과거 장애 원문이며 새 깨짐이 아니다.
+- 남은 제품 경계: 블록 링크·댓글·제안·다른 페이지 이동·다중 선택 drag·synced block은 현재 JSON에 영구 blockId가 없어 위치 기반으로 흉내 내면 편집 뒤 잘못된 블록을 가리킨다. `PENDING-NOTE-STUDIO-BLOCK-COLLAB-20260907`로 분리했으며 stable blockId migration, 권한, revision/Yjs anchor, 원자 undo를 함께 구현한 뒤 노출한다.
+- 다음 단계: 코드 커밋을 GitHub와 NAS 활성 브랜치에 반영하고 NAS production build를 운영 정적 경로에 배포한다. 로그인된 실제 Note Studio에서 문단·목록·마지막 블록·한글 IME·포인터 메뉴를 육안 확인할 수 있으면 최종 E2E 상태를 갱신한다.
