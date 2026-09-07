@@ -1526,3 +1526,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 호환성: 기존 마커+Tab 변환을 가장 먼저 처리해 `1.` 자동 번호 목록, `-` 목록, `[ ]` 할 일, 제목·인용·코드·구분선 단축키를 유지한다. 편집기 밖의 Tab 키는 접근성용 브라우저 포커스 이동을 그대로 사용한다. `indentLevel`은 노트 JSON에 저장되므로 기존 autosave와 재접속 복원의 대상이다.
 - 검증·배포: 로컬과 NAS에서 Note command focused Jest 6/6, production build, react-pdf 9.2.1/PDF.js API+Worker 4.8.69 검사가 통과했다. 코드 커밋 `e64643d`를 GitHub와 NAS 활성 브랜치에 fast-forward했고 운영 build와 `/var/www/html`이 모두 `main.490657bd.js`다. 내부 3030과 공개 HTTPS는 200, nginx·docker·tailscaled·cloudflared는 active, PM2 `msp-backend`는 online이다.
 - 기록·검증 경계: 마스터 로그와 Note Studio 전용 명세의 단축키, 데이터 모델, 시험, 구현 상태를 갱신하고 artifact-tool 재열기·수식 오류·문자 깨짐·렌더를 확인했다. 로그인 세션 없는 자동 검증에서는 실제 노트 caret의 육안 E2E를 수행하지 않았지만 키 처리, 저장 속성, 빌드와 운영 반영은 검증했다.
+
+## 2026-09-07 AI 에이전트 채팅 메시지 복사
+
+- 사용자 요청: AI 에이전트 채팅의 사용자·AI 메시지가 복사되지 않는 문제를 해결한다.
+- 원인: `AiAgentPanel`의 메시지는 단순 텍스트 렌더링만 있었고 전체 메시지 복사 버튼이 없었다. `navigator.clipboard`가 보안 컨텍스트·브라우저 정책·권한 때문에 거절되는 환경을 위한 대체 경로도 없었다.
+- 구현: 모든 사용자·AI 말풍선에 `메시지 복사` 버튼을 추가하고 본문에 `user-select: text`를 명시해 마우스 선택과 Ctrl+C를 허용했다. 버튼은 Clipboard API를 먼저 사용하고 실패하면 화면 밖 readonly textarea를 선택해 `execCommand('copy')`를 시도한다. 임시 요소는 성공·실패와 관계없이 `finally`에서 제거한다. 성공하면 버튼 안내가 `복사됨`으로 바뀌고 두 경로가 모두 실패하면 직접 선택·Ctrl+C 안내를 표시한다.
+- 데이터 경계: 복사 대상은 화면에 표시된 메시지 문자열뿐이다. action 객체, 파일 내용, 인증정보, tool metadata를 추가로 포함하지 않는다.
+- 검증·배포: 현대 Clipboard API 성공, 권한 거절 뒤 fallback, 복사 수단 없음의 3개 회귀와 기존 Note 단축키를 합쳐 로컬·NAS focused Jest 9/9가 통과했다. 양쪽 production build와 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate도 통과했다. 코드 커밋 `3a50ecc`를 GitHub와 NAS 활성 브랜치에 fast-forward했고 운영 build와 `/var/www/html`은 `main.81e0fc06.js`로 일치한다. 내부 3030·공개 HTTPS는 200, nginx·docker·tailscaled·cloudflared는 active, PM2 `msp-backend`는 online이다.
+- 검증 경계: 로그인 세션 없는 자동 브라우저에서는 OS 클립보드 내용을 육안 확인하지 못했다. 브라우저 API 두 경로와 DOM 정리, production compile, 운영 번들 반영은 자동 검증했다.
