@@ -1440,3 +1440,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 배포·운영 검증: 코드 커밋 `6dbfedc`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. NAS에서 생성한 `main.c8c3675f.js`를 `/var/www/html`에 배포했으며 nginx 파일과 공개 사이트가 같은 hash를 반환했다. `ssh`, `tailscaled`, `nginx`, `docker`, `cloudflared`는 active, PM2 `msp-backend`는 online/save, 내부 3030과 공개 HTTPS는 200이다. PM2 재시작 직후 첫 HTTP 확인은 포트 준비 전에 실행되어 000이었고 13초 뒤 재검증에서 정상 200이 됐다.
 - 검증 경계: 현재 로컬 미리보기에는 인증된 사용자 세션이 없어 로그인 뒤 여러 실제 창을 마우스로 반복 선택하는 화면 검증은 수행하지 않았다. 대신 순수 정책 회귀, 실제 production build, NAS 배포 번들 일치와 서비스 응답을 확인했다. 다음 로그인된 브라우저 확인에서는 파일·채팅·문서 앱을 각각 열고 A→B→A 앞뒤 순서, 홈 전체 숨김, 전환기 재클릭 닫기와 빨간 점멸을 화면으로 추가 확인한다.
 - 기록: `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Feature_Index, Relation_Map, Code_Map, Do_Not_Break를 artifact-tool로 갱신했다. 수식 오류 0건, 새 한국어 행의 문자 깨짐 없음, 변경 범위 렌더를 확인했다.
+
+## 2026-09-07 창 전환 버튼 고정 유지 교정
+
+- 사용자 확인: 창 전환 버튼을 눌렀을 때 고정 상태로 유지되지 않고 패널이 한 번 나타난 직후 사라졌다.
+- 실제 원인: `TopBar`의 전환기 keyboard effect가 열린 창 목록이 0개이면 `setTaskSwitcherOpen(false)`를 즉시 호출했다. 창이 아직 없거나 홈으로 전부 숨긴 상태에서 사용자의 명시적 버튼 토글보다 이 빈 목록 예외가 우선했다.
+- 수정: 빈 목록 자동 닫기를 제거했다. 이제 열린 창이 없어도 `열려 있는 창이 없습니다.` 패널과 버튼의 `aria-pressed` 활성 상태가 계속 유지된다. 같은 버튼을 다시 누르거나 `Esc`, 패널 바깥 클릭 또는 실제 창 선택 때만 닫힌다. 빈 목록에서 Tab·Enter는 부작용 없이 패널을 유지한다.
+- 재발 방지: `verify-window-manager.mjs`에 빈 목록 순환 결과와 `TopBar`의 지속 토글 계약 검사를 추가했다. 로컬과 NAS 모두 `MRU ordering, persistent toggle, layer ownership, cycling, and immersive priority verified`를 통과했고 양쪽 production build 및 PDF.js 호환 검사도 통과했다.
+- 배포: 커밋 `3cfd835`를 GitHub와 NAS에 fast-forward하고 `main.8023a96e.js`를 운영 nginx에 배포했다. 공개 사이트와 디스크 bundle hash가 일치하며 내부 3030·공개 HTTPS 200, 필수 서비스 active, PM2 `msp-backend` online/save 상태다.
+- 기록: `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log와 기존 `APP-WINDOW-MRU-SWITCHER` 기능 설명을 갱신했다. 수식 오류 0건과 변경 범위 렌더를 확인했다.
