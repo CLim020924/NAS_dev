@@ -65,6 +65,7 @@ const { createNoteStudioStore, getFilesystemIdentity, sameFilesystemIdentity, fi
 const { createManagedPythonWorker } = require('./managedPythonWorker');
 const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore');
 const { createPdfOcrService } = require('./pdfOcrService');
+const { normalizeKind: normalizeViewStateKind, normalizeDeviceId, loadWorkspaceViewState, saveWorkspaceViewState } = require('./workspaceViewStateStore');
 const {
   SHARED_ROOT_NAME,
   normalizeRelativePath: normalizeAccountShareRelPath,
@@ -1127,6 +1128,52 @@ const getUserBasePath = (user) => getAccessBasePath(normalizeQuotaFields(user ||
 // visibility must never merge note ownership between accounts.
 const getNoteStudioStore = (user) => createNoteStudioStore({
   personalRootPath: getQuotaBasePath(normalizeQuotaFields(user || {}))
+});
+
+const getViewStateAccountKey = (user) => String(user?.userUid || user?.loginId || user?.id || user?.username || '').trim();
+const resolveViewStateResource = (user, input = {}) => {
+  const kind = normalizeViewStateKind(input.kind);
+  const accountKey = getViewStateAccountKey(user);
+  if (!accountKey) throw Object.assign(new Error('계정 식별자를 확인하지 못했습니다.'), { status: 401 });
+  if (['workspace', 'workspace-session', 'file-manager', 'note-studio-session'].includes(kind)) {
+    return { kind, accountKey, resourceKey: `account:${kind}`, identity: null };
+  }
+  if (kind === 'note-block' || kind === 'note-monaco') {
+    const note = getNoteStudioStore(user).get(String(input.noteId || ''), { includeDeleted: true });
+    return { kind, accountKey, resourceKey: `note:${note.id}`, identity: null };
+  }
+  const { basePath, targetPath } = getValidatedPath(user, input.path);
+  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) throw Object.assign(new Error('작업 위치를 저장할 파일을 찾을 수 없습니다.'), { status: 404 });
+  const relative = path.relative(basePath, targetPath).replace(/\\/g, '/');
+  return { kind, accountKey, resourceKey: `file:${relative}`, identity: getFilesystemIdentity(targetPath) };
+};
+
+router.get('/workspace/view-state', verifyToken, (req, res) => {
+  try {
+    const resource = resolveViewStateResource(req.user, req.query || {});
+    const deviceId = normalizeDeviceId(req.query.deviceId);
+    let viewState = loadWorkspaceViewState({ ...resource, deviceId });
+    if (resource.kind === 'file-manager' && viewState?.state?.currentPath) {
+      try {
+        const { targetPath } = getValidatedPath(req.user, viewState.state.currentPath);
+        if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) viewState = null;
+      } catch { viewState = null; }
+    }
+    return res.json({ success: true, viewState });
+  } catch (error) { return res.status(error.status || 500).json({ error: error.message || '작업 위치를 불러오지 못했습니다.', code: error.code }); }
+});
+
+router.put('/workspace/view-state', verifyToken, express.json({ limit: '32kb' }), (req, res) => {
+  try {
+    const resource = resolveViewStateResource(req.user, req.body || {});
+    const deviceId = normalizeDeviceId(req.body?.deviceId);
+    if (['workspace', 'file-manager'].includes(resource.kind) && req.body?.state?.currentPath) {
+      const { targetPath } = getValidatedPath(req.user, req.body.state.currentPath);
+      if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) throw Object.assign(new Error('마지막 폴더 위치를 찾을 수 없습니다.'), { status: 404 });
+    }
+    const result = saveWorkspaceViewState({ ...resource, deviceId, state: req.body?.state, contentRevision: req.body?.contentRevision });
+    return res.json({ success: true, ...result });
+  } catch (error) { return res.status(error.status || 500).json({ error: error.message || '작업 위치를 저장하지 못했습니다.', code: error.code }); }
 });
 const noteStudioImportUpload = multer({
   storage: multer.memoryStorage(),

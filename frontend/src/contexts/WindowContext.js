@@ -8,6 +8,7 @@ import {
   readStoredWorkspaceIdentity,
   readWorkspaceFileManagerPath,
 } from './windowWorkspaceIdentity';
+import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../utils/workspaceViewState';
 
 const WindowContext = createContext();
 
@@ -48,6 +49,9 @@ export const WindowProvider = ({ children }) => {
   const [fileManagerPath, setFileManagerPath] = useState(() => (
     readWorkspaceFileManagerPath(localStorage, initialWorkspaceIdentity)
   ));
+  const [fileManagerStateReady, setFileManagerStateReady] = useState(false);
+  const fileManagerStateQueueRef = useRef(null);
+  if (!fileManagerStateQueueRef.current) fileManagerStateQueueRef.current = createWorkspaceViewStateQueue();
   
   // [추가] 현재 선택된(포커스된) 대상을 추적합니다. 기본값은 바탕화면('desktop')
   const [focusedContext, setFocusedContext] = useState('desktop');
@@ -87,6 +91,28 @@ export const WindowProvider = ({ children }) => {
     const key = getFileManagerPathStorageKey(workspaceIdentity);
     if (key) localStorage.setItem(key, fileManagerPath || '/');
   }, [fileManagerPath, workspaceIdentity]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fileManagerStateQueueRef.current.discard();
+    setFileManagerStateReady(false);
+    if (!workspaceIdentity) return () => controller.abort();
+    loadWorkspaceViewState({ kind: 'file-manager' }, controller.signal)
+      .then((record) => {
+        const restoredPath = record?.state?.currentPath;
+        if (typeof restoredPath === 'string' && restoredPath.startsWith('/')) setFileManagerPath(restoredPath);
+      })
+      .catch(() => {})
+      .finally(() => { if (!controller.signal.aborted) setFileManagerStateReady(true); });
+    return () => controller.abort();
+  }, [workspaceIdentity]);
+
+  useEffect(() => {
+    if (!workspaceIdentity || !fileManagerStateReady) return;
+    fileManagerStateQueueRef.current.schedule({ kind: 'file-manager' }, { currentPath: fileManagerPath || '/' });
+  }, [fileManagerPath, fileManagerStateReady, workspaceIdentity]);
+
+  useEffect(() => () => fileManagerStateQueueRef.current.dispose(), []);
 
   useEffect(() => {
     const synchronizeWorkspaceIdentity = () => {

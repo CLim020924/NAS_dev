@@ -14,6 +14,7 @@ import 'react-pdf/dist/Page/TextLayer.css';
 import { DocumentEditor } from "@onlyoffice/document-editor-react";
 import { useWindows } from '../../contexts/WindowContext';
 import { getOnlyOfficeDocumentType, isOnlyOfficeFormat } from '../../utils/officeFormats';
+import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
 import RhwpDocumentViewer from '../shared/RhwpDocumentViewer';
 import PdfWorkspace from './PdfWorkspace';
 import { transferUrl } from '../../transferBaseUrl';
@@ -32,6 +33,14 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const [officeDocumentRevisionKey, setOfficeDocumentRevisionKey] = useState('');
   const [officeAccessError, setOfficeAccessError] = useState('');
   const editorRef = useRef(null);
+  const monacoEditorRef = useRef(null);
+  const monacoViewSubscriptionsRef = useRef([]);
+  const mediaRef = useRef(null);
+  const markdownRef = useRef(null);
+  const viewStateQueueRef = useRef(null);
+  if (!viewStateQueueRef.current) viewStateQueueRef.current = createWorkspaceViewStateQueue();
+  const viewStateHydratedRef = useRef(false);
+  const [restoredViewState, setRestoredViewState] = useState(null);
   const officeSaveResolveRef = useRef(null);
   const pdfSaveRef = useRef(null);
   const dirtyRef = useRef(!!win.hasUnsavedChanges);
@@ -48,6 +57,62 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const isPDF = ext === 'pdf';
   const isMarkdown = ext === 'md';
   const isTextEditable = !isBinary && !isOffice && !isPDF;
+  const viewStateKind = isTextEditable ? 'monaco' : isHwp ? 'hwp' : (isVideo || isAudio) ? 'media' : null;
+  const viewStateDescriptor = useMemo(() => viewStateKind && win.fullPath ? ({ kind: viewStateKind, path: win.fullPath }) : null, [viewStateKind, win.fullPath]);
+
+  useEffect(() => {
+    if (!viewStateDescriptor || isHwp || isPDF) return undefined;
+    const controller = new AbortController();
+    viewStateHydratedRef.current = false;
+    setRestoredViewState(null);
+    loadWorkspaceViewState(viewStateDescriptor, controller.signal).then(setRestoredViewState).catch(() => {}).finally(() => { if (!controller.signal.aborted) viewStateHydratedRef.current = true; });
+    return () => controller.abort();
+  }, [isHwp, isPDF, viewStateDescriptor]);
+
+  useEffect(() => () => {
+    monacoViewSubscriptionsRef.current.forEach((item) => item.dispose?.());
+    monacoViewSubscriptionsRef.current = [];
+    viewStateQueueRef.current.dispose();
+  }, []);
+
+  useEffect(() => {
+    const editor = monacoEditorRef.current;
+    const state = restoredViewState?.state?.editor;
+    if (editor && state) {
+      try { editor.restoreViewState(state); editor.focus(); } catch {}
+    }
+    const markdown = markdownRef.current;
+    if (markdown && Number.isFinite(restoredViewState?.state?.scrollTop)) markdown.scrollTop = restoredViewState.state.scrollTop;
+  }, [restoredViewState]);
+
+  const saveMonacoViewState = useCallback(() => {
+    if (!viewStateDescriptor || !viewStateHydratedRef.current || !monacoEditorRef.current) return;
+    viewStateQueueRef.current.schedule(viewStateDescriptor, { editor: monacoEditorRef.current.saveViewState() });
+  }, [viewStateDescriptor]);
+
+  const handleMonacoMount = useCallback((editor) => {
+    monacoViewSubscriptionsRef.current.forEach((item) => item.dispose?.());
+    monacoEditorRef.current = editor;
+    if (restoredViewState?.state?.editor) {
+      try { editor.restoreViewState(restoredViewState.state.editor); } catch {}
+    }
+    monacoViewSubscriptionsRef.current = [editor.onDidScrollChange(saveMonacoViewState), editor.onDidChangeCursorSelection(saveMonacoViewState)];
+  }, [restoredViewState, saveMonacoViewState]);
+
+  const saveMediaViewState = useCallback(() => {
+    const node = mediaRef.current;
+    if (!viewStateDescriptor || !viewStateHydratedRef.current || !node) return;
+    viewStateQueueRef.current.schedule(viewStateDescriptor, { currentTime: node.currentTime || 0, volume: node.volume, playbackRate: node.playbackRate });
+  }, [viewStateDescriptor]);
+
+  const restoreMediaViewState = useCallback(() => {
+    const node = mediaRef.current;
+    const state = restoredViewState?.state;
+    if (!node || !state) return;
+    if (Number.isFinite(state.currentTime) && state.currentTime >= 0 && state.currentTime <= node.duration) node.currentTime = state.currentTime;
+    if (Number.isFinite(state.volume)) node.volume = Math.max(0, Math.min(1, state.volume));
+    if (Number.isFinite(state.playbackRate)) node.playbackRate = Math.max(0.25, Math.min(4, state.playbackRate));
+  }, [restoredViewState]);
 
   const publicOfficeBase = (window.__OO_PUBLIC_BASE__ || window.location.origin).replace(/\/$/, '');
   const encodeBase64Url = (value) => {
@@ -339,12 +404,12 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
 
   const renderContent = () => {
     if (isImage) return <Box component="img" src={url} alt={name} sx={{ width: '100%', height: '100%', objectFit: 'contain' }} />;
-    if (isVideo) return <video src={url} controls autoPlay style={{ width: '100%', height: '100%' }} />;
-    if (isAudio) return <audio src={url} controls autoPlay style={{ width: '80%', marginTop: '20px' }} />;
+    if (isVideo) return <video ref={mediaRef} src={url} controls autoPlay onLoadedMetadata={restoreMediaViewState} onTimeUpdate={saveMediaViewState} onVolumeChange={saveMediaViewState} onRateChange={saveMediaViewState} style={{ width: '100%', height: '100%' }} />;
+    if (isAudio) return <audio ref={mediaRef} src={url} controls autoPlay onLoadedMetadata={restoreMediaViewState} onTimeUpdate={saveMediaViewState} onVolumeChange={saveMediaViewState} onRateChange={saveMediaViewState} style={{ width: '80%', marginTop: '20px' }} />;
     if (isHwp) {
       const fullPath = String(win.fullPath || '');
       const currentFolderPath = fullPath.includes('/') ? (fullPath.substring(0, fullPath.lastIndexOf('/')) || '/') : '/';
-      return <RhwpDocumentViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} nasPath={fullPath} onSave={handleRhwpSave} onDirtyChange={handleRhwpDirtyChange} initialFolderPath={currentFolderPath} initialMode={win.preferEditMode ? 'editor' : 'viewer'} isActive={focusedContext === win.id} />;
+      return <RhwpDocumentViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} nasPath={fullPath} onSave={handleRhwpSave} onDirtyChange={handleRhwpDirtyChange} initialFolderPath={currentFolderPath} initialMode={win.preferEditMode ? 'editor' : 'viewer'} isActive={focusedContext === win.id} viewStateDescriptor={{ kind: 'hwp', path: fullPath }} />;
     }
     if (isOffice && !officeConfig) {
       return <Box sx={{ p: 3 }}><Typography color={officeAccessError ? 'error' : 'text.secondary'}>{officeAccessError || '문서 접근 권한을 확인하는 중입니다...'}</Typography></Box>;
@@ -360,8 +425,8 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
       return <PdfWorkspace win={win} isActive={focusedContext === win.id} onDirtyChange={onDirtyChange} onRegisterSave={(handler) => { pdfSaveRef.current = handler; }} />;
     }
     if (isBinary) return <Box sx={{ textAlign: 'center', p: 4 }}><Typography>문서 ({ext.toUpperCase()})</Typography><Button onClick={() => window.open(url)}>다운로드</Button></Box>;
-    if (isMarkdown && mode === 'view') return <Box sx={{ p: 3, overflow: 'auto', height: '100%' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ''}</ReactMarkdown></Box>;
-    return <Editor height="100%" language={ext} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} value={content || ''} onChange={(val) => handleContentChange(win.id, val)} options={{ readOnly: mode === 'view' }} />;
+    if (isMarkdown && mode === 'view') return <Box ref={markdownRef} onScroll={(event) => viewStateDescriptor && viewStateHydratedRef.current && viewStateQueueRef.current.schedule(viewStateDescriptor, { scrollTop: event.currentTarget.scrollTop })} sx={{ p: 3, overflow: 'auto', height: '100%' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ''}</ReactMarkdown></Box>;
+    return <Editor height="100%" language={ext} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} value={content || ''} onMount={handleMonacoMount} onChange={(val) => handleContentChange(win.id, val)} options={{ readOnly: mode === 'view' }} />;
   };
 
   return (

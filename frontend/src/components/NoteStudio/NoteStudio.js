@@ -42,6 +42,7 @@ import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
 import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
+import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
 import './NoteStudio.css';
 
 const TYPE_OPTIONS = [
@@ -133,6 +134,7 @@ const NoteStudio = () => {
   const [officeLocationFormat, setOfficeLocationFormat] = useState('docx');
   const [pythonRunning, setPythonRunning] = useState(false);
   const [pythonResult, setPythonResult] = useState(null);
+  const [sessionReady, setSessionReady] = useState(false);
   const selectedRef = useRef(null);
   const saveTimerRef = useRef(null);
   const pendingContentRef = useRef(null);
@@ -144,6 +146,18 @@ const NoteStudio = () => {
   const commandOpenRef = useRef(false);
   const openNoteRef = useRef(null);
   const openAttachmentRef = useRef(null);
+  const noteScrollRef = useRef(null);
+  const noteMonacoRef = useRef(null);
+  const noteMonacoSubscriptionsRef = useRef([]);
+  const noteViewStateQueueRef = useRef(null);
+  if (!noteViewStateQueueRef.current) noteViewStateQueueRef.current = createWorkspaceViewStateQueue();
+  const sessionViewStateQueueRef = useRef(null);
+  if (!sessionViewStateQueueRef.current) sessionViewStateQueueRef.current = createWorkspaceViewStateQueue();
+  const noteViewHydratedRef = useRef(false);
+  const sessionHydratedRef = useRef(false);
+  const pendingNoteViewStateRef = useRef(null);
+  const resumeSessionRef = useRef(null);
+  const openNoteSequenceRef = useRef(0);
 
   const editor = useEditor({
     extensions: [
@@ -230,10 +244,49 @@ const NoteStudio = () => {
           setCommandPosition({ top: caret.bottom + 6, left: caret.left });
         }
       }
-    }
+    },
+    onSelectionUpdate: ({ editor: currentEditor }) => {
+      const note = selectedRef.current;
+      if (!note || note.type !== 'block' || !noteViewHydratedRef.current) return;
+      noteViewStateQueueRef.current.schedule({ kind: 'note-block', noteId: note.id }, {
+        selection: currentEditor.state.selection.toJSON(),
+        scrollTop: noteScrollRef.current?.scrollTop || 0,
+      }, note.revision);
+    },
   });
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    sessionHydratedRef.current = false;
+    loadWorkspaceViewState({ kind: 'note-studio-session' }, controller.signal).then((record) => {
+      resumeSessionRef.current = record?.state || null;
+      if (record?.state?.activeNotebookId) setActiveNotebookId(record.state.activeNotebookId);
+    }).catch(() => {}).finally(() => {
+      if (!controller.signal.aborted) {
+        sessionHydratedRef.current = true;
+        setSessionReady(true);
+      }
+    });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!sessionHydratedRef.current || !sessionReady) return;
+    sessionViewStateQueueRef.current.schedule({ kind: 'note-studio-session' }, {
+      activeNotebookId: activeNotebookId || '', selectedNoteId: selected?.id || '',
+    });
+  }, [activeNotebookId, selected?.id, sessionReady]);
+
+  useEffect(() => {
+    const resume = resumeSessionRef.current;
+    if (!resume?.selectedNoteId || selectedRef.current || !notes.some((note) => note.id === resume.selectedNoteId)) return;
+    if (openNoteRef.current) {
+      openNoteRef.current({ id: resume.selectedNoteId });
+      resumeSessionRef.current = null;
+    }
+  }, [notes]);
 
   const loadList = useCallback(async ({ keepSelection = true } = {}) => {
     setLoading(true);
@@ -259,10 +312,12 @@ const NoteStudio = () => {
 
   const openNote = useCallback(async (meta) => {
     if (!meta?.id) return;
+    const sequence = ++openNoteSequenceRef.current;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSavingState('idle');
     try {
       const { data } = await axios.get(`/api/note-studio/notes/${encodeURIComponent(meta.id)}`, { params: { includeDeleted: trashMode }, withCredentials: true });
+      if (sequence !== openNoteSequenceRef.current) return;
       const note = data.note;
       loadingNoteRef.current = true;
       setSelected(note);
@@ -271,10 +326,64 @@ const NoteStudio = () => {
       else setPlainContent(String(note.content || ''));
       pendingContentRef.current = note.content;
       editGenerationRef.current = 0;
+      noteViewHydratedRef.current = false;
+      pendingNoteViewStateRef.current = null;
+      const descriptor = { kind: note.type === 'block' ? 'note-block' : 'note-monaco', noteId: note.id };
+      loadWorkspaceViewState(descriptor).then((record) => {
+        if (sequence !== openNoteSequenceRef.current || selectedRef.current?.id !== note.id) return;
+        pendingNoteViewStateRef.current = record?.state || null;
+        if (note.type === 'block' && record?.state) {
+          window.setTimeout(() => {
+            const selection = record.state.selection;
+            const max = editor?.state.doc.content.size || 0;
+            if (selection && max) {
+              const from = Math.max(1, Math.min(max, Number(selection.anchor) || 1));
+              const to = Math.max(1, Math.min(max, Number(selection.head) || from));
+              try { editor.commands.setTextSelection({ from, to }); } catch {}
+            }
+            if (noteScrollRef.current && Number.isFinite(record.state.scrollTop)) noteScrollRef.current.scrollTop = record.state.scrollTop;
+            noteViewHydratedRef.current = true;
+          }, 80);
+        } else {
+          if (record?.state?.editor && noteMonacoRef.current) {
+            try { noteMonacoRef.current.restoreViewState(record.state.editor); } catch {}
+          }
+          noteViewHydratedRef.current = true;
+        }
+      }).catch(() => { if (sequence === openNoteSequenceRef.current) noteViewHydratedRef.current = true; });
       queueMicrotask(() => { loadingNoteRef.current = false; });
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '노트를 열지 못했습니다.') }); }
   }, [editor, trashMode]);
   useEffect(() => { openNoteRef.current = openNote; }, [openNote]);
+
+  const saveNoteMonacoViewState = useCallback(() => {
+    const note = selectedRef.current;
+    if (!note || note.type === 'block' || !noteViewHydratedRef.current || !noteMonacoRef.current) return;
+    noteViewStateQueueRef.current.schedule({ kind: 'note-monaco', noteId: note.id }, { editor: noteMonacoRef.current.saveViewState() }, note.revision);
+  }, []);
+
+  const handleNoteMonacoMount = useCallback((instance) => {
+    noteMonacoSubscriptionsRef.current.forEach((item) => item.dispose?.());
+    noteMonacoRef.current = instance;
+    const state = pendingNoteViewStateRef.current?.editor;
+    if (state) { try { instance.restoreViewState(state); } catch {} }
+    noteMonacoSubscriptionsRef.current = [instance.onDidScrollChange(saveNoteMonacoViewState), instance.onDidChangeCursorSelection(saveNoteMonacoViewState)];
+  }, [saveNoteMonacoViewState]);
+
+  const saveBlockViewState = useCallback(() => {
+    const note = selectedRef.current;
+    if (!note || note.type !== 'block' || !noteViewHydratedRef.current || !editor) return;
+    noteViewStateQueueRef.current.schedule({ kind: 'note-block', noteId: note.id }, {
+      selection: editor.state.selection.toJSON(),
+      scrollTop: noteScrollRef.current?.scrollTop || 0,
+    }, note.revision);
+  }, [editor]);
+
+  useEffect(() => () => {
+    noteMonacoSubscriptionsRef.current.forEach((item) => item.dispose?.());
+    noteViewStateQueueRef.current.dispose();
+    sessionViewStateQueueRef.current.dispose();
+  }, []);
 
   const saveNow = useCallback(async (reason = 'autosave') => {
     const current = selectedRef.current;
@@ -714,7 +823,7 @@ const NoteStudio = () => {
           {(selected.attachments || []).length > 0 && <Stack direction="row" spacing={0.75} sx={{ px: 1.25, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', overflowX: 'auto' }}>{selected.attachments.map((attachment) => <Chip key={attachment.id} icon={<AttachFileIcon />} label={attachment.name} onClick={() => openAttachment(attachment)} onDelete={selected.deletedAt ? undefined : () => removeAttachment(attachment)} deleteIcon={<CloseIcon />} sx={{ flex: '0 0 auto' }} />)}</Stack>}
           <Box onContextMenu={(event) => { if (selected.deletedAt || event.shiftKey) return; event.preventDefault(); setOfficeMenu({ position: { top: event.clientY, left: event.clientX } }); }} sx={{ flex: 1, minHeight: 0, position: 'relative', bgcolor: 'background.paper' }}>
             {selected.deletedAt && <Alert severity="warning" sx={{ borderRadius: 0 }}>휴지통의 노트는 읽기 전용입니다. 편집하려면 먼저 복원하세요.</Alert>}
-            {selected.type === 'block' ? <Box className="note-studio-editor" sx={{ height: '100%', pointerEvents: selected.deletedAt ? 'none' : 'auto', opacity: selected.deletedAt ? 0.72 : 1 }}><EditorContent editor={editor} /></Box> : <Editor key={selected.id} height="100%" language={selected.type === 'markdown' ? 'markdown' : selected.type === 'text' ? 'plaintext' : selected.language || 'plaintext'} value={plainContent} onChange={(value) => !selected.deletedAt && updatePlain(value ?? '')} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} options={{ readOnly: !!selected.deletedAt, minimap: { enabled: false }, wordWrap: selected.type === 'code' ? 'off' : 'on', fontSize: 15, padding: { top: 24 }, automaticLayout: true, scrollBeyondLastLine: false }} />}
+            {selected.type === 'block' ? <Box ref={noteScrollRef} onScroll={saveBlockViewState} className="note-studio-editor" sx={{ height: '100%', pointerEvents: selected.deletedAt ? 'none' : 'auto', opacity: selected.deletedAt ? 0.72 : 1 }}><EditorContent editor={editor} /></Box> : <Editor key={selected.id} onMount={handleNoteMonacoMount} height="100%" language={selected.type === 'markdown' ? 'markdown' : selected.type === 'text' ? 'plaintext' : selected.language || 'plaintext'} value={plainContent} onChange={(value) => !selected.deletedAt && updatePlain(value ?? '')} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} options={{ readOnly: !!selected.deletedAt, minimap: { enabled: false }, wordWrap: selected.type === 'code' ? 'off' : 'on', fontSize: 15, padding: { top: 24 }, automaticLayout: true, scrollBeyondLastLine: false }} />}
           </Box>
         </>}
       </Box>

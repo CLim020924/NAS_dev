@@ -18,6 +18,7 @@ import { Document, Page } from 'react-pdf';
 import axios from 'axios';
 import { collectPdfTextItems, getPdfHighlightRects, normalizeDragRect, reconstructPdfPlainText, reconstructPdfRegionText } from './pdfSelection';
 import { getPdfZoomKeyDirection, stepPdfZoom } from './pdfZoom';
+import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
 
 const TOOL_DEFINITIONS = [
   ['select', '선택', PanToolAltOutlinedIcon],
@@ -60,9 +61,67 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
   const revisionRef = useRef(0);
   const changeSequenceRef = useRef(0);
   const cancelTextDraftRef = useRef(false);
+  const viewStateQueueRef = useRef(null);
+  if (!viewStateQueueRef.current) viewStateQueueRef.current = createWorkspaceViewStateQueue();
+  const restoredViewStateRef = useRef(null);
+  const viewRestoredRef = useRef(false);
+  const viewStateHydratedRef = useRef(false);
+  const [viewStateReady, setViewStateReady] = useState(0);
 
   const annotations = history.present;
   const pdfUrl = win.url.includes('?') ? `${win.url}&inline=true` : `${win.url}?inline=true`;
+  const viewStateDescriptor = useMemo(() => ({ kind: 'pdf', path: win.fullPath }), [win.fullPath]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    viewRestoredRef.current = false;
+    viewStateHydratedRef.current = false;
+    loadWorkspaceViewState(viewStateDescriptor, controller.signal).then((record) => {
+      restoredViewStateRef.current = record?.state || null;
+      if (!record?.state) viewRestoredRef.current = true;
+      if (Number.isFinite(record?.state?.zoom)) setZoom(Math.max(0.5, Math.min(3, record.state.zoom)));
+      setViewStateReady((value) => value + 1);
+    }).catch(() => {}).finally(() => { if (!controller.signal.aborted) viewStateHydratedRef.current = true; });
+    return () => controller.abort();
+  }, [viewStateDescriptor]);
+
+  const captureViewState = useCallback(() => {
+    const container = containerRef.current;
+    if (!viewStateHydratedRef.current || !container || !pageRefs.current.size) return;
+    const containerRect = container.getBoundingClientRect();
+    let selected = null;
+    pageRefs.current.forEach((node, page) => {
+      const rect = node.getBoundingClientRect();
+      const distance = rect.bottom >= containerRect.top ? Math.abs(rect.top - containerRect.top) : Number.MAX_SAFE_INTEGER;
+      if (!selected || distance < selected.distance) selected = { page, rect, distance };
+    });
+    if (!selected) return;
+    const offset = Math.max(0, Math.min(1, (containerRect.top - selected.rect.top) / Math.max(1, selected.rect.height)));
+    viewStateQueueRef.current.schedule(viewStateDescriptor, { page: selected.page, pageOffset: offset, zoom });
+  }, [viewStateDescriptor, zoom]);
+
+  useEffect(() => {
+    const state = restoredViewStateRef.current;
+    if (viewRestoredRef.current || !state || !pageCount || !pageRefs.current.get(state.page)) return;
+    const timer = window.setTimeout(() => {
+      const container = containerRef.current;
+      const pageNode = pageRefs.current.get(state.page);
+      if (!container || !pageNode) return;
+      const containerRect = container.getBoundingClientRect();
+      const pageRect = pageNode.getBoundingClientRect();
+      container.scrollTop += pageRect.top - containerRect.top + Math.max(0, Math.min(1, Number(state.pageOffset) || 0)) * pageRect.height;
+      viewRestoredRef.current = true;
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [pageCount, viewStateReady, zoom]);
+
+  useEffect(() => () => viewStateQueueRef.current.dispose(), []);
+
+  useEffect(() => {
+    if (!viewStateHydratedRef.current || !viewRestoredRef.current) return undefined;
+    const timer = window.setTimeout(captureViewState, 120);
+    return () => window.clearTimeout(timer);
+  }, [captureViewState, zoom]);
 
   const markDirty = useCallback((value) => {
     dirtyRef.current = value;
@@ -465,7 +524,7 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
         <Typography variant="caption" color={dirty ? 'warning.main' : status.includes('실패') || status.includes('못') ? 'error.main' : 'text.secondary'} sx={{ ml: 'auto', whiteSpace: 'nowrap' }}>{status}</Typography>
       </Box>
 
-      <Box ref={containerRef} sx={{ flex: 1, minHeight: 0, overflow: 'auto', bgcolor: theme.palette.mode === 'dark' ? '#0f172a' : '#e5e7eb', p: { xs: 1, sm: 2 } }}>
+      <Box ref={containerRef} onScroll={captureViewState} sx={{ flex: 1, minHeight: 0, overflow: 'auto', bgcolor: theme.palette.mode === 'dark' ? '#0f172a' : '#e5e7eb', p: { xs: 1, sm: 2 } }}>
         <Document file={pdfUrl} loading={<Typography color="text.secondary">PDF를 불러오는 중입니다...</Typography>} error={<Typography color="error">PDF를 불러오지 못했습니다.</Typography>} onLoadSuccess={({ numPages }) => setPageCount(numPages || 0)}>
           {Array.from({ length: pageCount }, (_, pageIndex) => {
             const page = pageIndex + 1;
