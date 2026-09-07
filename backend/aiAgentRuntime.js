@@ -74,6 +74,7 @@ const MUTATION_INTENT_RULES = {
   trash_note: /(?:노트|페이지).*(?:삭제|지우|지워|휴지통)|(?:삭제|지우|지워|휴지통).*(?:노트|페이지)/i,
   create_office_document: /(?:문서|워드|엑셀|파워포인트|한글|docx|xlsx|pptx|hwpx).*(?:생성|만들)|(?:생성|만들).*(?:문서|워드|엑셀|파워포인트|한글|docx|xlsx|pptx|hwpx)/i,
   run_python_note: /(?:파이썬|python).*(?:실행|돌려)|(?:실행|돌려).*(?:파이썬|python)/i,
+  run_javascript_note: /(?:자바스크립트|javascript|js).*(?:실행|돌려)|(?:실행|돌려).*(?:자바스크립트|javascript|js)/i,
   restore_trash_item: /(?:휴지통|삭제한).*(?:복원|되돌)|(?:복원|되돌).*(?:휴지통|삭제한)/i,
   restore_file_version: /(?:파일|문서).*(?:이전|과거|버전).*(?:복원|되돌)|(?:이전|과거|버전).*(?:파일|문서).*(?:복원|되돌)/i,
   create_drive_restore_point: /(?:드라이브|전체).*(?:복구\s*지점|스냅샷).*(?:생성|만들)|(?:복구\s*지점|스냅샷).*(?:생성|만들)/i,
@@ -227,6 +228,7 @@ const TOOL_DEFINITIONS = [
   { type: 'function', name: 'trash_note', description: 'Note Studio 노트를 복구 가능한 휴지통으로 이동한다.', strict: true, parameters: schema({ note_id: stringProp('휴지통으로 옮길 노트 ID'), expected_revision: { type: 'integer' } }, ['note_id', 'expected_revision']) },
   { type: 'function', name: 'create_office_document', description: '실제 노트북 페이지 폴더에 빈 Office 또는 HWPX 문서를 만들고 해당 노트에 연결한다.', strict: true, parameters: schema({ note_id: stringProp('문서를 연결할 노트 ID'), expected_revision: { type: 'integer' }, format: { type: 'string', enum: ['docx', 'xlsx', 'pptx', 'hwpx'] }, file_name: stringProp('확장자를 제외한 파일 이름') }, ['note_id', 'expected_revision', 'format', 'file_name']) },
   { type: 'function', name: 'run_python_note', description: '저장된 Python 코드 노트를 네트워크 없는 제한 컨테이너에서 실행한다.', strict: true, parameters: schema({ note_id: stringProp('Python 코드 노트 ID'), expected_revision: { type: 'integer' } }, ['note_id', 'expected_revision']) },
+  { type: 'function', name: 'run_javascript_note', description: '저장된 JavaScript 코드 노트를 네트워크 없는 제한 컨테이너에서 실행한다.', strict: true, parameters: schema({ note_id: stringProp('JavaScript 코드 노트 ID'), expected_revision: { type: 'integer' } }, ['note_id', 'expected_revision']) },
 ];
 
 const TOOL_DEFINITION_BY_NAME = new Map(TOOL_DEFINITIONS.map((tool) => [tool.name, tool]));
@@ -307,7 +309,7 @@ const deriveAuthorizedMutationTools = (userRequest = '') => {
   if (candidates.includes('update_note')) candidates = candidates.filter((name) => name !== 'write_text_file');
   if (candidates.includes('append_text_file')) candidates = candidates.filter((name) => name !== 'write_text_file');
   if (candidates.includes('trash_note')) candidates = candidates.filter((name) => name !== 'trash_item');
-  if (candidates.includes('run_python_note')) {
+  if (candidates.some((name) => ['run_python_note', 'run_javascript_note'].includes(name))) {
     const separatelyUpdatesNote = /(?:노트|페이지).*(?:수정|편집|저장|바꾸|바꿔)/i.test(text);
     if (!separatelyUpdatesNote) candidates = candidates.filter((name) => name !== 'update_note');
   }
@@ -472,6 +474,7 @@ const actionSpec = (name, args) => {
     trash_note: { title: '노트를 휴지통으로 이동', risk: 'reversible', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision },
     create_office_document: { title: `${String(args.format || '').toUpperCase()} 문서 생성`, risk: 'safe', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision, format: args.format, fileName: args.file_name },
     run_python_note: { title: 'Python 노트 격리 실행', risk: 'compute', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision },
+    run_javascript_note: { title: 'JavaScript 노트 격리 실행', risk: 'compute', actionType: name, noteId: args.note_id, expectedRevision: args.expected_revision },
     restore_trash_item: { title: '휴지통 항목 복원', risk: 'reversible', actionType: name, trashId: args.trash_id },
     restore_file_version: { title: '파일 이전 버전 복원', risk: 'reversible', actionType: name, targetPath: args.path, versionId: args.version_id },
     create_drive_restore_point: { title: '드라이브 복구 지점 생성', risk: 'safe', actionType: name, label: args.label },
@@ -702,6 +705,8 @@ const executeAction = async (user, actionId, { platformCall }) => {
       });
     } else if (action.actionType === 'run_python_note') {
       result = await platformCall('POST', `/note-studio/notes/${encodeURIComponent(action.noteId)}/python/run`, { expectedRevision: action.expectedRevision });
+    } else if (action.actionType === 'run_javascript_note') {
+      result = await platformCall('POST', `/note-studio/notes/${encodeURIComponent(action.noteId)}/javascript/run`, { expectedRevision: action.expectedRevision });
     } else if (action.actionType === 'restore_trash_item') {
       result = await platformCall('POST', `/trash/${encodeURIComponent(action.trashId)}/restore`, {});
     } else if (action.actionType === 'restore_file_version') {

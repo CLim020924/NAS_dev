@@ -53,6 +53,9 @@ const executableCases = [
   ['저장된 파이썬 노트를 실행해줘', ['run_python_note']],
   ['Python 코드 페이지를 돌려줘', ['run_python_note']],
   ['이 파이썬 노트를 실행해주세요', ['run_python_note']],
+  ['저장된 자바스크립트 노트를 실행해줘', ['run_javascript_note']],
+  ['JavaScript 코드 페이지를 돌려줘', ['run_javascript_note']],
+  ['이 JS 노트를 실행해주세요', ['run_javascript_note']],
   ['폴더를 만들고 그 안에 메모 파일을 작성해줘', ['create_folder', 'write_text_file']],
   ['보고서를 복사하고 원본을 휴지통으로 보내줘', ['copy_item', 'trash_item']],
   ['파일 이름을 바꾸고 날짜별로 정리해줘', ['move_item', 'organize_files_by_modified_date']],
@@ -190,7 +193,7 @@ test('질문 행렬은 기존 핵심 도구를 반복 검증하고 모든 현재
   const expected = [
     'create_folder', 'write_text_file', 'append_text_file', 'copy_item', 'move_item', 'trash_item',
     'organize_files_by_modified_date', 'send_friend_request', 'set_user_blocked', 'send_chat_message',
-    'send_file_to_user', 'create_note', 'update_note', 'trash_note', 'create_office_document', 'run_python_note',
+    'send_file_to_user', 'create_note', 'update_note', 'trash_note', 'create_office_document', 'run_python_note', 'run_javascript_note',
   ];
   expected.forEach((name) => assert.ok((counts.get(name) || 0) >= 3, `${name} coverage`));
   _test.MUTATION_TOOL_NAMES.forEach((name) => assert.ok((counts.get(name) || 0) >= 1, `${name} has no intent test`));

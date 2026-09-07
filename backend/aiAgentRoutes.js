@@ -168,6 +168,7 @@ const TOOL_PROGRESS_LABELS = {
   trash_note: '노트 휴지통 이동을 준비하고 있습니다',
   create_office_document: 'Office 문서 생성을 준비하고 있습니다',
   run_python_note: 'Python 격리 실행을 준비하고 있습니다',
+  run_javascript_note: 'JavaScript 격리 실행을 준비하고 있습니다',
 };
 
 const reportAgentProgress = (user, requestId, event = {}) => {

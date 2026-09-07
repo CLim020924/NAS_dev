@@ -42,6 +42,7 @@
 | 노트 휴지통 | `이 페이지를 삭제해줘` | `trash_note`, revision 충돌 시 중단 |
 | Office 생성 | `이 노트에 DOCX/XLSX/PPTX/HWPX 만들어줘` | `create_office_document` |
 | Python 실행 | `저장된 Python 노트를 실행해줘` | `run_python_note`, 항상 별도 승인·격리 실행 |
+| JavaScript 실행 | `저장된 JavaScript 노트를 실행해줘` | `run_javascript_note`, 항상 별도 승인·격리 실행 |
 | 복합 작업 | `찾아서 보내줘`, `폴더 만들고 파일 작성해줘` | 순차 도구, 앞 결과가 모호하면 다음 변경 금지 |
 | 정확 출력 | `숫자만`, `경로만`, `한 단어로만`, `JSON으로` | 요청한 출력 계약 준수 |
 | 오류 복구 | 없는 경로, 중복 이름, quota 초과, revision 충돌 | 성공으로 꾸미지 않고 원인·재시도 조건 표시 |
@@ -80,7 +81,7 @@
 - NAS Drive 장치 연결·재시작·업데이트·다중 계정 상태 변경
 - Notebook 생성·이름 변경·이동과 첨부 재연결 전용 AI 도구
 - 전체 프로젝트 정적 분석·패키지 설치·테스트 실행·수정 patch 검토
-- 지속 Python kernel, `.ipynb`, 다른 언어 compiler
+- 지속 Python/JavaScript kernel, `.ipynb`, JavaScript 외 다른 언어 compiler
 - 이미지 OCR·사진 분류·동영상·음성 분석
 - 백업 생성·복원·보존 정책 변경
 - 인터넷 검색·외부 서비스 작업·예약·주기적 자동화

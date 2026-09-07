@@ -5,7 +5,7 @@ const SURFACES = Object.freeze({
   friends: ['list_friends', 'search_users', 'send_friend_request', 'accept_friend_request', 'reject_friend_request', 'remove_friend', 'set_friend_favorite', 'set_user_blocked'],
   chat: ['list_chat_conversations', 'list_chat_messages', 'send_chat_message', 'send_file_to_user', 'create_group_chat', 'invite_group_chat', 'respond_group_invite', 'leave_group_chat', 'send_group_message', 'transfer_group_owner', 'set_group_cohost', 'kick_group_member', 'delete_group_chat', 'save_chat_attachments', 'mark_chat_read'],
   notifications: ['list_notifications', 'get_unread_notification_count', 'mark_notification_read', 'mark_all_notifications_read'],
-  notes: ['list_notebooks', 'list_notes', 'read_note', 'list_deleted_notes', 'list_note_versions', 'create_notebook', 'create_note', 'update_note', 'trash_note', 'restore_note', 'restore_note_version', 'attach_note_item', 'remove_note_attachment', 'create_office_document', 'run_python_note'],
+  notes: ['list_notebooks', 'list_notes', 'read_note', 'list_deleted_notes', 'list_note_versions', 'create_notebook', 'create_note', 'update_note', 'trash_note', 'restore_note', 'restore_note_version', 'attach_note_item', 'remove_note_attachment', 'create_office_document', 'run_python_note', 'run_javascript_note'],
   documents: ['get_document_studio_capabilities', 'get_document_job', 'create_document_job', 'cancel_document_job', 'retry_document_job'],
   devices: ['list_devices', 'set_device_sync', 'revoke_device'],
   shares: ['list_shares', 'get_share_logs', 'create_share_link', 'update_share_link', 'set_share_paused', 'regenerate_share_token', 'revoke_share_link'],

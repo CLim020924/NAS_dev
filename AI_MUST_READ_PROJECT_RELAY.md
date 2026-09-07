@@ -1494,3 +1494,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - UX 관찰: frontend는 상단에 공통 문구 `Python 코드가 오류와 함께 종료되었습니다.`를 먼저 표시하고 실제 `NameError` 원인은 아래 stderr 영역에 둔다. 따라서 사용자가 계정 공통 장애로 오해하기 쉽다. 현재는 850ms autosave가 끝난 중간 입력본도 실행할 수 있어 입력을 잠시 멈춘 상태의 미완성 코드가 버전과 실행 대상이 될 수 있다.
 - 현재 기능 경계: 이 실행기는 Jupyter의 지속 kernel이 아니라 저장된 Python 코드 노트 전체를 매번 새 컨테이너에서 한 번 실행한다. 기본 이미지는 Python 표준 라이브러리 중심이며 `numpy`/`pandas` 같은 추가 패키지, 네트워크, NAS 파일 mount, 셀 간 변수 유지가 없다. 해당 기능을 기대한 코드는 별도 오류가 정상적으로 발생한다.
 - 결론·다음 안전 조치: 공통 backend 수정 근거는 현재 없다. 다음 개선 후보는 실행 전에 syntax/미완성 입력을 구분해 안내하고, `NameError`·`ModuleNotFoundError`·timeout·자원 제한을 사용자 문장으로 분류하며, 성공/실패와 stderr를 같은 상단 결과에 표시하는 UI다. 실제 사용자가 본 정확한 오류 문구가 위 이력과 다르면 그 문구와 시각으로 API 응답을 추가 추적한다.
+
+## 2026-09-07 Python 오류 분류 개선 및 JavaScript 격리 실행 추가
+
+- 요청 요지: 정상인 NAS를 Python 오류로 오해하지 않도록 원인을 명확히 표시하고, 기존 Python과 같은 수준의 JavaScript 코드 실행을 Note Studio와 AI 에이전트에 추가한다.
+- 구현: `managedJavaScriptWorker`를 추가해 `node:22-alpine`에서 저장된 JavaScript 코드 노트를 일회성으로 실행한다. Python과 동일하게 Docker network none, non-root UID, read-only rootfs, cap-drop ALL, no-new-privileges, CPU 0.5 core, RAM/swap 256MiB, PID 64, 15초, 코드 128KiB, 출력 64KiB 제한을 강제한다. 호스트 경로·NAS 파일·인증정보를 mount 또는 전달하지 않는다.
+- API·UI: `POST /api/note-studio/notes/:noteId/javascript/run`을 추가하고 Python/JavaScript 라우트를 공통 실행 경로로 묶었다. Note Studio의 JavaScript 코드 페이지에도 실행 버튼과 결과 창이 나오며, 빈 정상 출력은 `출력 없음 · 정상 종료`로 구분한다. SyntaxError, NameError/ReferenceError, 모듈 없음, timeout, 출력 초과, worker 장애를 분류해 사용자 코드 문제를 서버 오프라인으로 표현하지 않는다. Python에서 `console.log`를 쓰거나 JavaScript에서 `print`를 쓴 경우 올바른 출력 함수를 안내한다.
+- AI 연결: `run_javascript_note`를 101번째 strict 도구로 등록했다. JavaScript 실행도 compute 위험 등급이며 `auto_all`에서도 별도 승인을 기다린다. 승인 후에는 저장 revision이 정확히 일치하는 JavaScript 코드 노트만 실제 제품 API로 실행한다.
+- 런타임 준비: NAS에 공식 `node:22-alpine` 이미지를 받아 실행 준비를 마쳤다. 이 변경은 Python 환경을 대체하지 않으며 두 런타임은 독립 컨테이너다.
+- 검증: 로컬 신규/관련 23/23, backend 전체 102 pass·5 환경 조건부 skip·0 fail, frontend production build와 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. NAS에서는 배포 후 실제 Python `print(6*7)`과 JavaScript `console.log(6*7)`을 각각 격리 컨테이너에서 실행하고 서비스/HTTP/무인증 경계를 다시 확인한다.
+- 기능 경계: 이번 JavaScript 실행은 브라우저 DOM이나 지속 REPL/Jupyter가 아닌 Node.js CommonJS 일회성 실행이다. 외부 npm 패키지 설치, 네트워크, NAS 파일 접근, 프로세스 유지, 실행 간 변수 보존은 허용하지 않는다.
+- 미완료: NAS 실장비 배포·실행 검증과 운영 bundle/service 확인은 코드 commit/push 후 수행하고 이 문단에 최종 결과를 덧붙인다.
