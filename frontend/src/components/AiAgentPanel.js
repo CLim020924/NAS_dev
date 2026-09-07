@@ -16,10 +16,12 @@ import {
 } from '@mui/material';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import CloseIcon from '@mui/icons-material/Close';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import axios from 'axios';
+import { copyTextToClipboard } from '../utils/copyTextToClipboard';
 
 const DEFAULT_PREFERENCES = { approvalMode: 'ask_each', dailyTokenLimit: 50000 };
 const ACTIVE_ACTION_STATUSES = new Set(['pending', 'recovery_required']);
@@ -46,10 +48,12 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
   const [toolEvents, setToolEvents] = useState([]);
   const [activity, setActivity] = useState(null);
   const [showLatestButton, setShowLatestButton] = useState(false);
+  const [copiedMessageKey, setCopiedMessageKey] = useState('');
   const scrollRef = useRef(null);
   const endRef = useRef(null);
   const followLatestRef = useRef(true);
   const activityClearTimerRef = useRef(null);
+  const copyClearTimerRef = useRef(null);
 
   const clearActivityLater = (delay = 1800) => {
     if (activityClearTimerRef.current) window.clearTimeout(activityClearTimerRef.current);
@@ -119,7 +123,20 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
 
   useEffect(() => () => {
     if (activityClearTimerRef.current) window.clearTimeout(activityClearTimerRef.current);
+    if (copyClearTimerRef.current) window.clearTimeout(copyClearTimerRef.current);
   }, []);
+
+  const copyMessage = async (content, key) => {
+    const copied = await copyTextToClipboard(content);
+    if (!copied) {
+      setError('메시지를 복사하지 못했습니다. 텍스트를 선택한 뒤 Ctrl+C를 사용해 주세요.');
+      return;
+    }
+    setError('');
+    setCopiedMessageKey(key);
+    if (copyClearTimerRef.current) window.clearTimeout(copyClearTimerRef.current);
+    copyClearTimerRef.current = window.setTimeout(() => setCopiedMessageKey(''), 1800);
+  };
 
   const run = async (fn, options = {}) => {
     setLoading(true);
@@ -329,8 +346,10 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
                 </Box>
               )}
 
-              {messages.map((item, index) => (
-                <React.Fragment key={`${item.messageId || item.createdAt || index}-${index}`}>
+              {messages.map((item, index) => {
+                const messageKey = `${item.messageId || item.createdAt || index}-${index}`;
+                return (
+                <React.Fragment key={messageKey}>
                   {hasLegacyMessages && ((firstModernMessageIndex === -1 && index === 0) || index === firstModernMessageIndex) && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
                       <Box sx={{ flex: 1, height: '1px', bgcolor: 'divider' }} />
@@ -342,7 +361,9 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
                     <Paper
                       variant="outlined"
                       sx={{
-                        p: 1.25,
+                        px: 1.25,
+                        pt: 1.25,
+                        pb: 0.5,
                         maxWidth: '88%',
                         borderRadius: 1,
                         bgcolor: item.role === 'user' ? 'primary.main' : 'background.paper',
@@ -350,11 +371,33 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
                         opacity: item.pending ? 0.7 : 1,
                       }}
                     >
-                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.content}</Typography>
+                      <Typography
+                        variant="body2"
+                        sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text', WebkitUserSelect: 'text', cursor: 'text' }}
+                      >
+                        {item.content}
+                      </Typography>
+                      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.25 }}>
+                        <Tooltip title={copiedMessageKey === messageKey ? '복사됨' : '메시지 복사'}>
+                          <IconButton
+                            size="small"
+                            aria-label={copiedMessageKey === messageKey ? '메시지 복사됨' : '메시지 복사'}
+                            onClick={() => copyMessage(item.content, messageKey)}
+                            sx={{
+                              width: 26,
+                              height: 26,
+                              color: item.role === 'user' ? 'inherit' : 'text.secondary',
+                              opacity: copiedMessageKey === messageKey ? 1 : 0.72,
+                            }}
+                          >
+                            <ContentCopyIcon sx={{ fontSize: 15 }} />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
                     </Paper>
                   </Box>
                 </React.Fragment>
-              ))}
+              );})}
 
               {visibleActions.map((action) => (
                 <Paper key={action.actionId} variant="outlined" sx={{ p: 1.5, borderColor: action.status === 'recovery_required' ? 'warning.main' : 'primary.main' }}>
