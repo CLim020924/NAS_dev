@@ -28,6 +28,7 @@ import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
+import { getWindowLayerZIndex } from './windowLayerPolicy';
 import ChatInviteDialog from './ChatInviteDialog';
 
 const formatMessageTime = (value) => {
@@ -484,7 +485,7 @@ const DedicatedChatWindowLayer = () => {
         position: 'fixed',
         inset: 0,
         pointerEvents: 'none',
-        zIndex: 1450,
+        zIndex: getWindowLayerZIndex(windowChats, focusedContext),
       }}
     >
       {windowChats.map((win) => {

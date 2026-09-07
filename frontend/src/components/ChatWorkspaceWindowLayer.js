@@ -38,6 +38,7 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import ChatNasPickerDialog from './ChatNasPickerDialog';
+import { getWindowLayerZIndex } from './windowLayerPolicy';
 import ChatInviteDialog from './ChatInviteDialog';
 
 const WORKSPACE_WINDOW_ID = 'chat_workspace_main';
@@ -675,7 +676,7 @@ const ChatWorkspaceWindowLayer = () => {
         position: 'fixed',
         inset: 0,
         pointerEvents: 'none',
-        zIndex: 1450,
+        zIndex: getWindowLayerZIndex([workspaceWin], focusedContext),
       }}
     >
       <input

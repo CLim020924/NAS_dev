@@ -111,7 +111,8 @@ function ServicePlatform() {
   const pcAutoConnectStartedRef = useRef(false);
   const pcDevicesRef = useRef([]);
   const {
-    openAppWindow
+    openAppWindow,
+    showDesktop,
   } = useWindows();
   const user = JSON.parse(localStorage.getItem('user')) || {};
   const accountKey = String(user.userUid || user.loginId || user.id || user.username || 'unknown');
@@ -423,19 +424,22 @@ function ServicePlatform() {
   ]);
 
   useEffect(() => {
-    const showDesktop = () => setInlineApp(null);
+    const handleShowDesktop = () => {
+      setInlineApp(null);
+      showDesktop();
+    };
     const openPlatformApp = (event) => {
       const targetId = event.detail?.id;
       const targetApp = apps.find((app) => app.id === targetId);
       if (targetApp) openApp(targetApp);
     };
-    window.addEventListener('platform:show-desktop', showDesktop);
+    window.addEventListener('platform:show-desktop', handleShowDesktop);
     window.addEventListener('platform:open-app', openPlatformApp);
     return () => {
-      window.removeEventListener('platform:show-desktop', showDesktop);
+      window.removeEventListener('platform:show-desktop', handleShowDesktop);
       window.removeEventListener('platform:open-app', openPlatformApp);
     };
-  }, [apps, openApp]);
+  }, [apps, openApp, showDesktop]);
 
   if (inlineApp) {
     return (

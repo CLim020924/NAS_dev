@@ -149,7 +149,7 @@ const NAS = ({ showWorkspace = true }) => {
   const [dragOverTarget, setDragOverTarget] = useState(null);
   const [iconPositions, setIconPositions] = useState(() => JSON.parse(localStorage.getItem('msp_icon_positions') || '{}'));
   
-  const { openWindows, setOpenWindows, topZIndex, setTopZIndex, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles, fileManagerPath, setFileManagerPath } = useWindows();
+  const { openWindows, setOpenWindows, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles, fileManagerPath, setFileManagerPath } = useWindows();
   const { startUpload } = useTransfer();
   const folderInlineMode = appOpenMode === 'inline';
   const currentFileManagerPath = folderInlineMode ? ensureSlash(fileManagerPath || '/') : '/';
@@ -573,8 +573,8 @@ const NAS = ({ showWorkspace = true }) => {
     const winId = item.id === 'system_root' ? 'system_root' : `desk_${targetPath}`;
     if (!openWindows.find(w => w.id === winId && w.id !== 'system_root')) {
       if(openWindows.find(w => w.id === winId)) return focusWindow(winId);
-      setOpenWindows(prev => [...prev, { ...item, id: winId, winType: 'folder', basePath: targetPath, currentPath: targetPath, files: [], isLoaded: false, zIndex: topZIndex + 1, sidebarOpen: !isMobile, width: 900, height: 650, x: 100 + (prev.length * 30), y: 50 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
-      setTopZIndex(prev => prev + 1); setFocusedContext(winId);
+      setOpenWindows(prev => [...prev, { ...item, id: winId, winType: 'folder', basePath: targetPath, currentPath: targetPath, files: [], isLoaded: false, zIndex: 0, sidebarOpen: !isMobile, width: 900, height: 650, x: 100 + (prev.length * 30), y: 50 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
+      focusWindow(winId);
     } else focusWindow(winId); setSelectedItems([]); 
   };
 
@@ -582,7 +582,7 @@ const NAS = ({ showWorkspace = true }) => {
 
   const openFileWindow = async (fileItem, forceEditMode = false) => {
     const safePath = ensureSlash(fileItem.fullPath); const fileId = `file_${safePath}`;
-    if (openWindows.find(w => w.id === fileId)) { setOpenWindows(prev => prev.map(w => w.id === fileId ? { ...w, isMinimized: false, zIndex: topZIndex + 1, mode: forceEditMode ? 'edit' : w.mode } : w)); setTopZIndex(topZIndex + 1); setFocusedContext(fileId); return; }
+    if (openWindows.find(w => w.id === fileId)) { setOpenWindows(prev => prev.map(w => w.id === fileId ? { ...w, mode: forceEditMode ? 'edit' : w.mode } : w)); focusWindow(fileId); return; }
     const safeApiUrl = `/api/file/download?path=${encodeURIComponent(safePath)}`; 
     let ext = fileItem.name.includes('.') ? fileItem.name.split('.').pop().toLowerCase() : '';
     const binaryExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'mp3', 'wav', 'flac', 'm4a', 'pdf', 'heic', 'heif', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'hwp', 'hwpx', 'zip', 'tar', 'gz'];
@@ -596,8 +596,8 @@ const NAS = ({ showWorkspace = true }) => {
 
     const isBinary = binaryExts.includes(ext);
     try { let content = ''; if (!isBinary) { const response = await axios.get(safeApiUrl, { responseType: 'text', withCredentials: true }); content = typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : response.data; }
-      setOpenWindows(prev => [...prev, { id: fileId, name: fileItem.name, fullPath: safePath, winType: 'file', content: content, originalContent: content, mode: forceEditMode && !isBinary ? 'edit' : 'view', isBinary: isBinary, url: safeApiUrl, ext: ext, zIndex: topZIndex + 1, width: 800, height: 600, x: 150 + (prev.length * 30), y: 100 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
-      setTopZIndex(prev => prev + 1); setFocusedContext(fileId); } catch (err) { showError('파일 열기', err); } setSelectedItems([]);
+      setOpenWindows(prev => [...prev, { id: fileId, name: fileItem.name, fullPath: safePath, winType: 'file', content: content, originalContent: content, mode: forceEditMode && !isBinary ? 'edit' : 'view', isBinary: isBinary, url: safeApiUrl, ext: ext, zIndex: 0, width: 800, height: 600, x: 150 + (prev.length * 30), y: 100 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
+      focusWindow(fileId); } catch (err) { showError('파일 열기', err); } setSelectedItems([]);
   };
 
   const handleSearchResultOpen = (item) => {

@@ -41,6 +41,7 @@ export const WindowProvider = ({ children }) => {
   const initialWorkspaceIdentity = readStoredWorkspaceIdentity(localStorage);
   const [openWindows, setOpenWindows] = useState([]);
   const [topZIndex, setTopZIndex] = useState(100);
+  const topZIndexRef = useRef(100);
   const [taskbarOrder, setTaskbarOrder] = useState([]);
   const [workspaceIdentity, setWorkspaceIdentity] = useState(initialWorkspaceIdentity);
   const workspaceIdentityRef = useRef(initialWorkspaceIdentity);
@@ -104,6 +105,7 @@ export const WindowProvider = ({ children }) => {
       setFocusedContext(transition.focusedContext);
       setAiSelectedPaths([]);
       setTopZIndex(transition.topZIndex);
+      topZIndexRef.current = transition.topZIndex;
       setFileManagerPath(transition.fileManagerPath);
     };
 
@@ -125,29 +127,59 @@ export const WindowProvider = ({ children }) => {
     });
   }, [openWindows]);
 
+  useEffect(() => {
+    topZIndexRef.current = Math.max(topZIndexRef.current, topZIndex);
+  }, [topZIndex]);
+
   const taskbarWindows = useMemo(() => {
     return taskbarOrder.map(id => openWindows.find(w => w.id === id)).filter(Boolean);
   }, [openWindows, taskbarOrder]);
 
   const activeWindowId = useMemo(() => {
-    if (openWindows.length === 0) return null;
-    return openWindows.reduce((top, current) => {
+    const visibleWindows = openWindows.filter((win) => !win.isMinimized);
+    if (visibleWindows.length === 0) return null;
+    const focused = visibleWindows.find((win) => win.id === focusedContext);
+    if (focused) return focused.id;
+    return visibleWindows.reduce((top, current) => {
       if (!top) return current;
       return current.zIndex > top.zIndex ? current : top;
     }, null)?.id || null;
-  }, [openWindows]);
+  }, [openWindows, focusedContext]);
 
-  // 창 포커스 시 최소화도 함께 해제하고, 최근 사용 순서도 갱신
-  const focusWindow = (id) => {
-    setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, zIndex: topZIndex + 1, isMinimized: false } : w));
+  const allocateWindowZIndex = useCallback(() => {
+    const next = topZIndexRef.current + 1;
+    topZIndexRef.current = next;
+    setTopZIndex(next);
+    return next;
+  }, []);
+
+  // Every window type shares this single MRU authority. Never assign focus-layer z-index elsewhere.
+  const focusWindow = useCallback((id) => {
+    if (!id || id === 'desktop') return;
+    const nextZIndex = allocateWindowZIndex();
+    setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, zIndex: nextZIndex, isMinimized: false } : w));
     setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== id), id]);
-    setTopZIndex(prev => prev + 1);
     setFocusedContext(id);
-  };
+  }, [allocateWindowZIndex]);
+
+  const showDesktop = useCallback(() => {
+    setOpenWindows(prev => prev.map(win => (
+      win.isMinimized ? win : { ...win, isMinimized: true }
+    )));
+    setFocusedContext('desktop');
+    setAiSelectedPaths([]);
+  }, []);
 
   const closeWindow = (id) => {
+    const nextWindow = [...taskbarWindows]
+      .reverse()
+      .find((win) => win.id !== id && !win.isMinimized);
     setOpenWindows(prev => prev.filter(w => w.id !== id));
-    if (focusedContext === id) setFocusedContext('desktop'); // 닫은 창이 포커스였다면 바탕화면으로 포커스 이동
+    setTaskbarOrder(prev => prev.filter(itemId => itemId !== id));
+    if (focusedContext === id) {
+      if (nextWindow) focusWindow(nextWindow.id);
+      else setFocusedContext('desktop');
+    }
   };
   
   const toggleMinimize = (id) => {
@@ -155,14 +187,20 @@ export const WindowProvider = ({ children }) => {
     if (!target) return;
 
     if (!target.isMinimized && focusedContext === id) {
-      setFocusedContext('desktop');
+      const nextWindow = [...taskbarWindows]
+        .reverse()
+        .find((win) => win.id !== id && !win.isMinimized);
+      if (nextWindow) focusWindow(nextWindow.id);
+      else setFocusedContext('desktop');
     }
 
     setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, isMinimized: !w.isMinimized } : w));
 
     if (target.isMinimized) {
       setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== id), id]);
-      setTopZIndex(prev => prev + 1);
+      const nextZIndex = allocateWindowZIndex();
+      setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, zIndex: nextZIndex } : w));
+      setFocusedContext(id);
     }
   };
   
@@ -269,6 +307,7 @@ export const WindowProvider = ({ children }) => {
       return;
     }
 
+    const nextZIndex = allocateWindowZIndex();
     setOpenWindows(prev => [
       ...prev,
       {
@@ -281,7 +320,7 @@ export const WindowProvider = ({ children }) => {
         currentPath: targetPath,
         files: [],
         isLoaded: false,
-        zIndex: topZIndex + 1,
+        zIndex: nextZIndex,
         sidebarOpen: true,
         width: 900,
         height: 650,
@@ -291,22 +330,22 @@ export const WindowProvider = ({ children }) => {
         isMaximized: false,
       }
     ]);
-    setTopZIndex(prev => prev + 1);
     setFocusedContext(winId);
     setTimeout(() => fetchFiles(winId, targetPath), 0);
-  }, [openWindows, focusWindow, topZIndex, fetchFiles, normalizeNasPath, getPathLeafName]);
+  }, [openWindows, focusWindow, allocateWindowZIndex, fetchFiles, normalizeNasPath, getPathLeafName]);
 
   const openFileWindowByPath = useCallback(async (requestedPath, preferredName = null, forceEditMode = false) => {
     const safePath = normalizeNasPath(requestedPath);
     const fileId = `file_${safePath}`;
 
     if (openWindows.find(w => w.id === fileId)) {
+      const nextZIndex = allocateWindowZIndex();
       setOpenWindows(prev => prev.map(w =>
         w.id === fileId
-          ? { ...w, isMinimized: false, zIndex: topZIndex + 1, mode: forceEditMode ? 'edit' : w.mode, preferEditMode: forceEditMode || w.preferEditMode }
+          ? { ...w, isMinimized: false, zIndex: nextZIndex, mode: forceEditMode ? 'edit' : w.mode, preferEditMode: forceEditMode || w.preferEditMode }
           : w
       ));
-      setTopZIndex(prev => prev + 1);
+      setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== fileId), fileId]);
       setFocusedContext(fileId);
       return;
     }
@@ -334,6 +373,7 @@ export const WindowProvider = ({ children }) => {
         content = typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : response.data;
       }
 
+      const nextZIndex = allocateWindowZIndex();
       setOpenWindows(prev => [
         ...prev,
         {
@@ -348,7 +388,7 @@ export const WindowProvider = ({ children }) => {
           isBinary,
           url: safeApiUrl,
           ext,
-          zIndex: topZIndex + 1,
+          zIndex: nextZIndex,
           width: 800,
           height: 600,
           x: 150 + (prev.length * 30),
@@ -357,22 +397,23 @@ export const WindowProvider = ({ children }) => {
           isMaximized: false
         }
       ]);
-      setTopZIndex(prev => prev + 1);
+      setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== fileId), fileId]);
       setFocusedContext(fileId);
     } catch (err) {
       console.error('파일 열기 실패:', err);
       alert(err.response?.data?.error || '파일 열기에 실패했습니다.');
     }
-  }, [openWindows, topZIndex, normalizeNasPath, getPathLeafName]);
+  }, [openWindows, allocateWindowZIndex, normalizeNasPath, getPathLeafName]);
 
   const openAppWindow = useCallback((app) => {
     if (!app?.id) return;
     const winId = `app_${app.id}`;
+    const nextZIndex = allocateWindowZIndex();
 
     setOpenWindows(prev => {
       const existing = prev.find((w) => w.id === winId);
       if (existing) {
-        return prev.map((w) => w.id === winId ? { ...w, isMinimized: false, zIndex: topZIndex + 1 } : w);
+        return prev.map((w) => w.id === winId ? { ...w, isMinimized: false, zIndex: nextZIndex } : w);
       }
 
       return [
@@ -382,7 +423,7 @@ export const WindowProvider = ({ children }) => {
         appId: app.id,
         name: app.title || app.name || '앱',
         winType: 'app',
-        zIndex: topZIndex + 1,
+        zIndex: nextZIndex,
         width: app.width || 860,
         height: app.height || 620,
         x: app.x ?? 120 + (prev.length * 28),
@@ -393,9 +434,9 @@ export const WindowProvider = ({ children }) => {
       }
       ];
     });
-    setTopZIndex(prev => prev + 1);
+    setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== winId), winId]);
     setFocusedContext(winId);
-  }, [topZIndex]);
+  }, [allocateWindowZIndex]);
 
 
   return (
@@ -405,7 +446,7 @@ export const WindowProvider = ({ children }) => {
       fileManagerPath, setFileManagerPath,
       focusedContext, setFocusedContext, // 새로 추가된 포커스 상태 내보내기
       aiSelectedPaths, setAiSelectedPaths,
-      focusWindow, closeWindow, toggleMinimize, toggleMaximize, toggleFullscreen, fetchFiles,
+      focusWindow, showDesktop, closeWindow, toggleMinimize, toggleMaximize, toggleFullscreen, fetchFiles,
       openFolderWindowByPath, openFileWindowByPath, openAppWindow
     }}>
       {children}

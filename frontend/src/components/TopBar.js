@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { AppBar, Toolbar, Typography, Box, IconButton, Menu, MenuItem, Avatar, Badge, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField } from '@mui/material';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { AppBar, Toolbar, Typography, Box, IconButton, Menu, MenuItem, Avatar, Badge, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, ButtonBase, Paper, TextField } from '@mui/material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
@@ -13,9 +13,15 @@ import VideocamIcon from '@mui/icons-material/Videocam';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
 import HistoryIcon from '@mui/icons-material/History';
+import ViewCarouselOutlinedIcon from '@mui/icons-material/ViewCarouselOutlined';
 import axios from 'axios';
 import { useWindows } from '../contexts/WindowContext';
 import { alpha } from '@mui/material/styles';
+import {
+  getInitialTaskSwitcherIndex,
+  getTaskSwitcherWindows,
+  moveTaskSwitcherIndex,
+} from './windowLayerPolicy';
 
 const TopBar = ({
   onOpenFriends,
@@ -29,7 +35,16 @@ const TopBar = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { taskbarWindows, focusWindow, toggleMinimize, focusedContext, openAppWindow } = useWindows();
+  const {
+    openWindows,
+    taskbarOrder,
+    taskbarWindows,
+    focusWindow,
+    showDesktop,
+    toggleMinimize,
+    focusedContext,
+    openAppWindow,
+  } = useWindows();
 
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')) || { username: 'USER', role: 'USER' });
   const [anchorEl, setAnchorEl] = useState(null);
@@ -39,6 +54,10 @@ const TopBar = ({
   const [appMenuAnchorEl, setAppMenuAnchorEl] = useState(null);
   const [chatMenuAnchorEl, setChatMenuAnchorEl] = useState(null);
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
+  const [taskSwitcherOpen, setTaskSwitcherOpen] = useState(false);
+  const [taskSwitcherIndex, setTaskSwitcherIndex] = useState(0);
+  const [taskSwitcherFlash, setTaskSwitcherFlash] = useState(false);
+  const taskSwitcherFlashTimerRef = useRef(null);
 
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileNickname, setProfileNickname] = useState(user.nickname || user.displayName || user.username || '');
@@ -55,6 +74,76 @@ const TopBar = ({
       window.removeEventListener('nas:user-updated', handleStorageChange);
     };
   }, []);
+
+  useEffect(() => () => {
+    if (taskSwitcherFlashTimerRef.current) window.clearTimeout(taskSwitcherFlashTimerRef.current);
+  }, []);
+
+  const taskSwitcherWindows = useMemo(
+    () => getTaskSwitcherWindows(openWindows, taskbarOrder),
+    [openWindows, taskbarOrder]
+  );
+
+  const flashTaskSwitcherButton = () => {
+    if (taskSwitcherFlashTimerRef.current) window.clearTimeout(taskSwitcherFlashTimerRef.current);
+    setTaskSwitcherFlash(false);
+    window.requestAnimationFrame(() => {
+      setTaskSwitcherFlash(true);
+      taskSwitcherFlashTimerRef.current = window.setTimeout(() => setTaskSwitcherFlash(false), 420);
+    });
+  };
+
+  const closeTaskSwitcher = (flash = false) => {
+    setTaskSwitcherOpen(false);
+    if (flash) flashTaskSwitcherButton();
+  };
+
+  const toggleTaskSwitcher = () => {
+    flashTaskSwitcherButton();
+    setTaskSwitcherOpen((open) => {
+      if (open) return false;
+      setTaskSwitcherIndex(getInitialTaskSwitcherIndex(taskSwitcherWindows, focusedContext));
+      return true;
+    });
+  };
+
+  const activateTaskWindow = (win) => {
+    if (!win) return;
+    if (win.winType === 'file' || win.winType === 'folder') navigate('/nas');
+    if (win.winType === 'app') navigate('/platform');
+    focusWindow(win.id);
+    closeTaskSwitcher(true);
+  };
+
+  useEffect(() => {
+    if (!taskSwitcherOpen) return undefined;
+    if (taskSwitcherWindows.length === 0) {
+      setTaskSwitcherOpen(false);
+      return undefined;
+    }
+
+    const handleTaskSwitcherKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeTaskSwitcher(true);
+        return;
+      }
+      if (event.key === 'Tab' || event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        const direction = event.key === 'ArrowLeft' || (event.key === 'Tab' && event.shiftKey) ? -1 : 1;
+        setTaskSwitcherIndex((current) => moveTaskSwitcherIndex(current, taskSwitcherWindows.length, direction));
+        flashTaskSwitcherButton();
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        activateTaskWindow(taskSwitcherWindows[taskSwitcherIndex]);
+      }
+    };
+
+    window.addEventListener('keydown', handleTaskSwitcherKeyDown, true);
+    return () => window.removeEventListener('keydown', handleTaskSwitcherKeyDown, true);
+  }, [taskSwitcherOpen, taskSwitcherWindows, taskSwitcherIndex]);
 
   useEffect(() => {
     const handleSettingsChange = () => setAppOpenMode(localStorage.getItem('platform_app_open_mode') || 'window');
@@ -130,8 +219,8 @@ const TopBar = ({
 
   const navigationItems = [
     { id: 'desktop', title: '바탕화면', icon: SpaceDashboardIcon, action: () => goDesktop() },
-    { id: 'files', title: '파일 관리자', icon: FolderIcon, action: () => navigate('/nas') },
-    { id: 'pc-sync', title: 'PC 연동', icon: DesktopWindowsIcon, action: () => navigate('/nas') },
+    { id: 'files', title: '파일 관리자', icon: FolderIcon, action: () => { showDesktop(); navigate('/nas'); } },
+    { id: 'pc-sync', title: 'PC 연동', icon: DesktopWindowsIcon, action: () => { showDesktop(); navigate('/nas'); } },
     {
       id: 'meeting',
       title: '화상회의',
@@ -152,8 +241,8 @@ const TopBar = ({
         }
       }
     },
-    { id: 'settings', title: '설정', icon: SettingsIcon, action: () => navigate('/settings') },
-    ...(canOpenBackup ? [{ id: 'backup', title: '백업', icon: HistoryIcon, action: () => navigate('/nas/backup') }] : [])
+    { id: 'settings', title: '설정', icon: SettingsIcon, action: () => { showDesktop(); navigate('/settings'); } },
+    ...(canOpenBackup ? [{ id: 'backup', title: '백업', icon: HistoryIcon, action: () => { showDesktop(); navigate('/nas/backup'); } }] : [])
   ];
 
   const handleTaskWindowClick = (win) => {
@@ -162,6 +251,8 @@ const TopBar = ({
       toggleMinimize(win.id);
       return;
     }
+    if (win.winType === 'file' || win.winType === 'folder') navigate('/nas');
+    if (win.winType === 'app') navigate('/platform');
     focusWindow(win.id);
   };
 
@@ -171,6 +262,8 @@ const TopBar = ({
   };
 
   const goDesktop = () => {
+    setTaskSwitcherOpen(false);
+    showDesktop();
     window.dispatchEvent(new Event('platform:show-desktop'));
     navigate('/platform');
   };
@@ -179,6 +272,30 @@ const TopBar = ({
     <>
       <AppBar position="fixed" elevation={0} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.94), backdropFilter: 'blur(14px)', color: 'text.primary', borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
         <Toolbar size="small" sx={{ minHeight: '48px !important', gap: 1 }}>
+          <IconButton
+            size="small"
+            aria-label={taskSwitcherOpen ? '창 전환기 닫기' : '창 전환기 열기'}
+            aria-pressed={taskSwitcherOpen}
+            title="창 전환"
+            onClick={toggleTaskSwitcher}
+            sx={{
+              width: 24,
+              height: 28,
+              border: (theme) => `1px solid ${taskSwitcherOpen ? theme.palette.error.main : theme.palette.divider}`,
+              color: taskSwitcherOpen ? 'error.main' : 'text.secondary',
+              bgcolor: taskSwitcherOpen ? (theme) => alpha(theme.palette.error.main, 0.08) : 'transparent',
+              ...(taskSwitcherFlash ? {
+                animation: 'nasTaskSwitchFlash 420ms ease-out 1',
+                '@keyframes nasTaskSwitchFlash': {
+                  '0%': { bgcolor: 'error.main', color: 'error.contrastText', borderColor: 'error.main' },
+                  '55%': { bgcolor: 'error.main', color: 'error.contrastText', borderColor: 'error.main' },
+                  '100%': { bgcolor: 'transparent', color: 'error.main', borderColor: 'error.main' },
+                },
+              } : {}),
+            }}
+          >
+            <ViewCarouselOutlinedIcon sx={{ fontSize: 15 }} />
+          </IconButton>
           <Box onClick={goDesktop} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
             <Box sx={{ width: 28, height: 28, borderRadius: 1, display: 'grid', placeItems: 'center', color: 'primary.main', border: (theme) => `1px solid ${theme.palette.divider}` }}>
               <FolderIcon sx={{ fontSize: 18 }} />
@@ -557,8 +674,8 @@ const TopBar = ({
               <ManageAccountsIcon fontSize="small" />
             </IconButton>
 
-            <IconButton onClick={() => navigate('/nas')} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
-            <IconButton onClick={() => navigate('/settings')} size="small" sx={{ color: 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
+            <IconButton onClick={() => { showDesktop(); navigate('/nas'); }} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
+            <IconButton onClick={() => { showDesktop(); navigate('/settings'); }} size="small" sx={{ color: 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
 
             <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} size="small">
               <Avatar sx={{ width: 28, height: 28, fontSize: '0.8rem', bgcolor: 'primary.main', fontWeight: 'bold' }}>
@@ -586,6 +703,95 @@ const TopBar = ({
           </Menu>
         </Toolbar>
       </AppBar>
+
+      {taskSwitcherOpen && (
+        <Box
+          role="presentation"
+          onMouseDown={() => closeTaskSwitcher(true)}
+          sx={{
+            position: 'fixed',
+            inset: '48px 0 0',
+            zIndex: 1200,
+            display: 'grid',
+            placeItems: 'start center',
+            pt: { xs: 2, sm: 5 },
+            px: 2,
+            bgcolor: (theme) => alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.48 : 0.28),
+          }}
+        >
+          <Paper
+            role="dialog"
+            aria-label="열린 창 전환"
+            onMouseDown={(event) => event.stopPropagation()}
+            sx={{
+              width: 'min(920px, 100%)',
+              maxHeight: 'calc(100dvh - 112px)',
+              overflow: 'auto',
+              p: 1.5,
+              border: (theme) => `1px solid ${theme.palette.divider}`,
+              boxShadow: 'var(--nas-shadow-float)',
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5, pb: 1.25 }}>
+              <Box>
+                <Typography sx={{ fontWeight: 800 }}>열린 창</Typography>
+                <Typography variant="caption" color="text.secondary">최근 사용 순서 · Tab/방향키로 이동 · Enter로 선택</Typography>
+              </Box>
+              <Typography variant="caption" color="text.secondary">Esc 또는 왼쪽 버튼으로 닫기</Typography>
+            </Box>
+
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))' }, gap: 1 }}>
+              {taskSwitcherWindows.map((win, index) => {
+                const Icon = win.winType === 'folder'
+                  ? FolderIcon
+                  : win.winType === 'file'
+                    ? InsertDriveFileIcon
+                    : win.winType === 'chat'
+                      ? ChatBubbleOutlineIcon
+                      : SpaceDashboardIcon;
+                const typeLabel = win.winType === 'folder' ? '폴더' : win.winType === 'file' ? '파일' : win.winType === 'chat' ? '채팅' : '앱';
+                const selected = index === taskSwitcherIndex;
+                return (
+                  <ButtonBase
+                    key={win.id}
+                    aria-current={selected ? 'true' : undefined}
+                    onMouseEnter={() => setTaskSwitcherIndex(index)}
+                    onClick={() => activateTaskWindow(win)}
+                    sx={{
+                      minHeight: 104,
+                      p: 1.5,
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'flex-start',
+                      gap: 1.25,
+                      textAlign: 'left',
+                      border: (theme) => `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
+                      bgcolor: selected ? (theme) => alpha(theme.palette.primary.main, 0.08) : 'background.paper',
+                      borderRadius: 1,
+                    }}
+                  >
+                    <Box sx={{ width: 34, height: 34, flex: '0 0 auto', display: 'grid', placeItems: 'center', border: (theme) => `1px solid ${theme.palette.divider}` }}>
+                      <Icon sx={{ fontSize: 19, color: selected ? 'primary.main' : 'text.secondary' }} />
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography noWrap sx={{ fontWeight: 750, maxWidth: 210 }}>{win.name || '이름 없는 창'}</Typography>
+                      <Typography variant="caption" color="text.secondary">{typeLabel}{win.isMinimized ? ' · 숨김' : index === 0 ? ' · 최근 사용' : ''}</Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', mt: 0.5, maxWidth: 210 }}>
+                        {win.currentPath || win.fullPath || win.appId || win.chatUsername || ''}
+                      </Typography>
+                    </Box>
+                  </ButtonBase>
+                );
+              })}
+              {taskSwitcherWindows.length === 0 && (
+                <Typography color="text.secondary" sx={{ gridColumn: '1 / -1', py: 5, textAlign: 'center' }}>
+                  열려 있는 창이 없습니다.
+                </Typography>
+              )}
+            </Box>
+          </Paper>
+        </Box>
+      )}
 
       <Dialog open={profileOpen} onClose={() => setProfileOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>내 정보 수정</DialogTitle>
