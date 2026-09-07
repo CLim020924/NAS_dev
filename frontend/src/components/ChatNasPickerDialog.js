@@ -120,7 +120,7 @@ const ChatNasPickerDialog = ({
       onClose={onClose}
       fullWidth
       maxWidth="sm"
-      PaperProps={{ sx: { borderRadius: 3, minHeight: 480 } }}
+      PaperProps={{ sx: { borderRadius: 1.5, minHeight: 480 } }}
     >
       <DialogTitle sx={{ fontWeight: 800 }}>
         {title}

@@ -344,7 +344,7 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
                       sx={{
                         p: 1.25,
                         maxWidth: '88%',
-                        borderRadius: 2,
+                        borderRadius: 1,
                         bgcolor: item.role === 'user' ? 'primary.main' : 'background.paper',
                         color: item.role === 'user' ? 'primary.contrastText' : 'text.primary',
                         opacity: item.pending ? 0.7 : 1,
@@ -396,7 +396,7 @@ const AiAgentPanel = ({ open, onClose, context = {} }) => {
               variant="contained"
               startIcon={<ArrowDownwardIcon />}
               onClick={() => scrollToLatest('smooth')}
-              sx={{ position: 'absolute', right: 16, bottom: 12, borderRadius: 99, boxShadow: 3 }}
+              sx={{ position: 'absolute', right: 16, bottom: 12, boxShadow: 1 }}
             >
               최신으로
             </Button>

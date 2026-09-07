@@ -174,7 +174,7 @@ const DocumentWorkspace = () => {
                 type="button"
                 elevation={0}
                 onClick={() => beginCreate(type)}
-                sx={{ p: 1.75, minHeight: 126, textAlign: 'left', cursor: 'pointer', border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', color: 'text.primary', borderRadius: 2.5, transition: 'transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease', '&:hover': { transform: 'translateY(-2px)', borderColor: alpha(type.color, 0.7), boxShadow: `0 10px 26px ${alpha(type.color, 0.14)}` }, '&:focus-visible': { outline: `3px solid ${alpha(type.color, 0.35)}`, outlineOffset: 2 } }}
+                sx={{ p: 1.75, minHeight: 126, textAlign: 'left', cursor: 'pointer', border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper', color: 'text.primary', borderRadius: 1, transition: 'border-color 120ms ease, background-color 120ms ease', '&:hover': { borderColor: alpha(type.color, 0.7), bgcolor: alpha(type.color, 0.035) }, '&:focus-visible': { outline: `3px solid ${alpha(type.color, 0.35)}`, outlineOffset: 2 } }}
               >
                 <Box sx={{ width: 40, height: 40, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: alpha(type.color, 0.12), color: type.color, mb: 1.25 }}><Icon /></Box>
                 <Typography sx={{ fontWeight: 900, lineHeight: 1.2 }}>{type.label}</Typography>
@@ -200,7 +200,7 @@ const DocumentWorkspace = () => {
         {loadingRecent ? (
           <Box sx={{ minHeight: 180, display: 'grid', placeItems: 'center' }}><CircularProgress size={28} /></Box>
         ) : recentItems.length === 0 ? (
-          <Paper elevation={0} sx={{ p: 4, border: '1px dashed', borderColor: 'divider', borderRadius: 2.5, textAlign: 'center' }}>
+          <Paper elevation={0} sx={{ p: 4, border: '1px dashed', borderColor: 'divider', borderRadius: 1, textAlign: 'center' }}>
             <ArticleIcon sx={{ fontSize: 42, color: 'text.disabled', mb: 1 }} />
             <Typography sx={{ fontWeight: 850 }}>아직 최근 문서가 없습니다.</Typography>
             <Typography variant="body2" color="text.secondary">새 문서를 만들거나 NAS 문서를 열면 여기에 나타납니다.</Typography>
@@ -213,7 +213,7 @@ const DocumentWorkspace = () => {
               const Icon = exactType?.Icon || ArticleIcon;
               const color = exactType?.color || theme.palette.primary.main;
               return (
-                <Paper key={item.fullPath} elevation={0} sx={{ p: 1.35, display: 'flex', alignItems: 'center', gap: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 2, minWidth: 0 }}>
+                <Paper key={item.fullPath} elevation={0} sx={{ p: 1.35, display: 'flex', alignItems: 'center', gap: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1, minWidth: 0 }}>
                   <Box sx={{ width: 42, height: 42, borderRadius: 1.75, flex: '0 0 auto', display: 'grid', placeItems: 'center', bgcolor: alpha(color, 0.11), color }}><Icon /></Box>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography noWrap sx={{ fontWeight: 850 }}>{item.name}</Typography>

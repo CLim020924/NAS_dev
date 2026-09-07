@@ -237,7 +237,7 @@ const Settings = () => {
           <Typography align="center" color="text.secondary" sx={{ py: 4 }}>해당 사용자가 없습니다.</Typography>
         ) : (
           userList.map((u) => (
-            <Paper key={u.userUid || u.id} elevation={1} sx={{ p: 2, mb: 2, borderRadius: 2, border: themeName === 'dark' ? '1px solid rgba(255,255,255,0.12)' : '1px solid #e2e8f0' }}>
+            <Paper key={u.userUid || u.id} elevation={0} sx={{ p: 2, mb: 2, borderRadius: 1, border: themeName === 'dark' ? '1px solid rgba(255,255,255,0.12)' : '1px solid #e2e8f0' }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
                   {u.displayName || u.username} {currentUser.username === u.username && <Chip label="나" size="small" color="primary" sx={{ ml: 1, height: 20 }}/>}
@@ -282,7 +282,7 @@ const Settings = () => {
         )}
       </Box>
     ) : (
-      <TableContainer component={Paper} elevation={0} sx={{ mt: 2, border: themeName === 'dark' ? '1px solid rgba(255,255,255,0.12)' : '1px solid #e2e8f0', borderRadius: 2 }}>
+      <TableContainer component={Paper} elevation={0} sx={{ mt: 2, border: themeName === 'dark' ? '1px solid rgba(255,255,255,0.12)' : '1px solid #e2e8f0', borderRadius: 1 }}>
         <Table size="small">
           <TableHead sx={{ backgroundColor: themeName === 'dark' ? 'rgba(255,255,255,0.06)' : '#f8fafc' }}>
             <TableRow>
@@ -340,9 +340,9 @@ const Settings = () => {
   );
 
   return (
-    <Box sx={{ p: { xs: 2, md: 4 }, height: '100%', overflowY: 'auto', backgroundColor: themeName === 'dark' ? '#0f172a' : (themeName === 'ocean' ? '#e0f2fe' : '#f1f5f9') }}>
+    <Box sx={{ p: { xs: 2, md: 4 }, height: '100%', overflowY: 'auto', backgroundColor: 'background.default' }}>
       <Typography variant="h4" sx={{ fontWeight: 800, mb: 3 }}>시스템 설정</Typography>
-      <Paper elevation={4} sx={{ borderRadius: 3, overflow: 'hidden' }}>
+      <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={isManager ? activeTab : Math.min(activeTab, 1)} onChange={(e, v) => setActiveTab(v)} textColor="primary" indicatorColor="primary" sx={{ px: 2 }}>
             <Tab label="전역 설정" /><Tab label="파일 설정" />{isManager && <Tab label="사용자 관리" />}{isManager && <Tab label="서버 설정" />}
@@ -398,7 +398,7 @@ const Settings = () => {
               <StorageCapacityOverview storageCapacity={storageCapacity} />
               <Typography variant="h6" sx={{ mb: 2 }}>가입 승인 대기자 {pendingUsers.length > 0 && <Chip label={pendingUsers.length} color="error" size="small" />}</Typography>
               {pendingUsers.length > 0 && <Alert severity="info" sx={{ mb: 2 }}>가입 대기자 한 명마다 기본 20GB가 미리 예약되어 중복 승인을 해도 전체 용량을 초과하지 않습니다.</Alert>}
-              <TableContainer component={Paper} sx={{ mb: 5, border: '1px solid #e2e8f0', borderRadius: 2 }} elevation={0}>
+              <TableContainer component={Paper} sx={{ mb: 5, border: '1px solid #e2e8f0', borderRadius: 1 }} elevation={0}>
                 <Table size="small">
                   <TableHead sx={{ backgroundColor: themeName === 'dark' ? 'rgba(255,255,255,0.06)' : '#f8fafc' }}>
                     <TableRow>
@@ -451,7 +451,7 @@ const Settings = () => {
                   size="large" 
                   onClick={handleSaveChanges}
                   disabled={userManagementSaving}
-                  sx={{ px: 6, py: 1.5, fontSize: '1.1rem', fontWeight: 'bold', borderRadius: 2, boxShadow: 3 }}
+                  sx={{ px: 6, py: 1.5, fontSize: '1.1rem', fontWeight: 700, borderRadius: 1, boxShadow: 0 }}
                 >
                   {userManagementSaving ? '검증 후 저장 중…' : '역할·용량 변경사항 저장'}
                 </Button>

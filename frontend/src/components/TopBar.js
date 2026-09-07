@@ -180,7 +180,7 @@ const TopBar = ({
       <AppBar position="fixed" elevation={0} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.94), backdropFilter: 'blur(14px)', color: 'text.primary', borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
         <Toolbar size="small" sx={{ minHeight: '48px !important', gap: 1 }}>
           <Box onClick={goDesktop} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
-            <Box sx={{ width: 28, height: 28, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: (theme) => alpha(theme.palette.primary.main, 0.10), color: 'primary.main', border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.18)}` }}>
+            <Box sx={{ width: 28, height: 28, borderRadius: 1, display: 'grid', placeItems: 'center', color: 'primary.main', border: (theme) => `1px solid ${theme.palette.divider}` }}>
               <FolderIcon sx={{ fontSize: 18 }} />
             </Box>
             <Typography variant="h6" sx={{ fontWeight: 900, fontSize: '0.98rem', whiteSpace: 'nowrap' }}>NAS</Typography>
@@ -194,13 +194,13 @@ const TopBar = ({
               display: 'flex',
               alignItems: 'center',
               gap: 0.8,
-              borderRadius: 1.5,
-              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.07),
-              border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.14)}`,
+              borderRadius: 1,
+              backgroundColor: 'transparent',
+              border: (theme) => `1px solid ${theme.palette.divider}`,
               cursor: 'pointer',
               userSelect: 'none',
               '&:hover': {
-                backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.12),
+                backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.06),
               },
             }}
           >
@@ -220,7 +220,7 @@ const TopBar = ({
             anchorEl={navigationMenuAnchorEl}
             open={Boolean(navigationMenuAnchorEl)}
             onClose={() => setNavigationMenuAnchorEl(null)}
-            PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 220, borderRadius: 2 } }}
+            PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 220 } }}
           >
             {navigationItems.map((item) => {
               const Icon = item.icon;
@@ -267,7 +267,7 @@ const TopBar = ({
                   anchorEl={folderMenuAnchorEl}
                   open={Boolean(folderMenuAnchorEl)}
                   onClose={() => setFolderMenuAnchorEl(null)}
-                  PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 260, borderRadius: 2 } }}
+                  PaperProps={{ elevation: 0, sx: { mt: 1, minWidth: 260, borderRadius: 1 } }}
                 >
                   {minimizedFolders.map((win) => (
                     <MenuItem
@@ -329,7 +329,7 @@ const TopBar = ({
                   anchorEl={fileMenuAnchorEl}
                   open={Boolean(fileMenuAnchorEl)}
                   onClose={() => setFileMenuAnchorEl(null)}
-                  PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 260, borderRadius: 2 } }}
+                  PaperProps={{ elevation: 0, sx: { mt: 1, minWidth: 260, borderRadius: 1 } }}
                 >
                   {minimizedFiles.map((win) => (
                     <MenuItem
@@ -391,7 +391,7 @@ const TopBar = ({
                   anchorEl={appMenuAnchorEl}
                   open={Boolean(appMenuAnchorEl)}
                   onClose={() => setAppMenuAnchorEl(null)}
-                  PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 260, borderRadius: 2 } }}
+                  PaperProps={{ elevation: 0, sx: { mt: 1, minWidth: 260, borderRadius: 1 } }}
                 >
                   {minimizedApps.map((win) => (
                     <MenuItem
@@ -453,7 +453,7 @@ const TopBar = ({
                   anchorEl={chatMenuAnchorEl}
                   open={Boolean(chatMenuAnchorEl)}
                   onClose={() => setChatMenuAnchorEl(null)}
-                  PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 260, borderRadius: 2 } }}
+                  PaperProps={{ elevation: 0, sx: { mt: 1, minWidth: 260, borderRadius: 1 } }}
                 >
                   {minimizedChats.map((win) => (
                     <MenuItem
@@ -567,7 +567,7 @@ const TopBar = ({
             </IconButton>
           </Box>
 
-          <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)} PaperProps={{ elevation: 3, sx: { mt: 1, minWidth: 150, borderRadius: 2 } }}>
+          <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)} PaperProps={{ elevation: 0, sx: { mt: 1, minWidth: 150, borderRadius: 1 } }}>
             <Box sx={{ px: 2, py: 1, outline: 'none' }}>
               <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>{user.nickname || user.displayName || user.username}</Typography>
               <Typography variant="caption" color="text.secondary">
@@ -587,7 +587,7 @@ const TopBar = ({
         </Toolbar>
       </AppBar>
 
-      <Dialog open={profileOpen} onClose={() => setProfileOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <Dialog open={profileOpen} onClose={() => setProfileOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>내 정보 수정</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
@@ -606,7 +606,7 @@ const TopBar = ({
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
           <Button onClick={() => setProfileOpen(false)} color="inherit">취소</Button>
-          <Button onClick={handlePasswordChange} variant="contained" color="primary" sx={{ borderRadius: 2 }}>비밀번호 변경</Button>
+          <Button onClick={handlePasswordChange} variant="contained" color="primary">비밀번호 변경</Button>
         </DialogActions>
       </Dialog>
     </>

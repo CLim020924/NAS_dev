@@ -125,7 +125,7 @@ const GlobalAppWindowLayer = () => {
               onResizeStop={(e, direction, ref, delta, position) => setOpenWindows((prev) => prev.map((w) => w.id === win.id ? { ...w, width: ref.style.width, height: ref.style.height, x: position.x, y: position.y } : w))}
             >
               <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97 }} style={{ height: '100%', width: '100%' }}>
-                <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: win.isMaximized ? 0 : 2, border: `1px solid ${isActive ? alpha(theme.palette.primary.main, 0.62) : theme.palette.divider}`, boxShadow: `0 24px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.46 : 0.16)}` }}>
+                <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: win.isMaximized ? 0 : 1.5, border: `1px solid ${isActive ? alpha(theme.palette.primary.main, 0.62) : theme.palette.divider}`, boxShadow: `0 12px 34px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.38 : 0.12)}` }}>
                   <Box className="platform-window-header" sx={{ height: 46, px: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, cursor: win.isMaximized ? 'default' : 'move', bgcolor: isActive ? alpha(theme.palette.primary.main, 0.07) : 'background.paper' }}>
                     <Typography sx={{ fontWeight: 900 }}>{win.name}</Typography>
                     <Box onMouseDown={(e) => e.stopPropagation()}>

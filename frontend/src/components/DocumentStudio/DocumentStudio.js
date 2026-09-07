@@ -368,7 +368,7 @@ const DocumentStudio = () => {
               const Icon = card.icon;
               const selected = mode === card.id;
               return (
-                <Paper key={card.id} component="button" type="button" onClick={() => { setMode(card.id); setItems([]); setResults([]); setActiveJob(null); if (card.id === 'template-pptx') setOutputFormat('pptx'); if (card.id === 'merge-pptx') setOutputName('합친 프레젠테이션.pptx'); if (card.id === 'merge-pdf' || card.id === 'merge-mixed-pdf') setOutputName('합친 문서.pdf'); }} elevation={0} sx={{ p: 1.5, textAlign: 'left', cursor: 'pointer', border: `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`, borderRadius: 2, bgcolor: selected ? alpha(theme.palette.primary.main, 0.09) : 'background.paper', color: 'text.primary', transition: 'border-color 140ms ease, background-color 140ms ease, transform 140ms ease', '&:hover': { borderColor: theme.palette.primary.main, bgcolor: alpha(theme.palette.primary.main, 0.06), transform: 'translateY(-1px)' }, '&:focus-visible': { outline: `3px solid ${alpha(theme.palette.primary.main, 0.28)}`, outlineOffset: 2 } }}>
+                <Paper key={card.id} component="button" type="button" onClick={() => { setMode(card.id); setItems([]); setResults([]); setActiveJob(null); if (card.id === 'template-pptx') setOutputFormat('pptx'); if (card.id === 'merge-pptx') setOutputName('합친 프레젠테이션.pptx'); if (card.id === 'merge-pdf' || card.id === 'merge-mixed-pdf') setOutputName('합친 문서.pdf'); }} elevation={0} sx={{ p: 1.5, textAlign: 'left', cursor: 'pointer', border: `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`, borderRadius: 1, bgcolor: selected ? alpha(theme.palette.primary.main, 0.09) : 'background.paper', color: 'text.primary', transition: 'border-color 120ms ease, background-color 120ms ease', '&:hover': { borderColor: theme.palette.primary.main, bgcolor: alpha(theme.palette.primary.main, 0.06) }, '&:focus-visible': { outline: `3px solid ${alpha(theme.palette.primary.main, 0.28)}`, outlineOffset: 2 } }}>
                   <Stack direction="row" spacing={1.25} alignItems="center">
                     <Box sx={{ width: 38, height: 38, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: alpha(theme.palette.primary.main, selected ? 0.18 : 0.08), color: 'primary.main' }}><Icon /></Box>
                     <Box><Typography sx={{ fontWeight: 900 }}>{card.title}</Typography><Typography variant="caption" color="text.secondary">{card.description}</Typography></Box>
@@ -379,7 +379,7 @@ const DocumentStudio = () => {
           </Box>
 
           {mode === 'convert-pdf' && (
-            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: alpha(theme.palette.primary.main, 0.025) }}>
+            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1, bgcolor: alpha(theme.palette.primary.main, 0.025) }}>
               <Typography sx={{ fontWeight: 950 }}>1. 변환 형식 선택</Typography>
               <Typography variant="caption" color="text.secondary">원본 형식을 직접 고르면 파일 선택창에도 그 형식만 표시됩니다. 자동 감지는 여러 형식을 섞을 때 사용하세요.</Typography>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} alignItems="center" sx={{ mt: 1.25 }}>
@@ -406,7 +406,7 @@ const DocumentStudio = () => {
           )}
 
           {mode === 'template-pptx' && (
-            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: alpha(theme.palette.secondary.main, 0.025) }}>
+            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1, bgcolor: alpha(theme.palette.secondary.main, 0.025) }}>
               <Typography sx={{ fontWeight: 950 }}>1. 템플릿 데이터</Typography>
               <Typography variant="caption" color="text.secondary">첫 줄은 열 이름입니다. 탭으로 구분한 Excel 셀을 그대로 붙여넣을 수 있고, PPTX의 {'{열 이름}'}과 치환됩니다.</Typography>
               <TextField multiline minRows={4} fullWidth size="small" value={templateData} onChange={(event) => setTemplateData(event.target.value)} sx={{ mt: 1 }} inputProps={{ style: { fontFamily: 'monospace' } }} />
@@ -417,7 +417,7 @@ const DocumentStudio = () => {
             </Paper>
           )}
 
-          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
               <Box><Typography sx={{ fontWeight: 900 }}>{['convert-pdf', 'template-pptx'].includes(mode) ? '2' : '1'}. 파일 불러오기</Typography><Typography variant="caption" color="text.secondary">두 출처의 파일을 같은 목록에 추가할 수 있습니다.</Typography></Box>
               <Stack direction="row" spacing={1}>
@@ -447,7 +447,7 @@ const DocumentStudio = () => {
             )}
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
             <Typography sx={{ fontWeight: 900, mb: 1 }}>{['convert-pdf', 'template-pptx'].includes(mode) ? '3' : '2'}. 완료 파일 저장</Typography>
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
               <TextField fullWidth size="small" label="NAS 완료 폴더" value={outputPath} onChange={(event) => setOutputPath(event.target.value)} />
@@ -465,7 +465,7 @@ const DocumentStudio = () => {
           {message && <Alert severity={message.severity} onClose={() => setMessage(null)}>{message.text}</Alert>}
 
           {results.length > 0 && (
-            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, borderColor: 'success.main' }}>
+            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1, borderColor: 'success.main' }}>
               <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}><Stack direction="row" spacing={1} alignItems="center"><CheckCircleIcon color="success" /><Typography sx={{ fontWeight: 900 }}>완료 파일</Typography></Stack><Button startIcon={<FolderOpenIcon />} onClick={() => openFolderWindowByPath(ensureSlash(outputPath))}>완료 파일 폴더 열기</Button></Stack>
               <Stack spacing={0.75}>{results.map((result) => {
                 const isPdf = (result.outputFormat || getStudioExtension(result.name)) === 'pdf';

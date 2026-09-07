@@ -459,13 +459,13 @@ function ServicePlatform() {
   }
 
   return (
-    <Box sx={{ height: '100%', overflow: 'hidden', position: 'relative', bgcolor: 'background.default', background: theme.palette.mode === 'dark' ? 'linear-gradient(180deg, #101418 0%, #151b22 100%)' : 'linear-gradient(180deg, #eef2f6 0%, #f8fafc 100%)' }}>
-      <Box sx={{ position: 'absolute', left: 16, top: 18, bottom: 18, width: 62, borderRadius: 2, bgcolor: alpha(theme.palette.background.paper, 0.86), border: `1px solid ${theme.palette.divider}`, display: 'flex', flexDirection: 'column', alignItems: 'center', py: 1, gap: 0.75, boxShadow: `0 18px 48px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.30 : 0.09)}` }}>
+    <Box sx={{ height: '100%', overflow: 'hidden', position: 'relative', bgcolor: 'background.default', background: theme.palette.mode === 'dark' ? '#11161c' : '#f4f6f8' }}>
+      <Box sx={{ position: 'absolute', left: 16, top: 18, bottom: 18, width: 58, borderRadius: 1, bgcolor: 'background.paper', border: `1px solid ${theme.palette.divider}`, display: 'flex', flexDirection: 'column', alignItems: 'center', py: 1, gap: 0.75, boxShadow: `0 4px 14px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.24 : 0.06)}` }}>
         {apps.map((app) => {
           const Icon = app.icon;
           return (
             <Tooltip key={app.id} title={app.id === 'pc-sync' ? `${app.title} · 우클릭: 연결 관리` : app.title} placement="right">
-              <IconButton onClick={() => openApp(app)} onContextMenu={app.id === 'pc-sync' ? openPcManager : undefined} sx={{ width: 44, height: 44, position: 'relative', color: app.color, bgcolor: alpha(app.color, 0.08), '&:hover': { bgcolor: alpha(app.color, 0.16) } }}>
+              <IconButton onClick={() => openApp(app)} onContextMenu={app.id === 'pc-sync' ? openPcManager : undefined} sx={{ width: 40, height: 40, position: 'relative', color: app.color, border: '1px solid transparent', '&:hover': { bgcolor: alpha(app.color, 0.08), borderColor: alpha(app.color, 0.24) } }}>
                 <Icon />
                 {app.id === 'pc-sync' && (pcLinkedHere || pcPairingActive) && <Box component="span" aria-label={app.statusLabel} sx={{ position: 'absolute', right: 5, top: 5, width: 10, height: 10, borderRadius: '50%', bgcolor: app.color, border: `2px solid ${theme.palette.background.paper}`, boxShadow: `0 0 0 1px ${alpha(app.color, 0.35)}`, ...(app.statusState === 'syncing' || app.statusState === 'connecting' ? { animation: 'nasStatusPulse 1.1s ease-in-out infinite', '@keyframes nasStatusPulse': { '0%, 100%': { transform: 'scale(0.8)', opacity: 0.55 }, '50%': { transform: 'scale(1.25)', opacity: 1 } } } : {}) }} />}
               </IconButton>
@@ -479,7 +479,7 @@ function ServicePlatform() {
           const Icon = app.icon;
           return (
             <Box key={`desktop_${app.id}`} onDoubleClick={() => openApp(app)} onClick={() => openApp(app)} onContextMenu={app.id === 'pc-sync' ? openPcManager : undefined} sx={{ cursor: 'pointer', textAlign: 'center', color: 'text.primary' }}>
-              <Box sx={{ width: 58, height: 58, mx: 'auto', position: 'relative', borderRadius: 2, display: 'grid', placeItems: 'center', color: app.color, bgcolor: alpha(theme.palette.background.paper, 0.82), border: `1px solid ${theme.palette.divider}`, boxShadow: `0 10px 28px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.22 : 0.08)}` }}>
+              <Box sx={{ width: 56, height: 56, mx: 'auto', position: 'relative', borderRadius: 1, display: 'grid', placeItems: 'center', color: app.color, bgcolor: 'background.paper', border: `1px solid ${theme.palette.divider}`, boxShadow: `0 2px 6px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.18 : 0.05)}`, transition: 'background-color 120ms ease, border-color 120ms ease', '&:hover': { bgcolor: alpha(app.color, 0.06), borderColor: alpha(app.color, 0.28) } }}>
                 <Icon sx={{ fontSize: 30 }} />
                 {app.id === 'pc-sync' && (pcLinkedHere || pcPairingActive) && <Box component="span" aria-label={app.statusLabel} sx={{ position: 'absolute', right: 5, top: 5, width: 11, height: 11, borderRadius: '50%', bgcolor: app.color, border: `2px solid ${theme.palette.background.paper}`, ...(app.statusState === 'syncing' || app.statusState === 'connecting' ? { animation: 'nasStatusPulse 1.1s ease-in-out infinite', '@keyframes nasStatusPulse': { '0%, 100%': { transform: 'scale(0.8)', opacity: 0.55 }, '50%': { transform: 'scale(1.25)', opacity: 1 } } } : {}) }} />}
               </Box>

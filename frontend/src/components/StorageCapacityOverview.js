@@ -30,7 +30,7 @@ const StorageCapacityOverview = ({ storageCapacity, compact = false }) => {
           ['추가 할당 가능', formatStorage(storageCapacity.availableForAllocationBytes), storageCapacity.signupAvailable ? `새 계정 ${formatStorage(storageCapacity.defaultQuotaBytes)} 제공 가능` : '신규 가입 차단']
         ].map(([label, value, detail]) => (
           <Grid item xs={12} sm={6} lg={3} key={label}>
-            <Paper variant="outlined" sx={{ p: 2, height: '100%', borderRadius: 2 }}>
+            <Paper variant="outlined" sx={{ p: 2, height: '100%', borderRadius: 1 }}>
               <Typography variant="caption" color="text.secondary">{label}</Typography>
               <Typography variant={compact ? 'h6' : 'h5'} sx={{ fontWeight: 800, my: 0.5 }}>{value}</Typography>
               <Typography variant="caption" color="text.secondary">{detail}</Typography>

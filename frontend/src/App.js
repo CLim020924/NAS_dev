@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { ThemeProvider as MUIThemeProvider, createTheme, CssBaseline, Box, Toolbar } from '@mui/material';
+import { Box, Toolbar } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import socketIOClient from 'socket.io-client';
 import axios from 'axios';
@@ -27,7 +27,7 @@ import { useWindows } from './contexts/WindowContext';
 import { TransferProvider } from './contexts/TransferContext';
 import { ChatProvider } from './contexts/ChatContext';
 import { MeetingProvider } from './contexts/MeetingContext';
-import { CustomThemeProvider, useCustomTheme } from './contexts/ThemeContext';
+import { CustomThemeProvider } from './contexts/ThemeContext';
 import useNotifications from './notifications/useNotifications';
 
 const PrivateRoute = ({ children }) => {
@@ -160,7 +160,6 @@ function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const { openWindows, fileManagerPath, focusedContext, aiSelectedPaths, openFolderWindowByPath, setFileManagerPath, setFocusedContext } = useWindows();
-  const { themeName } = useCustomTheme();
   const [chatSidebarMode, setChatSidebarMode] = useState('none');
   const [activeDockedChat, setActiveDockedChat] = useState(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -376,23 +375,8 @@ function AppContent() {
   }, [chatPreview, clearPreviewTimer]);
 
 
-  const theme = useMemo(() => createTheme({
-    palette: {
-      mode: themeName === 'dark' ? 'dark' : 'light',
-      primary: { main: themeName === 'ocean' ? '#0284c7' : '#2563eb' },
-      background: { default: themeName === 'dark' ? '#0f172a' : (themeName === 'ocean' ? '#e0f2fe' : '#f1f5f9') },
-    },
-    typography: { fontFamily: 'Noto Sans KR, system-ui, sans-serif' },
-    components: {
-      MuiAppBar: { styleOverrides: { root: { boxShadow: 'none' } } },
-      MuiButton: { styleOverrides: { root: { textTransform: 'none', fontWeight: 'bold', borderRadius: 8 } } },
-      MuiPaper: { styleOverrides: { root: { borderRadius: 12 } } },
-    }
-  }), [themeName]);
-
   return (
-    <MUIThemeProvider theme={theme}>
-      <CssBaseline />
+    <>
       <SessionDepartureGuard />
       <MeetingProvider>
         <Routes>
@@ -453,7 +437,7 @@ function AppContent() {
           } />
         </Routes>
       </MeetingProvider>
-    </MUIThemeProvider>
+    </>
   );
 }
 

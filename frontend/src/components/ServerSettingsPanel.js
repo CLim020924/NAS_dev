@@ -69,7 +69,7 @@ const draftFromResource = (resource) => {
 };
 
 const UsageCard = ({ icon, title, value, detail, percent, children }) => (
-  <Paper variant="outlined" sx={{ p: 2.25, borderRadius: 2.5, height: '100%' }}>
+  <Paper variant="outlined" sx={{ p: 2.25, borderRadius: 1, height: '100%' }}>
     <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 1.5 }}>
       {icon}
       <Typography variant="subtitle1" fontWeight={800}>{title}</Typography>
@@ -275,7 +275,7 @@ const ServerSettingsPanel = () => {
       </Grid>
 
       {(metrics?.disks?.physical || []).length > 0 && (
-        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, mb: 4 }}>
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 4 }}>
           <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>설치된 물리 디스크</Typography>
           <Stack spacing={1}>
             {metrics.disks.physical.map((disk) => (
@@ -294,7 +294,7 @@ const ServerSettingsPanel = () => {
           <Grid container spacing={1.5}>
             {metrics.temperatures.map((sensor, index) => (
               <Grid item xs={12} sm={6} md={4} key={`${sensor.source}:${sensor.label}:${index}`}>
-                <Paper variant="outlined" sx={{ px: 2, py: 1.5, borderRadius: 2 }}>
+                <Paper variant="outlined" sx={{ px: 2, py: 1.5, borderRadius: 1 }}>
                   <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
                     <Stack direction="row" spacing={1} alignItems="center" minWidth={0}>
                       <ThermostatIcon color={sensor.value >= 85 ? 'error' : sensor.value >= 70 ? 'warning' : 'primary'} />
@@ -349,7 +349,7 @@ const ServerSettingsPanel = () => {
             저장공간은 사용자 개인 루트의 실제 사용량과 할당량입니다. CPU·RAM·동시 작업 수는 Python, AI, 문서 변환처럼 서버가 대신 실행하는 관리 작업만 사용자별로 측정합니다. 하나의 Node 프로세스가 처리하는 일반 웹 요청은 사용자별 값으로 허위 분배하지 않습니다.
           </Alert>
 
-          <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, mb: 2 }}>
+          <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 2 }}>
             <Grid container spacing={2} alignItems="center">
               <Grid item xs={12} sm={4}>
                 <FormControl fullWidth size="small">
@@ -369,7 +369,7 @@ const ServerSettingsPanel = () => {
             </Grid>
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, mb: 2 }}>
+          <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 2 }}>
             <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.5 }}>시스템 안전선</Typography>
             <Grid container spacing={1.5}>
               {[
@@ -385,7 +385,7 @@ const ServerSettingsPanel = () => {
             </Grid>
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, mb: 2 }}>
+          <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 2 }}>
             <Typography variant="subtitle1" fontWeight={800}>사용자별 현재값과 제한</Typography>
             <Typography variant="caption" color="text.secondary">개별 제한은 자동/수동 모드 모두에서 적용됩니다. RAM 최솟값은 256 MiB입니다.</Typography>
             <TableContainer sx={{ mt: 1.5 }}>
@@ -419,7 +419,7 @@ const ServerSettingsPanel = () => {
             <Typography variant="h6" fontWeight={800}>자원 사용 기록</Typography>
             <FormControl size="small" sx={{ minWidth: 140 }}><InputLabel>조회 기간</InputLabel><Select label="조회 기간" value={historyHours} onChange={(event) => setHistoryHours(Number(event.target.value))}><MenuItem value={1}>최근 1시간</MenuItem><MenuItem value={24}>최근 24시간</MenuItem><MenuItem value={168}>최근 7일</MenuItem></Select></FormControl>
           </Stack>
-          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2.5, maxHeight: 360 }}>
+          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1, maxHeight: 360 }}>
             <Table size="small" stickyHeader>
               <TableHead><TableRow><TableCell>시각</TableCell><TableCell>CPU</TableCell><TableCell>RAM 사용</TableCell><TableCell>스왑</TableCell><TableCell>NAS 여유</TableCell><TableCell>판정</TableCell></TableRow></TableHead>
               <TableBody>

@@ -145,11 +145,11 @@ const Login = () => {
             elevation={0}
             sx={{
               p: { xs: 3, sm: 4 },
-              borderRadius: 2,
+              borderRadius: 1.5,
               border: `1px solid ${theme.palette.divider}`,
               boxShadow: theme.palette.mode === 'dark'
-                ? '0 24px 70px rgba(0,0,0,0.34)'
-                : '0 24px 70px rgba(15,23,42,0.10)'
+                ? '0 12px 34px rgba(0,0,0,0.30)'
+                : '0 12px 34px rgba(15,23,42,0.08)'
             }}
           >
             <Stack spacing={3}>
@@ -162,7 +162,7 @@ const Login = () => {
                     width: 64,
                     height: 64,
                     objectFit: 'contain',
-                    borderRadius: 2,
+                    borderRadius: 1,
                     bgcolor: alpha(theme.palette.primary.main, 0.08),
                     p: 1
                   }}
