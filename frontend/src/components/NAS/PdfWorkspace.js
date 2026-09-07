@@ -53,6 +53,8 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
   const gestureRef = useRef(null);
   const savingRef = useRef(false);
   const saveQueuedRef = useRef(false);
+  const saveRetryTimerRef = useRef(null);
+  const saveRetryDelayRef = useRef(1500);
   const dirtyRef = useRef(false);
   const annotationsRef = useRef([]);
   const revisionRef = useRef(0);
@@ -127,14 +129,27 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
           setStatus('새 변경사항 저장 중');
         }
       } while (saveQueuedRef.current);
+      saveRetryDelayRef.current = 1500;
       return true;
     } catch (error) {
       setStatus(error.response?.data?.error || '주석 저장 실패');
+      if (dirtyRef.current && !saveRetryTimerRef.current) {
+        const delay = saveRetryDelayRef.current;
+        saveRetryDelayRef.current = Math.min(30000, delay * 2);
+        saveRetryTimerRef.current = window.setTimeout(() => {
+          saveRetryTimerRef.current = null;
+          if (dirtyRef.current) saveAnnotations();
+        }, delay);
+      }
       return false;
     } finally {
       savingRef.current = false;
     }
   }, [markDirty, win.fullPath]);
+
+  useEffect(() => () => {
+    if (saveRetryTimerRef.current) window.clearTimeout(saveRetryTimerRef.current);
+  }, []);
 
   const reloadAnnotations = useCallback(async () => {
     if (dirty && !window.confirm('저장하지 않은 PDF 주석을 버리고 서버의 최신 내용을 다시 불러올까요?')) return;
@@ -162,8 +177,8 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
   useEffect(() => {
     if (!dirty) return undefined;
     setStatus('저장되지 않은 변경');
-    const timer = window.setTimeout(saveAnnotations, 1200);
-    return () => window.clearTimeout(timer);
+    saveAnnotations();
+    return undefined;
   }, [dirty, annotations, saveAnnotations]);
 
   useEffect(() => {
@@ -289,9 +304,32 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
   const copyText = async (page, rect, preserveLayout) => {
     const pageElement = pageRefs.current.get(page);
     const items = collectPdfTextItems(pageElement);
-    const text = preserveLayout ? reconstructPdfRegionText(items, rect) : reconstructPdfPlainText(items, rect);
+    const pageRect = pageElement?.getBoundingClientRect();
+    let text = '';
+    let usedOcr = false;
+    let ocrError = '';
+    if (pageRect?.width && pageRect?.height) {
+      setStatus('선택 영역의 보이는 글자를 인식하는 중');
+      try {
+        const response = await axios.post('/api/file/pdf-ocr-region', {
+          path: win.fullPath,
+          page,
+          rect: {
+            x: rect.left / pageRect.width,
+            y: rect.top / pageRect.height,
+            width: rect.width / pageRect.width,
+            height: rect.height / pageRect.height,
+          },
+        }, { withCredentials: true });
+        text = preserveLayout ? response.data?.layoutText : response.data?.plainText;
+        usedOcr = true;
+      } catch (error) {
+        ocrError = error.response?.data?.error || '화면 글자 인식에 실패했습니다.';
+      }
+    }
+    if (!text) text = preserveLayout ? reconstructPdfRegionText(items, rect) : reconstructPdfPlainText(items, rect);
     if (!text) {
-      setStatus('선택 영역에서 텍스트를 찾지 못했습니다. 스캔 PDF는 OCR이 필요합니다.');
+      setStatus(ocrError || '선택 영역에서 글자를 찾지 못했습니다.');
       return;
     }
     try {
@@ -306,16 +344,21 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
       document.execCommand('copy');
       textarea.remove();
     }
-    setStatus(preserveLayout
-      ? `${text.split('\n').length}줄을 띄어쓰기·들여쓰기와 함께 복사했습니다.`
-      : `${text.split('\n').length}줄의 일반 텍스트를 복사했습니다.`);
+    if (ocrError && !usedOcr) {
+      setStatus(`화면 인식 실패로 PDF 내장 글자만 복사했습니다: ${ocrError}`);
+    } else {
+      setStatus(preserveLayout
+        ? `${text.split('\n').length}줄을 화면의 띄어쓰기·들여쓰기와 함께 복사했습니다.`
+        : `${text.split('\n').length}줄의 일반 텍스트를 복사했습니다.`);
+    }
   };
 
   const handlePointerDown = (event, page) => {
     if (event.button !== 0 || tool === 'eraser') return;
     const point = pointFromEvent(event);
     if (tool === 'text') {
-      setTextDraft({ page, ...normalizedPoint(point), width: 0.28, height: 0.09, text: '' });
+      cancelTextDraftRef.current = false;
+      setTextDraft({ id: createId(), page, ...normalizedPoint(point), width: 0.28, height: 0.09, text: '' });
       return;
     }
     gestureRef.current = { page, tool, start: point, points: [normalizedPoint(point)] };
@@ -373,7 +416,23 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
       return;
     }
     const text = textDraft.text.trim();
-    if (text) replaceAnnotations([...annotations, { id: createId(), type: 'text', ...textDraft, text, color, background: '#ffffff', opacity: 1, fontSize: 16, createdAt: new Date().toISOString() }]);
+    const withoutDraft = annotationsRef.current.filter((annotation) => annotation.id !== textDraft.id);
+    replaceAnnotations(text ? [...withoutDraft, { type: 'text', ...textDraft, text, color, background: '#ffffff', opacity: 1, fontSize: 16, createdAt: new Date().toISOString() }] : withoutDraft);
+    setTextDraft(null);
+  };
+
+  const updateTextDraft = (text) => {
+    if (!textDraft) return;
+    const nextDraft = { ...textDraft, text };
+    setTextDraft(nextDraft);
+    const withoutDraft = annotationsRef.current.filter((annotation) => annotation.id !== nextDraft.id);
+    replaceAnnotations(text.trim() ? [...withoutDraft, { type: 'text', ...nextDraft, color, background: '#ffffff', opacity: 1, fontSize: 16, createdAt: new Date().toISOString() }] : withoutDraft);
+  };
+
+  const cancelText = () => {
+    if (!textDraft) return;
+    cancelTextDraftRef.current = true;
+    replaceAnnotations(annotationsRef.current.filter((annotation) => annotation.id !== textDraft.id));
     setTextDraft(null);
   };
 
@@ -424,7 +483,7 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
                     ))}
                     {preview?.page === page && preview.tool === 'ink' && <Box component="svg" viewBox="0 0 1 1" preserveAspectRatio="none" sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}><polyline points={preview.points.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke={color} strokeWidth={0.0025} strokeLinecap="round" strokeLinejoin="round" /></Box>}
                     {preview?.page === page && preview.rect && <Box sx={{ position: 'absolute', left: preview.rect.left, top: preview.rect.top, width: preview.rect.width, height: preview.rect.height, border: `1px solid ${preview.tool.startsWith('copy-') ? theme.palette.primary.main : '#ca8a04'}`, bgcolor: preview.tool === 'highlight' ? 'rgba(253,224,71,.32)' : 'rgba(37,99,235,.08)', pointerEvents: 'none' }} />}
-                    {textDraft?.page === page && <Box component="textarea" autoFocus value={textDraft.text} onChange={(event) => setTextDraft((draft) => ({ ...draft, text: event.target.value }))} onBlur={commitText} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); commitText(); } if (event.key === 'Escape') { event.preventDefault(); cancelTextDraftRef.current = true; event.currentTarget.blur(); } }} sx={{ position: 'absolute', left: `${textDraft.x * 100}%`, top: `${textDraft.y * 100}%`, width: `${textDraft.width * 100}%`, minHeight: 54, resize: 'both', zIndex: 6, bgcolor: 'rgba(255,255,255,.94)', color, border: `1px solid ${color}`, font: '16px/1.3 sans-serif', p: 0.75 }} />}
+                    {textDraft?.page === page && <Box component="textarea" autoFocus value={textDraft.text} onChange={(event) => updateTextDraft(event.target.value)} onBlur={commitText} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); commitText(); } if (event.key === 'Escape') { event.preventDefault(); cancelText(); } }} sx={{ position: 'absolute', left: `${textDraft.x * 100}%`, top: `${textDraft.y * 100}%`, width: `${textDraft.width * 100}%`, minHeight: 54, resize: 'both', zIndex: 6, bgcolor: 'rgba(255,255,255,.94)', color, border: `1px solid ${color}`, font: '16px/1.3 sans-serif', p: 0.75 }} />}
                   </Box>
                 </Box>
               </Box>

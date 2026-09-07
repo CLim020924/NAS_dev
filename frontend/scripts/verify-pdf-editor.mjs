@@ -31,8 +31,11 @@ assert.deepEqual(selection.normalizeDragRect({ x: 90, y: 80 }, { x: 10, y: 20 },
 assert.equal(zoom.stepPdfZoom(1, 1), 1.15);
 for (const label of ['선택', '형광펜', '펜', '텍스트 상자', '서식 유지 복사', '일반 텍스트 복사', '주석 지우기']) assert.match(workspaceSource, new RegExp(label));
 assert.match(workspaceSource, /pdf-annotations/);
+assert.match(workspaceSource, /pdf-ocr-region/);
 assert.match(workspaceSource, /event\.ctrlKey \|\| event\.metaKey/);
 assert.match(workspaceSource, /saveQueuedRef\.current = true/);
 assert.match(workspaceSource, /do \{[\s\S]*\} while \(saveQueuedRef\.current\)/);
+assert.match(workspaceSource, /saveRetryDelayRef\.current = Math\.min\(30000, delay \* 2\)/);
+assert.doesNotMatch(workspaceSource, /setTimeout\(saveAnnotations, 1200\)/);
 
 console.log('[pdf editor] tools, text layout reconstruction, highlight clipping, zoom, and persistence wiring verified');

@@ -64,6 +64,7 @@ const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankD
 const { createNoteStudioStore, getFilesystemIdentity, sameFilesystemIdentity, findPathByFilesystemIdentity } = require('./noteStudioService');
 const { createManagedPythonWorker } = require('./managedPythonWorker');
 const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore');
+const { createPdfOcrService } = require('./pdfOcrService');
 const {
   SHARED_ROOT_NAME,
   normalizeRelativePath: normalizeAccountShareRelPath,
@@ -77,6 +78,7 @@ const {
 
 const router = express.Router();
 const managedPythonWorker = createManagedPythonWorker();
+const pdfOcrService = createPdfOcrService();
 
 // 🔥 [최종 방어선] 403 에러 강제 세탁 미들웨어 (프론트엔드 폭파 방지)
 router.use('/files', (req, res, next) => {
@@ -2436,6 +2438,18 @@ router.put('/file/pdf-annotations', verifyToken, express.text({ type: 'applicati
       code: error.code,
       current: error.current,
     });
+  }
+});
+
+router.post('/file/pdf-ocr-region', verifyToken, async (req, res) => {
+  try {
+    const { targetPath } = getValidatedPath(req.user, req.body?.path, req.headers['x-nas-password']);
+    if (path.extname(targetPath).toLowerCase() !== '.pdf') return res.status(400).json({ error: 'PDF 파일만 글자를 인식할 수 있습니다.' });
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) return res.status(404).json({ error: 'PDF 파일을 찾을 수 없습니다.' });
+    const result = await pdfOcrService.recognize({ targetPath, page: req.body?.page, rect: req.body?.rect });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || 'PDF 글자 인식에 실패했습니다.', code: error.code });
   }
 });
 

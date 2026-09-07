@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { AppBar, Toolbar, Typography, Box, IconButton, Menu, MenuItem, Avatar, Badge, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, ButtonBase, Paper, TextField } from '@mui/material';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { AppBar, Toolbar, Typography, Box, IconButton, Menu, MenuItem, Avatar, Badge, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField } from '@mui/material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import FolderIcon from '@mui/icons-material/Folder';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
@@ -56,6 +56,7 @@ const TopBar = ({
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
   const [taskSwitcherOpen, setTaskSwitcherOpen] = useState(false);
   const [taskSwitcherIndex, setTaskSwitcherIndex] = useState(0);
+  const [taskSwitcherSessionIds, setTaskSwitcherSessionIds] = useState([]);
   const [taskSwitcherFlash, setTaskSwitcherFlash] = useState(false);
   const taskSwitcherFlashTimerRef = useRef(null);
 
@@ -84,36 +85,46 @@ const TopBar = ({
     [openWindows, taskbarOrder]
   );
 
-  const flashTaskSwitcherButton = () => {
+  const flashTaskSwitcherButton = useCallback(() => {
     if (taskSwitcherFlashTimerRef.current) window.clearTimeout(taskSwitcherFlashTimerRef.current);
     setTaskSwitcherFlash(false);
     window.requestAnimationFrame(() => {
       setTaskSwitcherFlash(true);
       taskSwitcherFlashTimerRef.current = window.setTimeout(() => setTaskSwitcherFlash(false), 420);
     });
-  };
+  }, []);
 
-  const closeTaskSwitcher = (flash = false) => {
+  const closeTaskSwitcher = useCallback((flash = false) => {
     setTaskSwitcherOpen(false);
+    setTaskSwitcherSessionIds([]);
     if (flash) flashTaskSwitcherButton();
-  };
+  }, [flashTaskSwitcherButton]);
 
-  const toggleTaskSwitcher = () => {
-    flashTaskSwitcherButton();
-    setTaskSwitcherOpen((open) => {
-      if (open) return false;
-      setTaskSwitcherIndex(getInitialTaskSwitcherIndex(taskSwitcherWindows, focusedContext));
-      return true;
-    });
-  };
-
-  const activateTaskWindow = (win) => {
+  const activateTaskWindow = useCallback((win) => {
     if (!win) return;
     if (win.winType === 'file' || win.winType === 'folder') navigate('/nas');
     if (win.winType === 'app') navigate('/platform');
     focusWindow(win.id);
-    closeTaskSwitcher(true);
+    flashTaskSwitcherButton();
+  }, [flashTaskSwitcherButton, focusWindow, navigate]);
+
+  const toggleTaskSwitcher = () => {
+    if (taskSwitcherOpen) {
+      closeTaskSwitcher(true);
+      return;
+    }
+    const sessionIds = taskSwitcherWindows.map((win) => win.id);
+    const initialIndex = getInitialTaskSwitcherIndex(taskSwitcherWindows, focusedContext);
+    setTaskSwitcherSessionIds(sessionIds);
+    setTaskSwitcherIndex(initialIndex);
+    setTaskSwitcherOpen(true);
+    activateTaskWindow(taskSwitcherWindows[initialIndex]);
   };
+
+  const taskSwitcherSessionWindows = useMemo(
+    () => taskSwitcherSessionIds.map((id) => openWindows.find((win) => win.id === id)).filter(Boolean),
+    [openWindows, taskSwitcherSessionIds]
+  );
 
   useEffect(() => {
     if (!taskSwitcherOpen) return undefined;
@@ -124,22 +135,19 @@ const TopBar = ({
         closeTaskSwitcher(true);
         return;
       }
-      if (event.key === 'Tab' || event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      if (event.key === 'Tab') {
         event.preventDefault();
-        const direction = event.key === 'ArrowLeft' || (event.key === 'Tab' && event.shiftKey) ? -1 : 1;
-        setTaskSwitcherIndex((current) => moveTaskSwitcherIndex(current, taskSwitcherWindows.length, direction));
-        flashTaskSwitcherButton();
-        return;
-      }
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        activateTaskWindow(taskSwitcherWindows[taskSwitcherIndex]);
+        event.stopPropagation();
+        const direction = event.shiftKey ? -1 : 1;
+        const nextIndex = moveTaskSwitcherIndex(taskSwitcherIndex, taskSwitcherSessionWindows.length, direction);
+        setTaskSwitcherIndex(nextIndex);
+        activateTaskWindow(taskSwitcherSessionWindows[nextIndex]);
       }
     };
 
     window.addEventListener('keydown', handleTaskSwitcherKeyDown, true);
     return () => window.removeEventListener('keydown', handleTaskSwitcherKeyDown, true);
-  }, [taskSwitcherOpen, taskSwitcherWindows, taskSwitcherIndex]);
+  }, [activateTaskWindow, closeTaskSwitcher, taskSwitcherOpen, taskSwitcherSessionWindows, taskSwitcherIndex]);
 
   useEffect(() => {
     const handleSettingsChange = () => setAppOpenMode(localStorage.getItem('platform_app_open_mode') || 'window');
@@ -270,9 +278,9 @@ const TopBar = ({
         <Toolbar size="small" sx={{ minHeight: '48px !important', gap: 1 }}>
           <IconButton
             size="small"
-            aria-label={taskSwitcherOpen ? '창 전환기 닫기' : '창 전환기 열기'}
+            aria-label={taskSwitcherOpen ? '웹 내부 창 전환 모드 끄기' : '웹 내부 창 전환 모드 켜기'}
             aria-pressed={taskSwitcherOpen}
-            title="창 전환"
+            title={taskSwitcherOpen ? '웹 내부 창 전환 모드 끄기' : '웹 내부 창 전환 모드 켜기'}
             onClick={toggleTaskSwitcher}
             sx={{
               width: 24,
@@ -292,6 +300,7 @@ const TopBar = ({
           >
             <ViewCarouselOutlinedIcon sx={{ fontSize: 15 }} />
           </IconButton>
+          {taskSwitcherOpen && <Chip size="small" color="error" variant="outlined" label="웹 창 전환 · Tab / Shift+Tab" sx={{ height: 26, flex: '0 0 auto' }} />}
           <Box onClick={goDesktop} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
             <Box sx={{ width: 28, height: 28, borderRadius: 1, display: 'grid', placeItems: 'center', color: 'primary.main', border: (theme) => `1px solid ${theme.palette.divider}` }}>
               <FolderIcon sx={{ fontSize: 18 }} />
@@ -699,95 +708,6 @@ const TopBar = ({
           </Menu>
         </Toolbar>
       </AppBar>
-
-      {taskSwitcherOpen && (
-        <Box
-          role="presentation"
-          onMouseDown={() => closeTaskSwitcher(true)}
-          sx={{
-            position: 'fixed',
-            inset: '48px 0 0',
-            zIndex: 1200,
-            display: 'grid',
-            placeItems: 'start center',
-            pt: { xs: 2, sm: 5 },
-            px: 2,
-            bgcolor: (theme) => alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.48 : 0.28),
-          }}
-        >
-          <Paper
-            role="dialog"
-            aria-label="열린 창 전환"
-            onMouseDown={(event) => event.stopPropagation()}
-            sx={{
-              width: 'min(920px, 100%)',
-              maxHeight: 'calc(100dvh - 112px)',
-              overflow: 'auto',
-              p: 1.5,
-              border: (theme) => `1px solid ${theme.palette.divider}`,
-              boxShadow: 'var(--nas-shadow-float)',
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5, pb: 1.25 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>열린 창</Typography>
-                <Typography variant="caption" color="text.secondary">최근 사용 순서 · Tab/방향키로 이동 · Enter로 선택</Typography>
-              </Box>
-              <Typography variant="caption" color="text.secondary">Esc 또는 왼쪽 버튼으로 닫기</Typography>
-            </Box>
-
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))' }, gap: 1 }}>
-              {taskSwitcherWindows.map((win, index) => {
-                const Icon = win.winType === 'folder'
-                  ? FolderIcon
-                  : win.winType === 'file'
-                    ? InsertDriveFileIcon
-                    : win.winType === 'chat'
-                      ? ChatBubbleOutlineIcon
-                      : SpaceDashboardIcon;
-                const typeLabel = win.winType === 'folder' ? '폴더' : win.winType === 'file' ? '파일' : win.winType === 'chat' ? '채팅' : '앱';
-                const selected = index === taskSwitcherIndex;
-                return (
-                  <ButtonBase
-                    key={win.id}
-                    aria-current={selected ? 'true' : undefined}
-                    onMouseEnter={() => setTaskSwitcherIndex(index)}
-                    onClick={() => activateTaskWindow(win)}
-                    sx={{
-                      minHeight: 104,
-                      p: 1.5,
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      justifyContent: 'flex-start',
-                      gap: 1.25,
-                      textAlign: 'left',
-                      border: (theme) => `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
-                      bgcolor: selected ? (theme) => alpha(theme.palette.primary.main, 0.08) : 'background.paper',
-                      borderRadius: 1,
-                    }}
-                  >
-                    <Box sx={{ width: 34, height: 34, flex: '0 0 auto', display: 'grid', placeItems: 'center', border: (theme) => `1px solid ${theme.palette.divider}` }}>
-                      <Icon sx={{ fontSize: 19, color: selected ? 'primary.main' : 'text.secondary' }} />
-                    </Box>
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography noWrap sx={{ fontWeight: 750, maxWidth: 210 }}>{win.name || '이름 없는 창'}</Typography>
-                      <Typography variant="caption" color="text.secondary">{typeLabel}{win.isMinimized ? ' · 숨김' : index === 0 ? ' · 최근 사용' : ''}</Typography>
-                      <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', mt: 0.5, maxWidth: 210 }}>
-                        {win.currentPath || win.fullPath || win.appId || win.chatUsername || ''}
-                      </Typography>
-                    </Box>
-                  </ButtonBase>
-                );
-              })}
-              {taskSwitcherWindows.length === 0 && (
-                <Typography color="text.secondary" sx={{ gridColumn: '1 / -1', py: 5, textAlign: 'center' }}>
-                  열려 있는 창이 없습니다.
-                </Typography>
-              )}
-            </Box>
-          </Paper>
-        </Box>
-      )}
 
       <Dialog open={profileOpen} onClose={() => setProfileOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>내 정보 수정</DialogTitle>

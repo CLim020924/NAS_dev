@@ -37,8 +37,11 @@ assert.equal(policy.moveTaskSwitcherIndex(0, 3, -1), 2);
 assert.equal(policy.moveTaskSwitcherIndex(2, 3, 1), 0);
 assert.equal(policy.moveTaskSwitcherIndex(0, 0, 1), -1);
 assert.match(topBarSource, /aria-pressed=\{taskSwitcherOpen\}/);
-assert.match(topBarSource, /열려 있는 창이 없습니다\./);
-assert.doesNotMatch(topBarSource, /if \(taskSwitcherWindows\.length === 0\)[\s\S]{0,120}setTaskSwitcherOpen\(false\)/);
+assert.match(topBarSource, /웹 내부 창 전환 모드 켜기/);
+assert.match(topBarSource, /웹 창 전환 · Tab \/ Shift\+Tab/);
+assert.match(topBarSource, /setTaskSwitcherSessionIds\(sessionIds\)/);
+assert.match(topBarSource, /activateTaskWindow\(taskSwitcherWindows\[initialIndex\]\)/);
+assert.doesNotMatch(topBarSource, /role="dialog"[\s\S]{0,200}열린 창 전환/);
 assert.equal(
   fullscreen.getNasWorkspaceLayerSx({ isNasRoute: true, hasImmersiveNasWindow: false, layerZIndex: 80 }).zIndex,
   80

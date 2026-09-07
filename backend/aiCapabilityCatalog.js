@@ -32,7 +32,7 @@ const classifyPlatformRoute = (routePath, method = 'GET') => {
   if (route.startsWith('/public-shares/')) return 'public-guest';
   if (route.startsWith('/auth/') || ['/login', '/logout', '/signup-request', '/signup-capacity', '/users/check-identity'].includes(route)) return 'authentication-ui';
   if (route.startsWith('/onlyoffice/') || route.startsWith('/hwp/') || route.startsWith('/document-workspace/')) return 'editor-ui';
-  if (route.startsWith('/file/pdf-annotations')) return 'editor-ui';
+  if (route.startsWith('/file/pdf-annotations') || route.startsWith('/file/pdf-ocr-region')) return 'editor-ui';
   if (route === '/icons' || route === '/check-access') return 'file-ui';
   if (route.startsWith('/file/chunk/') || route === '/file' && verb === 'POST' || route === '/file/cancel-session' || route === '/file/download' || route === '/file/download-folder') return 'transfer-ui';
   if (route.startsWith('/chat/attachments/')) return 'attachment-transport';
