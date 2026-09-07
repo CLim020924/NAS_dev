@@ -9,6 +9,7 @@
 - 패키지: installer/Agent/package/server 메타데이터를 1.11.4로 일치시켰다. 다운로드 응답은 private,no-store 및 X-NAS-Agent-Version을 제공한다. Agent-only 자동 업데이트는 launcher를 교체하지 않으므로 이번 수정 적용에는 새 설치기로 업데이트가 필요하다.
 - 검증: 격리된 Windows 프로세스에서 healthy ACK 유지, hung owner 교체, 종료 뒤 새 mutex 획득 통과. C# compile/Setup self-test/패키지 Agent self-test/Node syntax 통과. 현재 PC 기존 실행 파일을 `.codex-backups/driver-1.11.4`에 보관하고 새 파일로 교체했다. 실제 --open 이후 tray 중복 실행에서 기존 PID 유지·ACK true, 기존 계정으로 web-session→기본 브라우저 launch는 2026-09-07 01:59:12 UTC opened/attempt1이었다. 계정 정보와 사용자 파일은 변경하지 않았다.
 - 검증 경계: 실제 installer 버튼·트레이 메뉴 클릭은 Windows UI 제어 도구 부재로 직접 검증하지 못했다. 생성된 실제 WinForms 미리보기는 확인했다. 브라우저 제어 도구에도 해당 기본 브라우저 탭이 없어 웹 최종 화면 확인을 launch 성공과 구별한다. 다른 PC 재부팅, 보안 프로그램 차단, 신규 계정 로그인, 프로필 선택 전체 흐름은 확인 필요로 보류 시트에 기록한다. 서버 다운로드 배포 결과는 아래에 후속 기록한다.
+- 배포 결과: `7f5860a`를 NAS clean fast-forward 후 msp-backend restart/save했다. 설치기 SHA-256 `e9495c9861150064bc156db3d66f89ada137ae2444a642a811359e6a34d457ac`, Agent `91d34e9252991a861b801de823e50bc1480dce6bb297420f326b7fa271f06986`가 로컬/서버 일치한다. NAS Agent self-test·backend syntax 성공, 6개 서비스 active, 내부 3030/공개 HTTPS 200, 무인증 설치 다운로드 401. 현재 PC 새 launcher의 shutdown 명령 뒤 설치 경로의 관련 프로세스 0개를 확인하고 --open으로 재실행했다. 실제 로그인된 웹 다운로드 버튼을 통한 재다운로드는 미검증이며, 해당 route가 읽는 서버 dist 파일의 교체와 해시를 확인한 것이다.
 
 ## 2026-09-07 다른 PC Drive 로그인/부팅 트레이 미표시 진단
 
