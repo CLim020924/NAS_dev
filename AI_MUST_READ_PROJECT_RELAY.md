@@ -1484,3 +1484,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 배포·운영: 코드 commit `3d9c4be`를 GitHub와 NAS 활성 브랜치에 fast-forward하고 검증된 build를 `/var/www/html`에 동기화했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, PM2 `msp-backend`는 online/save, 내부 3030과 공개 HTTPS는 200, 무인증 view-state API는 401이며 NAS checkout은 clean이다.
 - 실화면 경계: 공개 사이트 로그인 화면과 live bundle까지 육안 확인했다. 현재 자동 브라우저에 인증된 NAS 세션이 없어 실제 사용자 파일을 열고 편집→로그아웃→재로그인→재열기 하는 최종 화면 E2E는 수행하지 않았다. 자격 증명을 기록하거나 재사용하지 않았으며 다음 인증 세션에서 파일 유형별 체감 확인만 남는다.
 - 기록: `docs/NAS_PROJECT_LOG.xlsx`와 `docs/programs/NAS_NOTE_STUDIO_SPEC.xlsx`에 feature, 관계, 코드/API/data, 보안 경계, 상태기계, 오류 복구, 시험 및 변경 이력을 반영했다. artifact-tool로 재열기·수식 오류 0건·행 배치·줄바꿈·변경 시트 렌더를 확인했다.
+
+## 2026-09-07 Python 실행 공통 오류 의심 운영 진단
+
+- 사용자 요청: 어떤 계정에서 실행해도 Python이 오류가 나는 것 같으므로 공통 원인을 확인한다. 이 요청에서는 바로 수정하지 않고 운영 상태와 실제 저장 코드를 진단한다.
+- 공통 실행기 확인: NAS Docker 20.10.24, cgroup v2/systemd와 `python:3.12-alpine` 이미지가 존재한다. 제품과 동일한 `managedPythonWorker`에 `print` 정상 코드를 넣은 결과 non-root·network none·read-only·CPU/RAM/PID 제한 상태에서 exit 0, 약 0.5초로 성공했다. 임시 probe와 container는 실행 뒤 제거했다.
+- 계정·자원 확인: 운영 정책은 auto이지만 `enforcementEnabled=false`, 즉 monitor-only이며 검사 시 CPU 약 1~4%, 가용 RAM 약 3.1GiB, 온도 약 44~55°C였다. 모든 계정의 Python 기본 요청 12.5% CPU·256MiB는 공통 한도 안이고, 실제 한 계정의 실행이 resource reservation까지 진입한 기록도 확인했다. 따라서 계정 역할 또는 자원 gate의 전 계정 공통 차단은 재현되지 않았다.
+- 실제 원인: 현재 NAS에 Python 코드 노트가 있는 두 계정의 최신 저장본을 운영 worker로 각각 실행했고 둘 다 exit 0이었다. 최근 버전 이력의 실패는 입력 중인 `P`/`PRI`/`pri` 같은 미완성 식별자, 빈 코드, 또는 Python 노트에서 JavaScript의 `console` 식별자를 실행해 발생한 `NameError`였다. 이는 서버·계정 장애가 아니라 해당 실행 시점 코드 오류다.
+- UX 관찰: frontend는 상단에 공통 문구 `Python 코드가 오류와 함께 종료되었습니다.`를 먼저 표시하고 실제 `NameError` 원인은 아래 stderr 영역에 둔다. 따라서 사용자가 계정 공통 장애로 오해하기 쉽다. 현재는 850ms autosave가 끝난 중간 입력본도 실행할 수 있어 입력을 잠시 멈춘 상태의 미완성 코드가 버전과 실행 대상이 될 수 있다.
+- 현재 기능 경계: 이 실행기는 Jupyter의 지속 kernel이 아니라 저장된 Python 코드 노트 전체를 매번 새 컨테이너에서 한 번 실행한다. 기본 이미지는 Python 표준 라이브러리 중심이며 `numpy`/`pandas` 같은 추가 패키지, 네트워크, NAS 파일 mount, 셀 간 변수 유지가 없다. 해당 기능을 기대한 코드는 별도 오류가 정상적으로 발생한다.
+- 결론·다음 안전 조치: 공통 backend 수정 근거는 현재 없다. 다음 개선 후보는 실행 전에 syntax/미완성 입력을 구분해 안내하고, `NameError`·`ModuleNotFoundError`·timeout·자원 제한을 사용자 문장으로 분류하며, 성공/실패와 stderr를 같은 상단 결과에 표시하는 UI다. 실제 사용자가 본 정확한 오류 문구가 위 이력과 다르면 그 문구와 시각으로 API 응답을 추가 추적한다.
