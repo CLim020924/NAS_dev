@@ -16,6 +16,7 @@ const loadSourceModule = (relativePath) => {
 
 const policy = loadSourceModule('../src/components/windowLayerPolicy.js');
 const fullscreen = loadSourceModule('../src/components/NAS/fullscreenLayout.js');
+const topBarSource = fs.readFileSync(new URL('../src/components/TopBar.js', import.meta.url), 'utf8');
 
 const windows = [
   { id: 'file_a', winType: 'file', zIndex: 103 },
@@ -34,6 +35,10 @@ assert.deepEqual(
 assert.equal(policy.getInitialTaskSwitcherIndex([{ id: 'chat_c' }, { id: 'file_a' }], 'chat_c'), 1);
 assert.equal(policy.moveTaskSwitcherIndex(0, 3, -1), 2);
 assert.equal(policy.moveTaskSwitcherIndex(2, 3, 1), 0);
+assert.equal(policy.moveTaskSwitcherIndex(0, 0, 1), -1);
+assert.match(topBarSource, /aria-pressed=\{taskSwitcherOpen\}/);
+assert.match(topBarSource, /열려 있는 창이 없습니다\./);
+assert.doesNotMatch(topBarSource, /if \(taskSwitcherWindows\.length === 0\)[\s\S]{0,120}setTaskSwitcherOpen\(false\)/);
 assert.equal(
   fullscreen.getNasWorkspaceLayerSx({ isNasRoute: true, hasImmersiveNasWindow: false, layerZIndex: 80 }).zIndex,
   80
@@ -43,4 +48,4 @@ assert.equal(
   fullscreen.NAS_IMMERSIVE_LAYER_Z_INDEX
 );
 
-console.log('[window manager] MRU ordering, layer ownership, cycling, and immersive priority verified');
+console.log('[window manager] MRU ordering, persistent toggle, layer ownership, cycling, and immersive priority verified');

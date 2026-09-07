@@ -117,10 +117,6 @@ const TopBar = ({
 
   useEffect(() => {
     if (!taskSwitcherOpen) return undefined;
-    if (taskSwitcherWindows.length === 0) {
-      setTaskSwitcherOpen(false);
-      return undefined;
-    }
 
     const handleTaskSwitcherKeyDown = (event) => {
       if (event.key === 'Escape') {
