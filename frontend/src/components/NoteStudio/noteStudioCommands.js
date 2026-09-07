@@ -37,6 +37,19 @@ export const tabShortcutForParagraph = (text = '') => {
   return null;
 };
 
+export const MAX_BLOCK_INDENT = 8;
+
+export const normalizeBlockIndent = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(MAX_BLOCK_INDENT, Math.max(0, Math.trunc(numeric)));
+};
+
+export const nextBlockIndent = (value, outdent = false) => {
+  const current = normalizeBlockIndent(value);
+  return normalizeBlockIndent(current + (outdent ? -1 : 1));
+};
+
 export const flattenNoteTree = (notes = []) => {
   const byParent = new Map();
   const ids = new Set(notes.map((note) => note.id));

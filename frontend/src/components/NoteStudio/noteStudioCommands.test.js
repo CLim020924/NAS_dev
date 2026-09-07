@@ -1,6 +1,6 @@
 /** @jest-environment node */
 
-import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
+import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, nextBlockIndent, normalizeBlockIndent, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
 
 test('filters block commands with Korean and English aliases', () => {
   expect(filterCommands(BLOCK_COMMANDS, '제목').map((item) => item.id)).toEqual(['heading-1', 'heading-2', 'heading-3']);
@@ -38,4 +38,13 @@ test('maps explicit Tab patterns without changing normal prose', () => {
   expect(tabShortcutForParagraph('>')).toBe('quote');
   expect(tabShortcutForParagraph('```')).toBe('code-block');
   expect(tabShortcutForParagraph('일반 문장')).toBeNull();
+});
+
+test('clamps block indentation and reverses it with Shift+Tab', () => {
+  expect(nextBlockIndent(0)).toBe(1);
+  expect(nextBlockIndent(7)).toBe(8);
+  expect(nextBlockIndent(8)).toBe(8);
+  expect(nextBlockIndent(3, true)).toBe(2);
+  expect(nextBlockIndent(0, true)).toBe(0);
+  expect(normalizeBlockIndent('invalid')).toBe(0);
 });

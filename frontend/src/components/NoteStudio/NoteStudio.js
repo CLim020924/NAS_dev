@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios';
 import Editor from '@monaco-editor/react';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { Node } from '@tiptap/core';
+import { Extension, Node } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Underline from '@tiptap/extension-underline';
@@ -41,9 +41,28 @@ import ChecklistIcon from '@mui/icons-material/Checklist';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
-import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
+import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, nextBlockIndent, normalizeBlockIndent, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
 import './NoteStudio.css';
+
+const BlockIndent = Extension.create({
+  name: 'blockIndent',
+  addGlobalAttributes() {
+    return [{
+      types: ['paragraph', 'heading', 'codeBlock'],
+      attributes: {
+        indentLevel: {
+          default: 0,
+          parseHTML: (element) => normalizeBlockIndent(element.getAttribute('data-indent-level')),
+          renderHTML: ({ indentLevel }) => {
+            const level = normalizeBlockIndent(indentLevel);
+            return level ? { 'data-indent-level': level, style: `margin-left: ${level * 1.5}rem` } : {};
+          }
+        }
+      }
+    }];
+  }
+});
 
 const TYPE_OPTIONS = [
   { type: 'block', label: '블록 노트', detail: '문단·목록·제목을 자유롭게 구성', Icon: NotesIcon },
@@ -168,6 +187,7 @@ const NoteStudio = () => {
       Underline,
       TaskList,
       TaskItem.configure({ nested: true }),
+      BlockIndent,
       NoteLinkNode,
       NasResourceLinkNode,
       Placeholder.configure({ placeholder: "'/'를 누르거나 내용을 입력하세요." })
@@ -191,27 +211,52 @@ const NoteStudio = () => {
       },
       handleKeyDown: (view, event) => {
         const { $from, empty } = view.state.selection;
-        if (event.key === 'Tab' && !event.shiftKey && empty && $from.parent.type.name === 'paragraph') {
-          const shortcut = tabShortcutForParagraph($from.parent.textContent);
-          if (shortcut) {
-            event.preventDefault();
-            const from = $from.start();
-            const to = $from.end();
+        if (event.key === 'Tab') {
+          if (!event.shiftKey && empty && $from.parent.type.name === 'paragraph') {
+            const shortcut = tabShortcutForParagraph($from.parent.textContent);
+            if (shortcut) {
+              event.preventDefault();
+              const from = $from.start();
+              const to = $from.end();
+              setTimeout(() => {
+                let chain = editor.chain().focus().deleteRange({ from, to });
+                if (shortcut === 'ordered-list') chain = chain.toggleOrderedList();
+                if (shortcut === 'bullet-list') chain = chain.toggleBulletList();
+                if (shortcut === 'task-list') chain = chain.toggleTaskList();
+                if (shortcut === 'heading-1') chain = chain.toggleHeading({ level: 1 });
+                if (shortcut === 'heading-2') chain = chain.toggleHeading({ level: 2 });
+                if (shortcut === 'heading-3') chain = chain.toggleHeading({ level: 3 });
+                if (shortcut === 'quote') chain = chain.toggleBlockquote();
+                if (shortcut === 'code-block') chain = chain.toggleCodeBlock();
+                if (shortcut === 'divider') chain = chain.setHorizontalRule();
+                chain.run();
+              }, 0);
+              return true;
+            }
+          }
+
+          event.preventDefault();
+          const listItemType = [...Array($from.depth).keys()].reverse()
+            .map((offset) => $from.node(offset + 1)?.type?.name)
+            .find((name) => name === 'taskItem' || name === 'listItem');
+          if (listItemType) {
             setTimeout(() => {
-              let chain = editor.chain().focus().deleteRange({ from, to });
-              if (shortcut === 'ordered-list') chain = chain.toggleOrderedList();
-              if (shortcut === 'bullet-list') chain = chain.toggleBulletList();
-              if (shortcut === 'task-list') chain = chain.toggleTaskList();
-              if (shortcut === 'heading-1') chain = chain.toggleHeading({ level: 1 });
-              if (shortcut === 'heading-2') chain = chain.toggleHeading({ level: 2 });
-              if (shortcut === 'heading-3') chain = chain.toggleHeading({ level: 3 });
-              if (shortcut === 'quote') chain = chain.toggleBlockquote();
-              if (shortcut === 'code-block') chain = chain.toggleCodeBlock();
-              if (shortcut === 'divider') chain = chain.setHorizontalRule();
-              chain.run();
+              const chain = editor.chain().focus();
+              if (event.shiftKey) chain.liftListItem(listItemType).run();
+              else chain.sinkListItem(listItemType).run();
             }, 0);
             return true;
           }
+
+          const block = $from.parent;
+          if (['paragraph', 'heading', 'codeBlock'].includes(block.type.name)) {
+            const position = $from.before($from.depth);
+            const indentLevel = nextBlockIndent(block.attrs.indentLevel, event.shiftKey);
+            if (indentLevel !== normalizeBlockIndent(block.attrs.indentLevel)) {
+              view.dispatch(view.state.tr.setNodeMarkup(position, undefined, { ...block.attrs, indentLevel }));
+            }
+          }
+          return true;
         }
         if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey) {
           slashFromRef.current = view.state.selection.from;
