@@ -1517,3 +1517,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 실제 검증: 로컬 backend 111개 중 105 pass·6 환경 조건부 skip·0 fail, frontend production build와 PDF.js API/Worker 4.8.69가 통과했다. NAS의 512MiB·network none·read-only 실제 컨테이너에서 직접 패키지 25/25 import, NumPy/Pandas 계산, SymPy, Matplotlib PNG 생성과 `pip check`가 성공했다. 제품 worker 통합 5/5, NAS 전체 backend 111개 중 107 pass·4 skip·0 fail이다. 운영 image ID는 `c92c720cc0ed`, 크기는 851,302,000 bytes다.
 - 배포: 코드 commit `654ac31`을 GitHub와 NAS 활성 브랜치에 clean fast-forward했다. 운영 bundle은 `main.7af33d11.js`이며 build와 `/var/www/html`이 일치한다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared` active, PM2 `msp-backend` online/save, 내부 3030·공개 HTTPS 200, 무인증 runtime API 401이다.
 - 기록·남은 확인: `docs/NAS_PROJECT_LOG.xlsx`, `docs/programs/NAS_NOTE_STUDIO_SPEC.xlsx`, `docs/PYTHON_PACKAGE_RUNTIME_DESIGN.md`에 구현·공급망 경계·시험·보류 상태를 남겼다. 로그인된 Note Studio에서 패키지 dialog를 누르는 육안 E2E와 외부 패키지 self-service 구현은 남아 있다.
+
+## 2026-09-07 블록 노트 Tab 들여쓰기
+
+- 사용자 요청: Note Studio의 블록 노트 본문에서 Tab을 눌렀을 때 웹 상단바나 다른 버튼으로 초점이 이동하지 않고 현재 내용이 들여쓰기되어야 한다.
+- 원인: 기존 `handleKeyDown`은 `1.`, `-`, `[ ]`, 제목, 인용, 코드, 구분선 같은 특정 마커 뒤의 Tab만 처리했다. 일반 문장, 제목, 코드 블록, 목록과 Shift+Tab은 브라우저 기본 포커스 이동으로 빠졌다.
+- 구현: Tiptap의 paragraph, heading, codeBlock에 영속 `indentLevel` 속성을 추가했다. 본문 안의 모든 Tab은 기본 동작을 차단한다. 일반 블록은 1.5rem씩 최대 8단계 들여쓰고 Shift+Tab은 한 단계 내어쓴다. ordered/bullet/task list는 단순 여백 대신 `sinkListItem`/`liftListItem`으로 실제 목록 구조를 중첩·해제한다.
+- 호환성: 기존 마커+Tab 변환을 가장 먼저 처리해 `1.` 자동 번호 목록, `-` 목록, `[ ]` 할 일, 제목·인용·코드·구분선 단축키를 유지한다. 편집기 밖의 Tab 키는 접근성용 브라우저 포커스 이동을 그대로 사용한다. `indentLevel`은 노트 JSON에 저장되므로 기존 autosave와 재접속 복원의 대상이다.
+- 검증·배포: 로컬과 NAS에서 Note command focused Jest 6/6, production build, react-pdf 9.2.1/PDF.js API+Worker 4.8.69 검사가 통과했다. 코드 커밋 `e64643d`를 GitHub와 NAS 활성 브랜치에 fast-forward했고 운영 build와 `/var/www/html`이 모두 `main.490657bd.js`다. 내부 3030과 공개 HTTPS는 200, nginx·docker·tailscaled·cloudflared는 active, PM2 `msp-backend`는 online이다.
+- 기록·검증 경계: 마스터 로그와 Note Studio 전용 명세의 단축키, 데이터 모델, 시험, 구현 상태를 갱신하고 artifact-tool 재열기·수식 오류·문자 깨짐·렌더를 확인했다. 로그인 세션 없는 자동 검증에서는 실제 노트 caret의 육안 E2E를 수행하지 않았지만 키 처리, 저장 속성, 빌드와 운영 반영은 검증했다.
