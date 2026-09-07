@@ -1,14 +1,17 @@
-import { getPdfHighlightRects, normalizeDragRect, reconstructPdfRegionText } from './pdfSelection';
+import { getPdfHighlightRects, normalizeDragRect, reconstructPdfPlainText, reconstructPdfRegionText } from './pdfSelection';
 
 describe('PDF region text reconstruction', () => {
   test('preserves inferred word spacing, line breaks, and indentation', () => {
-    const text = reconstructPdfRegionText([
+    const items = [
       { text: '첫째', left: 10, right: 30, top: 10, bottom: 20, width: 20, height: 10 },
       { text: '줄', left: 40, right: 50, top: 10, bottom: 20, width: 10, height: 10 },
       { text: '들여쓴', left: 30, right: 60, top: 30, bottom: 40, width: 30, height: 10 },
       { text: '줄', left: 70, right: 80, top: 30, bottom: 40, width: 10, height: 10 },
-    ], { left: 0, right: 100, top: 0, bottom: 100 });
+    ];
+    const region = { left: 0, right: 100, top: 0, bottom: 100 };
+    const text = reconstructPdfRegionText(items, region);
     expect(text).toBe('첫째 줄\n  들여쓴 줄');
+    expect(reconstructPdfPlainText(items, region)).toBe('첫째 줄\n들여쓴 줄');
   });
 
   test('selects only intersecting items and normalizes reverse drags', () => {

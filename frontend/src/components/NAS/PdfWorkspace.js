@@ -16,7 +16,7 @@ import PrintOutlinedIcon from '@mui/icons-material/PrintOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Document, Page } from 'react-pdf';
 import axios from 'axios';
-import { collectPdfTextItems, getPdfHighlightRects, normalizeDragRect, reconstructPdfRegionText } from './pdfSelection';
+import { collectPdfTextItems, getPdfHighlightRects, normalizeDragRect, reconstructPdfPlainText, reconstructPdfRegionText } from './pdfSelection';
 import { getPdfZoomKeyDirection, stepPdfZoom } from './pdfZoom';
 
 const TOOL_DEFINITIONS = [
@@ -24,7 +24,8 @@ const TOOL_DEFINITIONS = [
   ['highlight', '형광펜', BorderColorOutlinedIcon],
   ['ink', '펜', DrawOutlinedIcon],
   ['text', '텍스트 상자', TextFieldsOutlinedIcon],
-  ['copy', '영역 텍스트 복사', ContentCopyOutlinedIcon],
+  ['copy-layout', '서식 유지 복사', ContentCopyOutlinedIcon],
+  ['copy-plain', '일반 텍스트 복사', ContentCopyOutlinedIcon],
   ['eraser', '주석 지우기', DeleteOutlineIcon],
 ];
 
@@ -285,9 +286,10 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
     markDirty(true);
   };
 
-  const copyText = async (page, rect) => {
+  const copyText = async (page, rect, preserveLayout) => {
     const pageElement = pageRefs.current.get(page);
-    const text = reconstructPdfRegionText(collectPdfTextItems(pageElement), rect);
+    const items = collectPdfTextItems(pageElement);
+    const text = preserveLayout ? reconstructPdfRegionText(items, rect) : reconstructPdfPlainText(items, rect);
     if (!text) {
       setStatus('선택 영역에서 텍스트를 찾지 못했습니다. 스캔 PDF는 OCR이 필요합니다.');
       return;
@@ -304,7 +306,9 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
       document.execCommand('copy');
       textarea.remove();
     }
-    setStatus(`${text.split('\n').length}줄을 띄어쓰기·들여쓰기와 함께 복사했습니다.`);
+    setStatus(preserveLayout
+      ? `${text.split('\n').length}줄을 띄어쓰기·들여쓰기와 함께 복사했습니다.`
+      : `${text.split('\n').length}줄의 일반 텍스트를 복사했습니다.`);
   };
 
   const handlePointerDown = (event, page) => {
@@ -345,8 +349,8 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
     }
     const rect = normalizeDragRect(gesture.start, point, { width: point.width, height: point.height });
     if (rect.width < 3 || rect.height < 3) return;
-    if (gesture.tool === 'copy') {
-      await copyText(gesture.page, rect);
+    if (gesture.tool === 'copy-layout' || gesture.tool === 'copy-plain') {
+      await copyText(gesture.page, rect, gesture.tool === 'copy-layout');
       return;
     }
     if (gesture.tool === 'highlight') {
@@ -419,7 +423,7 @@ const PdfWorkspace = ({ win, isActive, onDirtyChange, onRegisterSave }) => {
                       <Box key={annotation.id} onPointerDown={(event) => { if (tool === 'eraser') { event.stopPropagation(); removeAnnotation(annotation.id); } }} sx={{ position: 'absolute', left: `${annotation.x * 100}%`, top: `${annotation.y * 100}%`, width: `${annotation.width * 100}%`, height: `${annotation.height * 100}%`, bgcolor: annotation.type === 'highlight' ? annotation.color : annotation.background, opacity: annotation.opacity, color: annotation.color, fontSize: annotation.type === 'text' ? `${annotation.fontSize * zoom}px` : undefined, lineHeight: 1.25, whiteSpace: 'pre-wrap', overflow: 'hidden', p: annotation.type === 'text' ? 0.35 : 0, border: annotation.type === 'text' ? `1px solid ${annotation.color}` : 0, mixBlendMode: annotation.type === 'highlight' ? 'multiply' : 'normal', pointerEvents: tool === 'eraser' ? 'auto' : 'none' }}>{annotation.type === 'text' ? annotation.text : ''}</Box>
                     ))}
                     {preview?.page === page && preview.tool === 'ink' && <Box component="svg" viewBox="0 0 1 1" preserveAspectRatio="none" sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}><polyline points={preview.points.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" stroke={color} strokeWidth={0.0025} strokeLinecap="round" strokeLinejoin="round" /></Box>}
-                    {preview?.page === page && preview.rect && <Box sx={{ position: 'absolute', left: preview.rect.left, top: preview.rect.top, width: preview.rect.width, height: preview.rect.height, border: `1px solid ${preview.tool === 'copy' ? theme.palette.primary.main : '#ca8a04'}`, bgcolor: preview.tool === 'highlight' ? 'rgba(253,224,71,.32)' : 'rgba(37,99,235,.08)', pointerEvents: 'none' }} />}
+                    {preview?.page === page && preview.rect && <Box sx={{ position: 'absolute', left: preview.rect.left, top: preview.rect.top, width: preview.rect.width, height: preview.rect.height, border: `1px solid ${preview.tool.startsWith('copy-') ? theme.palette.primary.main : '#ca8a04'}`, bgcolor: preview.tool === 'highlight' ? 'rgba(253,224,71,.32)' : 'rgba(37,99,235,.08)', pointerEvents: 'none' }} />}
                     {textDraft?.page === page && <Box component="textarea" autoFocus value={textDraft.text} onChange={(event) => setTextDraft((draft) => ({ ...draft, text: event.target.value }))} onBlur={commitText} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); commitText(); } if (event.key === 'Escape') { event.preventDefault(); cancelTextDraftRef.current = true; event.currentTarget.blur(); } }} sx={{ position: 'absolute', left: `${textDraft.x * 100}%`, top: `${textDraft.y * 100}%`, width: `${textDraft.width * 100}%`, minHeight: 54, resize: 'both', zIndex: 6, bgcolor: 'rgba(255,255,255,.94)', color, border: `1px solid ${color}`, font: '16px/1.3 sans-serif', p: 0.75 }} />}
                   </Box>
                 </Box>

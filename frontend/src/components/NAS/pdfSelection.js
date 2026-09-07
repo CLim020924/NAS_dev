@@ -46,6 +46,12 @@ export const reconstructPdfRegionText = (items = [], selectionRect) => {
   }).join('\n');
 };
 
+export const reconstructPdfPlainText = (items = [], selectionRect) => reconstructPdfRegionText(items, selectionRect)
+  .split('\n')
+  .map((line) => line.trim().replace(/\s+/g, ' '))
+  .filter(Boolean)
+  .join('\n');
+
 export const collectPdfTextItems = (pageElement) => {
   if (!pageElement) return [];
   const pageRect = pageElement.getBoundingClientRect();

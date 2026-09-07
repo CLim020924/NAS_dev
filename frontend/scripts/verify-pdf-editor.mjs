@@ -25,10 +25,11 @@ const items = [
 ];
 const region = { left: 0, right: 100, top: 0, bottom: 100 };
 assert.equal(selection.reconstructPdfRegionText(items, region), 'Alpha Beta\n   Indented');
+assert.equal(selection.reconstructPdfPlainText(items, region), 'Alpha Beta\nIndented');
 assert.equal(selection.getPdfHighlightRects(items, { left: 20, right: 60, top: 0, bottom: 25 }).length, 2);
 assert.deepEqual(selection.normalizeDragRect({ x: 90, y: 80 }, { x: 10, y: 20 }, { width: 100, height: 100 }), { left: 10, top: 20, right: 90, bottom: 80, width: 80, height: 60 });
 assert.equal(zoom.stepPdfZoom(1, 1), 1.15);
-for (const label of ['선택', '형광펜', '펜', '텍스트 상자', '영역 텍스트 복사', '주석 지우기']) assert.match(workspaceSource, new RegExp(label));
+for (const label of ['선택', '형광펜', '펜', '텍스트 상자', '서식 유지 복사', '일반 텍스트 복사', '주석 지우기']) assert.match(workspaceSource, new RegExp(label));
 assert.match(workspaceSource, /pdf-annotations/);
 assert.match(workspaceSource, /event\.ctrlKey \|\| event\.metaKey/);
 assert.match(workspaceSource, /saveQueuedRef\.current = true/);
