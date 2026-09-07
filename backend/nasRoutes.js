@@ -63,6 +63,7 @@ const {
 const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankDocumentService');
 const { createNoteStudioStore, getFilesystemIdentity, sameFilesystemIdentity, findPathByFilesystemIdentity } = require('./noteStudioService');
 const { createManagedPythonWorker } = require('./managedPythonWorker');
+const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore');
 const {
   SHARED_ROOT_NAME,
   normalizeRelativePath: normalizeAccountShareRelPath,
@@ -2403,6 +2404,39 @@ router.get('/file/download', verifyToken, (req, res) => {
     }
   } 
   catch(e){ res.status(403).send(); }
+});
+
+router.get('/file/pdf-annotations', verifyToken, (req, res) => {
+  try {
+    const { basePath, targetPath } = getValidatedPath(req.user, req.query.path, req.headers['x-nas-password']);
+    if (path.extname(targetPath).toLowerCase() !== '.pdf') return res.status(400).json({ error: 'PDF 파일만 주석을 사용할 수 있습니다.' });
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) return res.status(404).json({ error: 'PDF 파일을 찾을 수 없습니다.' });
+    const result = loadPdfAnnotations(basePath, targetPath);
+    return res.json({ success: true, revision: result.revision, annotations: result.annotations });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || 'PDF 주석을 불러오지 못했습니다.' });
+  }
+});
+
+router.put('/file/pdf-annotations', verifyToken, express.text({ type: 'application/vnd.nas-pdf-annotations+json', limit: '2200kb' }), (req, res) => {
+  try {
+    const payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const { basePath, targetPath } = getValidatedPath(req.user, payload?.path, req.headers['x-nas-password']);
+    if (path.extname(targetPath).toLowerCase() !== '.pdf') return res.status(400).json({ error: 'PDF 파일만 주석을 사용할 수 있습니다.' });
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) return res.status(404).json({ error: 'PDF 파일을 찾을 수 없습니다.' });
+    const result = savePdfAnnotations(basePath, targetPath, {
+      expectedRevision: payload?.expectedRevision,
+      annotations: payload?.annotations,
+    });
+    appendActivity(basePath, { type: 'pdf-annotations-updated', path: toNasRelativePath(basePath, targetPath), actor: getActivityActor(req.user), source: 'web' });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(error instanceof SyntaxError ? 400 : (error.status || 500)).json({
+      error: error.message || 'PDF 주석을 저장하지 못했습니다.',
+      code: error.code,
+      current: error.current,
+    });
+  }
 });
 
 router.get('/hwp/render', verifyToken, async (req, res) => {
