@@ -1472,3 +1472,15 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 남은 실제 화면 gate: 현재 자동 브라우저에는 로그인 세션이 없어 사용자의 실제 PDF에서 한글·혼합 문서 OCR, 펜/텍스트 입력 직후 새로고침 복원, 버튼 활성 후 다중 창 Tab 순환을 육안 검증하지 못했다. 저해상도·손글씨·복잡한 다단/표는 OCR 오인식 가능성이 있으므로 실문서 결과에서 추가 보정이 필요할 수 있다. 코드 commit은 `69ce239`이며 workbook 변경은 다음 문서 commit에 포함한다.
 - 배포: 커밋 `3cfd835`를 GitHub와 NAS에 fast-forward하고 `main.8023a96e.js`를 운영 nginx에 배포했다. 공개 사이트와 디스크 bundle hash가 일치하며 내부 3030·공개 HTTPS 200, 필수 서비스 active, PM2 `msp-backend` online/save 상태다.
 - 기록: `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log와 기존 `APP-WINDOW-MRU-SWITCHER` 기능 설명을 갱신했다. 수식 오류 0건과 변경 범위 렌더를 확인했다.
+
+## 2026-09-07 파일·문서·노트 자동 저장과 마지막 작업 위치 복원
+
+- 사용자 요청: NAS에서 지원하는 파일·문서·노트의 변경사항은 즉시 또는 짧은 주기로 자동 저장하고, 로그아웃·로그인·새로고침·재접속 뒤 같은 항목을 다시 열면 마지막 편집·열람 위치에서 이어지게 한다. 내용 저장과 화면 위치 저장을 구분하고 계정 간 상태가 섞이지 않게 한다.
+- 저장 구조: `backend/workspaceViewStateStore.js`에 인증 계정 hash별 view-state 원장을 추가했다. resource는 파일 identity 또는 note ID로 식별하고 장치별 최신 상태를 저장하며, 같은 장치 기록이 없으면 해당 계정의 가장 최근 상태를 fallback한다. 파일 이름 변경·이동은 filesystem identity로 이어지고 삭제된 파일관리자 경로는 복원하지 않는다.
+- 보안·안정성: API는 클라이언트가 보낸 계정 ID를 신뢰하지 않고 현재 로그인 계정과 실제 파일·노트·폴더 경계를 다시 검증한다. 비밀번호·token·cookie·credential 계열 키를 거절하고 상태 24KiB, 계정당 resource 2000개, resource당 장치 8개로 제한한다. 원장은 디렉터리 0700·파일 0600과 임시 파일 후 rename으로 저장한다. 클라이언트는 변경을 하나로 합치고 최대 4회 지수 백오프하며 계정·파일·노트 전환 시 이전 pending 상태를 폐기하거나 응답 sequence를 검사한다.
+- 연결 범위: 파일관리자 마지막 경로, Note Studio 마지막 노트북·페이지·블록 선택·스크롤·Monaco 위치, TXT/Markdown/코드 Monaco view state, PDF 페이지·페이지 내부 오프셋·확대율, HWP 보기/편집 모드·확대율·스크롤, 미디어 재생 시간·음량·속도를 서버 동기화한다. HWP 내용 autosave는 12초에서 2.5초로 줄였고 dirty 편집 상태에서 보기로 전환하기 전에 먼저 저장한다.
+- 의도적 경계: OnlyOffice 본문 저장은 기존 autosave/forcesave를 유지한다. OnlyOffice가 안정적인 외부 API로 내부 커서·페이지를 제공하지 않아 그 위치를 추정 저장하지 않는다. HWP도 편집 iframe 내부 문자 커서가 아니라 모드·확대율·스크롤까지 복원한다. 내용 원본과 view state는 서로 다른 원장으로 유지한다.
+- 자동 검증: 로컬 신규 store 회귀 3/3, backend 전체 97 pass·3 skip·0 fail, frontend 대상 2 suite·8 test, production build와 PDF.js API/Worker gate가 통과했다. 로컬 frontend 전체 Jest 중 12 suite는 현재 의존 환경의 native `canvas.node` 부재로 실행되지 않았으나 production compile은 성공했다. NAS Linux backend는 100 pass·1 OCR 환경 조건부 skip·0 fail, production build는 `main.d8b7c19a.js`로 통과했다.
+- 배포·운영: 코드 commit `3d9c4be`를 GitHub와 NAS 활성 브랜치에 fast-forward하고 검증된 build를 `/var/www/html`에 동기화했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, PM2 `msp-backend`는 online/save, 내부 3030과 공개 HTTPS는 200, 무인증 view-state API는 401이며 NAS checkout은 clean이다.
+- 실화면 경계: 공개 사이트 로그인 화면과 live bundle까지 육안 확인했다. 현재 자동 브라우저에 인증된 NAS 세션이 없어 실제 사용자 파일을 열고 편집→로그아웃→재로그인→재열기 하는 최종 화면 E2E는 수행하지 않았다. 자격 증명을 기록하거나 재사용하지 않았으며 다음 인증 세션에서 파일 유형별 체감 확인만 남는다.
+- 기록: `docs/NAS_PROJECT_LOG.xlsx`와 `docs/programs/NAS_NOTE_STUDIO_SPEC.xlsx`에 feature, 관계, 코드/API/data, 보안 경계, 상태기계, 오류 복구, 시험 및 변경 이력을 반영했다. artifact-tool로 재열기·수식 오류 0건·행 배치·줄바꿈·변경 시트 렌더를 확인했다.
