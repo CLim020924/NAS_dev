@@ -1,5 +1,15 @@
 # AI 필독 — NAS 프로젝트 작업 인계 및 시작 규칙
 
+## 2026-09-07 NAS 웹 전역 UI 디자인 시스템 리팩터링
+
+- 사용자 요청: NAS 웹의 둥근 버튼·카드 중심 표현을 줄이고, 심플하지만 기능과 상태를 분명히 구분하는 세련된 UI로 전체를 통일한다. 앞으로 추가되는 버튼과 앱도 같은 기준을 자동으로 따르게 한다.
+- 확인 원인: `CustomThemeProvider`가 이미 전역 테마를 제공하는데 `AppContent`가 별도 `ThemeProvider/createTheme`를 다시 중첩해 일부 규격을 덮고 있었다. 전역은 8px인데 화면별 `sx`는 8~20px 모서리, 큰 그림자, hover `translateY`를 개별 사용해 플랫폼·문서·설정·팝업이 서로 다른 제품처럼 보였다. 설정이 제공하던 `ocean` 값도 실제 ThemeContext에 없었다.
+- 구현: `ThemeContext`를 단일 전역 기준으로 만들고 라이트·다크·오션 테마에 버튼·입력·메뉴·목록 4px, 창·대화상자 6px 계열, 1px 경계, 낮은 그림자, 120ms 색/경계 변화, `focus-visible`을 적용했다. App의 중복 테마를 제거했다. 플랫폼·상단바·로그인·AI·문서 변환·문서 작업대·설정·서버 자원·NAS/전역 앱 창의 큰 모서리와 움직이는 호버를 정리했다. 상태 점·아바타·진행률·모바일 빠른 작업은 의미가 있어 원형을 유지한다.
+- 새 기능 규칙: `docs/NAS_UI_DESIGN_SYSTEM.md`가 시각 원칙과 검수표를 설명하고 코드의 권위 기준은 `frontend/src/contexts/ThemeContext.js`다. 새 버튼은 기본 MUI Button을 우선하며 개별 `borderRadius`, 강한 `boxShadow`, `transform`을 다시 만들지 않는다. 선택·경고·연결 상태는 색만 쓰지 않고 테두리·텍스트를 함께 사용한다.
+- 검증·배포: 로컬과 NAS production build가 성공했고 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate를 통과했다. 커밋 `bb6fd82`를 GitHub와 NAS 활성 브랜치에 반영했으며 NAS build, `/var/www/html`, 공개 index가 모두 `main.3e5141bb.js`를 가리킨다. 공개 로그인 화면을 실제 렌더링해 버튼·입력·카드 배치와 대비를 확인했다. 내부 3030/공개 HTTPS 200, 필수 서비스 6개 active, PM2 `msp-backend` online/save, NAS checkout clean이다.
+- 기록: `NAS_PROJECT_LOG.xlsx`에 `WEB-UI-DESIGN-SYSTEM`, 관계 5개, 코드 매핑 14개, `DNB-WEB-UI-SYSTEM-144`, 요청 원문과 패치 이력을 추가했다. artifact-tool 재검사에서 수식 오류 0건이며 새 행 줄바꿈·높이를 렌더 확인했다.
+- 검증 경계: 만료된 웹 세션 때문에 공개 사이트의 인증 후 모든 앱 화면을 이번 턴에 순회하지는 않았다. 인증 전 로그인 화면과 로컬 빌드, 주요 화면 코드, 서버 배포본은 확인했다. 사용자 피드백에서 특정 앱의 밀도나 대비가 불편하면 전역 기준을 깨는 임시 스타일 대신 공통 토큰 또는 명시적 예외로 조정한다.
+
 ## 2026-09-07 PDF 주석과 영역 텍스트 복사 가능성 질문
 
 - 요청: PDF만 먼저 형광펜·펜·텍스트 상자 삽입, 버튼 선택 후 영역 드래그로 띄어쓰기/들여쓰기를 분석한 복사 또는 일반 텍스트 복사가 가능한지 확인한다. 이번 요청은 가능성 질문이며 구현/배포하지 않았다.
