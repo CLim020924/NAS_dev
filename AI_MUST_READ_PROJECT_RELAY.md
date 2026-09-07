@@ -1,5 +1,13 @@
 # AI 필독 — NAS 프로젝트 작업 인계 및 시작 규칙
 
+## 2026-09-07 PDF 주석과 영역 텍스트 복사 가능성 질문
+
+- 요청: PDF만 먼저 형광펜·펜·텍스트 상자 삽입, 버튼 선택 후 영역 드래그로 띄어쓰기/들여쓰기를 분석한 복사 또는 일반 텍스트 복사가 가능한지 확인한다. 이번 요청은 가능성 질문이며 구현/배포하지 않았다.
+- 확인: 현재 NAS FileViewer와 공통 FilePreviewSurface는 react-pdf/PDF.js 기반이다. Mozilla PDF.js 공식 viewer/주석 회귀 코드에는 FreeText/Ink/Highlight 편집이 있고, Tesseract 공식 문서는 단어별 bounding box/confidence/text가 있는 TSV와 hOCR 출력을 제공한다. 기존 react-pdf 페이지에 편집 도구가 자동으로 연결되는 것은 아니므로 별도 통합·저장 검증이 필요하다.
+- 제안: 주석 저장과 영역 복사는 별도 기능으로 설계한다. 텍스트 PDF는 글자 위치와 줄 정보를 먼저 추출하고 스캔 PDF는 선택 영역만 OCR한다. 일반 텍스트/줄바꿈·들여쓰기 유지 복사를 나누고 복사 전 미리보기를 제공한다. PDF는 원래 탭·문단·읽기 순서가 없을 수 있고 스캔 OCR 오류도 있어 모든 문서의 원본 띄어쓰기·들여쓰기 완전 복원을 보장하지 않는다.
+- 안전/후속: 좌표는 PDF 페이지 기준으로 저장해 확대/회전 시 유지하고 원본 보존·다른 이름 저장·실행 취소·계정 쓰기 권한·동시 저장 충돌을 검증한다. NAS 저사양을 고려해 OCR은 선택 영역/명시적 실행/제한 동시 작업으로 설계하며 OpenAI API는 기본 경로에 필요하지 않다. 구현 요청 후 상세 설계와 workbook 관련 행을 갱신한다.
+- 참조: https://github.com/mozilla/pdf.js/blob/master/web/viewer.html ; https://github.com/mozilla/pdf.js/blob/master/test/integration/annotation_spec.mjs ; https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc
+
 ## 2026-09-07 NAS Drive 1.11.4 재실행 복구
 
 - 요청: 다시 다운로드해 설치하면 로그인/웹 열기 오류와 트레이 미표시·재실행 무반응을 복구할 수 있도록 수정한다.
