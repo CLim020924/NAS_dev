@@ -133,7 +133,7 @@ const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.11.3';
+const WINDOWS_AGENT_VERSION = '1.11.4';
 const DEVICE_OFFLINE_AFTER_MS = 30 * 1000;
 const DEVICE_CONNECT_GRACE_MS = 90 * 1000;
 let windowsAgentBuildCache = null;
@@ -3881,6 +3881,8 @@ router.get('/devices/agent/windows', verifyToken, (req, res) => {
     const safeToken = token.replace(/[^a-zA-Z0-9_-]/g, '');
 
     if (fs.existsSync(installerPath)) {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-NAS-Agent-Version', WINDOWS_AGENT_VERSION);
       return res.download(installerPath, `NAS-Drive-Setup_${safeToken}.exe`);
     }
 

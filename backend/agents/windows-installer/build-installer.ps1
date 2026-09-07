@@ -19,6 +19,7 @@ $arguments = @(
   "/win32manifest:$sourceDir\app.manifest",
   "/reference:System.dll",
   "/reference:System.Core.dll",
+  "/reference:System.Management.dll",
   "/reference:System.Drawing.dll",
   "/reference:System.Windows.Forms.dll",
   "/reference:System.Web.Extensions.dll",
@@ -26,6 +27,7 @@ $arguments = @(
   "/resource:$AgentExe,NasDrive.Agent",
   "/out:$OutputExe",
   "$sourceDir\Program.cs"
+  "$sourceDir\TrayRecovery.cs"
 )
 if ($IconPath -and (Test-Path -LiteralPath $IconPath)) { $arguments += "/win32icon:$IconPath" }
 

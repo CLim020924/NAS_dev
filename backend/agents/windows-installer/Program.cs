@@ -18,14 +18,14 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.11.3.0")]
-[assembly: AssemblyFileVersion("1.11.3.0")]
+[assembly: AssemblyVersion("1.11.4.0")]
+[assembly: AssemblyFileVersion("1.11.4.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.11.3";
+        internal const string ProductVersion = "1.11.4";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
@@ -57,6 +57,40 @@ namespace NasDriveSetup
 
         [STAThread]
         private static void Main(string[] args)
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try { MainCore(args); return; }
+                catch (Exception error)
+                {
+                    LogLauncherFailure("startup", error);
+                    if (Array.Exists(args, item => item == "--background") && attempt < 2)
+                    { Thread.Sleep(1000 * (attempt + 1)); continue; }
+                    // A failed launch must not disappear silently, even at boot.
+                    MessageBox.Show("NAS Drive를 시작하지 못했습니다. 다시 실행하면 복구를 시도합니다.\n오류 종류: " + error.GetType().Name,
+                        "NAS Drive 시작 오류", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    Environment.ExitCode = 1;
+                    return;
+                }
+            }
+        }
+
+        internal static void LogLauncherFailure(string stage, Exception error)
+        {
+            try
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent");
+                Directory.CreateDirectory(dir);
+                // No raw exception messages: command lines can contain credentials.
+                File.AppendAllText(Path.Combine(dir, "launcher-diagnostic.log"),
+                    DateTime.UtcNow.ToString("o") + " " + ProductVersion + " " + stage + " " + error.GetType().Name + Environment.NewLine, Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        private static void MainCore(string[] args)
         {
             if (Array.Exists(args, item => string.Equals(item, "--cleanup-installers", StringComparison.OrdinalIgnoreCase)))
             {
@@ -258,7 +292,7 @@ namespace NasDriveSetup
             string installedExe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "NAS Drive", "NAS-Sync-Agent.exe");
             if (!File.Exists(installedExe))
             {
-                if (!background) MessageBox.Show("NAS Drive Agent가 설치되어 있지 않습니다. 설치 프로그램을 다시 실행해주세요.", "NAS Drive", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("NAS Drive Agent가 설치되어 있지 않습니다. 설치 프로그램을 다시 실행해주세요.", "NAS Drive", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return true;
             }
 
@@ -290,6 +324,7 @@ namespace NasDriveSetup
 
             if (openWeb)
             {
+                StartBackgroundLauncher();
                 OpenWebWithBrowserPicker(installedExe);
                 return true;
             }
@@ -323,20 +358,14 @@ namespace NasDriveSetup
 
             if (background)
             {
-                if (NativeControlCenter.HasConfiguredProfile()) StartInstalledAgent(installedExe, "--background");
-                bool created;
-                using (var trayMutex = new Mutex(true, "Local\\NAS-Drive-Native-Tray-SingleInstance", out created))
+                using (var trayMutex = TrayRecovery.Acquire(NativeTrayRefreshEventName))
                 {
-                    if (!created)
-                    {
-                        SignalNativeTrayRefresh();
-                        return true;
-                    }
-                    Application.EnableVisualStyles();
-                    Application.SetCompatibleTextRenderingDefault(false);
+                    if (trayMutex == null) return true;
                     using (var refreshEvent = new EventWaitHandle(false, EventResetMode.AutoReset, NativeTrayRefreshEventName))
+                    using (var ackEvent = new EventWaitHandle(false, EventResetMode.AutoReset, TrayRecovery.AckName))
                     {
-                        Application.Run(new NativeTrayContext(installedExe, refreshEvent));
+                        try { Application.Run(new NativeTrayContext(installedExe, refreshEvent, ackEvent)); }
+                        finally { trayMutex.ReleaseMutex(); }
                     }
                 }
                 return true;
@@ -734,8 +763,6 @@ namespace NasDriveSetup
                 RegisterWebPickerOwner();
                 try
                 {
-                    Application.EnableVisualStyles();
-                    Application.SetCompatibleTextRenderingDefault(false);
                     BrowserSelection selection;
                     using (var picker = new WebBrowserPickerForm())
                     {
@@ -813,11 +840,8 @@ namespace NasDriveSetup
                 if (created) return mutex;
                 mutex.Dispose();
 
-                // The newest explicit user request wins. A WinForms process
-                // launched with WindowStyle.Hidden can own the UI mutex while
-                // reporting MainWindowHandle=0, so visible-window detection is
-                // not reliable. Replace every older exact-path launcher role;
-                // the caller starts a fresh tray immediately after acquiring.
+                // Replace only the recorded foreground owner, never every
+                // NAS-Drive process (the tray uses the same executable).
                 SupersedeExistingNativeUi();
                 Thread.Sleep(250 + (attempt * 250));
             }
@@ -827,25 +851,6 @@ namespace NasDriveSetup
         private static void SupersedeExistingNativeUi()
         {
             SupersedeRegisteredNativeUi();
-            int currentPid;
-            using (Process current = Process.GetCurrentProcess()) currentPid = current.Id;
-            string launcherPath = Application.ExecutablePath;
-            foreach (Process process in Process.GetProcessesByName("NAS-Drive"))
-            {
-                try
-                {
-                    if (process.Id == currentPid || process.HasExited) continue;
-                    if (!IsInstalledLauncherProcessPath(process.MainModule.FileName, launcherPath)) continue;
-                    if (process.MainWindowHandle != IntPtr.Zero) process.CloseMainWindow();
-                    if (process.MainWindowHandle == IntPtr.Zero || !process.WaitForExit(1200))
-                    {
-                        process.Kill();
-                        process.WaitForExit(1200);
-                    }
-                }
-                catch { }
-                finally { process.Dispose(); }
-            }
         }
 
         private static void RegisterNativeUiOwner()
@@ -999,6 +1004,12 @@ namespace NasDriveSetup
                     && !IsInstalledLauncherProcessPath(@"C:\Other\NAS-Drive.exe", @"C:\Apps\NAS-Drive.exe")
                     && IsInstalledAgentProcessPath(@"C:\Apps\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe")
                     && !IsInstalledAgentProcessPath(@"C:\Old\NAS-Sync-Agent.exe", @"C:\Apps\NAS-Sync-Agent.exe")
+                    && TrayRecovery.IsBackgroundCommand("\"C:\\Apps\\NAS-Drive.exe\" --background")
+                    && !TrayRecovery.IsBackgroundCommand("\"C:\\Apps\\NAS-Drive.exe\" --open")
+                    && !TrayRecovery.IsBackgroundCommand("\"C:\\Apps\\NAS-Drive.exe\" --open-web --background")
+                    && !TrayRecovery.IsBackgroundCommand("\"C:\\Apps\\NAS-Drive.exe\" --background --login")
+                    && NativeLoginForm.FriendlyError("LOCAL_SETUP_FAILED").Contains("PC")
+                    && !NativeLoginForm.FriendlyError("계정 연결 응답을 확인할 수 없습니다.").Contains("서버 전원")
                     && QuoteArgument(@"C:\Users\Me\NAS Drive") == "\"C:\\Users\\Me\\NAS Drive\""
                     && QuoteArgument("C:\\Path\\") == "\"C:\\Path\\\\\""
                     && ScaleMetric(660, 3f) == 1980
@@ -1027,7 +1038,7 @@ namespace NasDriveSetup
                 {
                     return HasExpectedScaledClientSize(setup, 660, 470)
                         && HasExpectedScaledClientSize(login, 470, 650)
-                        && HasExpectedScaledClientSize(control, 620, 620)
+                        && HasExpectedScaledClientSize(control, 680, 700)
                         && HasExpectedScaledClientSize(pathReview, 1040, 720)
                         && HasExpectedScaledClientSize(picker, 720, 570);
                 }
@@ -1042,8 +1053,10 @@ namespace NasDriveSetup
                 float scale = Math.Max(1f, graphics.DpiX / 96f);
                 int expectedWidth = ScaleMetric(designWidth, scale);
                 int expectedHeight = ScaleMetric(designHeight, scale);
-                return Math.Abs(form.ClientSize.Width - expectedWidth) <= 2
+                bool valid = Math.Abs(form.ClientSize.Width - expectedWidth) <= 2
                     && Math.Abs(form.ClientSize.Height - expectedHeight) <= 2;
+                if (!valid) LogLauncherFailure("layout-" + form.GetType().Name + "-" + form.ClientSize.Width + "x" + form.ClientSize.Height + "-expected-" + expectedWidth + "x" + expectedHeight, new InvalidDataException());
+                return valid;
             }
         }
 
@@ -1106,6 +1119,7 @@ namespace NasDriveSetup
         protected void ApplyInitialDpiScale()
         {
             if (initialLayoutScaled) return;
+            Size designClientSize = ClientSize;
             float dpi;
             using (Graphics graphics = CreateGraphics()) dpi = graphics.DpiX;
             float nextScale = Math.Max(1f, dpi / 96f);
@@ -1115,6 +1129,10 @@ namespace NasDriveSetup
                 Scale(new SizeF(nextScale, nextScale));
                 ResumeLayout(true);
             }
+            // Creating the first HWND can clamp the unscaled window on a
+            // high-DPI monitor. Restore the intended client dimensions after
+            // scaling instead of multiplying the already-clipped dimensions.
+            ClientSize = new Size(Program.ScaleMetric(designClientSize.Width, nextScale), Program.ScaleMetric(designClientSize.Height, nextScale));
             appliedLayoutScale = nextScale;
             initialLayoutScaled = true;
         }
@@ -1954,13 +1972,15 @@ namespace NasDriveSetup
             {
                 process.StandardInput.Write("{\"id\":\"" + Program.JsonEscape(id) + "\",\"password\":\"" + Program.JsonEscape(secret) + "\"}");
                 process.StandardInput.Close();
-                pairingToken = process.StandardOutput.ReadToEnd().Trim();
-                loginError = process.StandardError.ReadToEnd().Trim();
+                Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> errorTask = process.StandardError.ReadToEndAsync();
                 if (!process.WaitForExit(30000))
                 {
                     try { process.Kill(); } catch { }
                     throw new InvalidOperationException("NAS 로그인 응답 시간이 초과되었습니다.");
                 }
+                pairingToken = outputTask.GetAwaiter().GetResult().Trim();
+                loginError = errorTask.GetAwaiter().GetResult().Trim();
                 if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(pairingToken)) throw new InvalidOperationException(loginError.Length > 0 ? loginError : "로그인 정보를 확인할 수 없습니다.");
             }
 
@@ -1978,14 +1998,16 @@ namespace NasDriveSetup
                 try { setup.Kill(); } catch { }
                 throw new InvalidOperationException("NAS Drive 초기 구성이 예상보다 오래 걸립니다. 잠시 후 다시 시도해 주세요.");
             }
-            if (setup.ExitCode != 0 || !NativeControlCenter.HasConfiguredProfile()) throw new InvalidOperationException("NAS Drive 연결을 완료하지 못했습니다. NAS 서버 연결을 확인해 주세요.");
+            if (setup.ExitCode != 0 || !NativeControlCenter.HasConfiguredProfile()) throw new InvalidOperationException("LOCAL_SETUP_FAILED");
         }
 
-        private static string FriendlyError(string message)
+        internal static string FriendlyError(string message)
         {
             string text = message ?? "로그인하지 못했습니다.";
-            if (text.Contains("401") || text.Contains("403")) return "아이디 또는 비밀번호를 확인해 주세요.";
-            if (text.Contains("503") || text.IndexOf("연결", StringComparison.OrdinalIgnoreCase) >= 0 || text.IndexOf("timeout", StringComparison.OrdinalIgnoreCase) >= 0) return "NAS 서버에 연결할 수 없습니다. 서버 전원과 인터넷 연결을 확인해 주세요.";
+            if (text.Contains("LOCAL_SETUP_FAILED")) return "로그인 후 이 PC의 드라이브 구성을 완료하지 못했습니다. NAS Drive를 다시 열어 재시도해 주세요. 오류 코드: LOCAL_SETUP_FAILED";
+            if (text.Contains("401")) return "아이디 또는 비밀번호를 확인해 주세요.";
+            if (text.Contains("403")) return "서버가 로그인 또는 장치 인증을 거부했습니다. 계정 상태와 PC 연동 상태를 확인해 주세요.";
+            if (Regex.IsMatch(text, "ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timeout|HTTP 50[234]", RegexOptions.IgnoreCase)) return "이 PC에서 NAS 로그인 요청을 완료하지 못했습니다. 네트워크·보안 프로그램 또는 서버 응답 상태를 확인해 주세요.";
             return text.Length > 180 ? text.Substring(0, 180) : text;
         }
     }
@@ -3253,7 +3275,7 @@ namespace NasDriveSetup
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern bool DestroyIcon(IntPtr handle);
 
-        internal NativeTrayContext(string installedAgentExe, EventWaitHandle refreshEvent)
+        internal NativeTrayContext(string installedAgentExe, EventWaitHandle refreshEvent, EventWaitHandle ackEvent)
         {
             agentExe = installedAgentExe;
             launcherExe = Application.ExecutablePath;
@@ -3266,7 +3288,10 @@ namespace NasDriveSetup
             openDriveItem.Click += (sender, args) => OpenDrive();
             accountActionItem.Click += (sender, args) => OpenControlCenter();
             var webItem = new ToolStripMenuItem("NAS 웹 열기");
-            webItem.Click += (sender, args) => Program.OpenWebWithBrowserPicker(agentExe);
+            // The picker owns a separate UI loop; it must never block the tray
+            // heartbeat or reinitialize WinForms after handles already exist.
+            webItem.Click += (sender, args) => Process.Start(new ProcessStartInfo(launcherExe, "--open-web")
+                { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden });
             var restartItem = new ToolStripMenuItem("NAS Drive 재시작");
             restartItem.Click += (sender, args) => RestartNasDrive();
             var exitItem = new ToolStripMenuItem("NAS Drive 종료");
@@ -3288,8 +3313,9 @@ namespace NasDriveSetup
             refreshTimer.Interval = 2500;
             refreshTimer.Tick += (sender, args) =>
             {
-                RefreshStatus();
-                if (trayRefreshEvent.WaitOne(0)) RestoreTrayRegistration();
+                if (trayRefreshEvent.WaitOne(0)) { RestoreTrayRegistration(); ackEvent.Set(); }
+                try { RefreshStatus(); }
+                catch (Exception error) { Program.LogLauncherFailure("tray-refresh", error); }
                 startupRestoreTick++;
                 if (startupRestoreTick == 1 || startupRestoreTick == 3 || startupRestoreTick == 6) RestoreTrayRegistration();
             };
@@ -3298,7 +3324,10 @@ namespace NasDriveSetup
                 startupRestoreTick = 0;
                 RestoreTrayRegistration();
             });
-            RefreshStatus();
+            // Publish an icon before any account/disk/process inspection.
+            currentIcon = (Icon)SystemIcons.Application.Clone();
+            notifyIcon.Icon = currentIcon;
+            notifyIcon.Text = "NAS Drive · 시작 중";
             notifyIcon.Visible = true;
             refreshTimer.Start();
         }
@@ -3346,14 +3375,16 @@ namespace NasDriveSetup
         private void EnsureAgentRunning(AccountSnapshot account)
         {
             if (account == null || string.IsNullOrWhiteSpace(account.DeviceId) || !File.Exists(agentExe)) return;
-            foreach (Process process in Process.GetProcessesByName("NAS-Sync-Agent"))
+            int agentPid;
+            string pidFile = Path.Combine(StateDir, "agent.pid");
+            if (File.Exists(pidFile) && int.TryParse(File.ReadAllText(pidFile).Trim(), out agentPid))
             {
                 try
                 {
+                    using (Process process = Process.GetProcessById(agentPid))
                     if (!process.HasExited && Program.IsInstalledAgentProcessPath(process.MainModule.FileName, agentExe)) return;
                 }
                 catch { }
-                finally { process.Dispose(); }
             }
             if ((DateTime.UtcNow - lastAgentStartAt).TotalSeconds < 8) return;
             lastAgentStartAt = DateTime.UtcNow;

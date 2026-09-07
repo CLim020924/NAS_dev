@@ -1,5 +1,15 @@
 # AI 필독 — NAS 프로젝트 작업 인계 및 시작 규칙
 
+## 2026-09-07 NAS Drive 1.11.4 재실행 복구
+
+- 요청: 다시 다운로드해 설치하면 로그인/웹 열기 오류와 트레이 미표시·재실행 무반응을 복구할 수 있도록 수정한다.
+- 확인 원인: 기존 background는 mutex가 있으면 UI 응답 없이 refresh 신호만 보내 종료했다. foreground 복구는 같은 EXE의 트레이까지 일괄 종료했다. tray의 웹 열기는 같은 UI loop에서 picker를 띄우고 WinForms 텍스트 설정을 재초기화했다. 현재 PC launcher는 1.10.31.0, Agent는 별도 자동 업데이트 상태였다. 다른 PC의 직접 장애 원인은 아직 재현하지 않았다.
+- 수정: `TrayRecovery.cs`는 직렬화된 refresh/ACK를 8초 기다리고 무응답일 때 동일 설치 경로·Windows 세션·probe 이전 시작시간·정확한 --background 역할만 교체한다. mutex 생성 여부 대신 실제 소유권을 획득해 abandoned mutex도 복구한다. UI 요청은 등록된 foreground PID만 교체하며 tray 웹 선택기는 별도 프로세스로 분리한다. 계정/네트워크 검사 전 아이콘을 게시하고 startup 예외는 최대 3회 시도 후 가시 오류를 낸다. 동기화 background 확인은 임의 동일 이름 프로세스가 아니라 agent.pid를 검증한다.
+- 로그인/화면: stdout/stderr 비동기 읽기로 로그인 timeout이 실제 적용되게 했다. 로컬 초기 구성 실패를 서버 전원 문제로 오표시하지 않고 401/403/네트워크 실패를 구분한다. 고DPI 최초 HWND 생성 때 줄어든 ClientSize를 그대로 확대하던 결함을 원래 설계 크기 복원으로 교정했고 다중 계정 창 검사 기준도 실제 680x700으로 갱신했다.
+- 패키지: installer/Agent/package/server 메타데이터를 1.11.4로 일치시켰다. 다운로드 응답은 private,no-store 및 X-NAS-Agent-Version을 제공한다. Agent-only 자동 업데이트는 launcher를 교체하지 않으므로 이번 수정 적용에는 새 설치기로 업데이트가 필요하다.
+- 검증: 격리된 Windows 프로세스에서 healthy ACK 유지, hung owner 교체, 종료 뒤 새 mutex 획득 통과. C# compile/Setup self-test/패키지 Agent self-test/Node syntax 통과. 현재 PC 기존 실행 파일을 `.codex-backups/driver-1.11.4`에 보관하고 새 파일로 교체했다. 실제 --open 이후 tray 중복 실행에서 기존 PID 유지·ACK true, 기존 계정으로 web-session→기본 브라우저 launch는 2026-09-07 01:59:12 UTC opened/attempt1이었다. 계정 정보와 사용자 파일은 변경하지 않았다.
+- 검증 경계: 실제 installer 버튼·트레이 메뉴 클릭은 Windows UI 제어 도구 부재로 직접 검증하지 못했다. 생성된 실제 WinForms 미리보기는 확인했다. 브라우저 제어 도구에도 해당 기본 브라우저 탭이 없어 웹 최종 화면 확인을 launch 성공과 구별한다. 다른 PC 재부팅, 보안 프로그램 차단, 신규 계정 로그인, 프로필 선택 전체 흐름은 확인 필요로 보류 시트에 기록한다. 서버 다운로드 배포 결과는 아래에 후속 기록한다.
+
 ## 2026-09-07 다른 PC Drive 로그인/부팅 트레이 미표시 진단
 
 - 후속 사용자 보고: 로그인 이후 웹에서 열기는 현재 개발 PC에서도 실패한다. 현재 PC에서 NAS-Drive, NAS-Sync-Agent, NAS-Drive-Provider 프로세스 실행을 직접 확인했다. launcher 파일 버전은 1.10.31.0이다. agent exe의 18.5.0 PE 표시는 Node runtime 버전이므로 제품 버전으로 판단하지 않는다.
