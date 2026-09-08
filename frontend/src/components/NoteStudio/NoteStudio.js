@@ -40,7 +40,6 @@ import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import TerminalIcon from '@mui/icons-material/Terminal';
-import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
@@ -214,7 +213,7 @@ const NoteStudio = () => {
   const [pythonRuntime, setPythonRuntime] = useState(null);
   const [pythonRuntimeLoading, setPythonRuntimeLoading] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
-  const [collapsedNotebookIds, setCollapsedNotebookIds] = useState(() => new Set());
+  const [expandedOverviewNotebookIds, setExpandedOverviewNotebookIds] = useState(() => new Set());
   const [collapsedPageIds, setCollapsedPageIds] = useState(() => new Set());
   const [renameNote, setRenameNote] = useState(null);
   const [renameTitle, setRenameTitle] = useState('');
@@ -386,7 +385,7 @@ const NoteStudio = () => {
       resumeSessionRef.current = record?.state || null;
       if (record?.state?.activeNotebookId) setActiveNotebookId(record.state.activeNotebookId);
       if (record?.state?.sidebarNotebookId) setSidebarNotebookId(record.state.sidebarNotebookId);
-      if (Array.isArray(record?.state?.collapsedNotebookIds)) setCollapsedNotebookIds(new Set(record.state.collapsedNotebookIds));
+      if (Array.isArray(record?.state?.expandedOverviewNotebookIds)) setExpandedOverviewNotebookIds(new Set(record.state.expandedOverviewNotebookIds));
       if (Array.isArray(record?.state?.collapsedPageIds)) setCollapsedPageIds(new Set(record.state.collapsedPageIds));
       if (record?.state?.terminalNotebookId) setTerminalNotebookId(record.state.terminalNotebookId);
       setTerminalOpen(!!record?.state?.terminalOpen);
@@ -406,10 +405,10 @@ const NoteStudio = () => {
     sessionViewStateQueueRef.current.schedule({ kind: 'note-studio-session' }, {
       activeNotebookId: activeNotebookId || '', selectedNoteId: selected?.id || '',
       sidebarNotebookId: sidebarNotebookId || '',
-      collapsedNotebookIds: [...collapsedNotebookIds], collapsedPageIds: [...collapsedPageIds], terminalOpen,
+      expandedOverviewNotebookIds: [...expandedOverviewNotebookIds], collapsedPageIds: [...collapsedPageIds], terminalOpen,
       terminalNotebookId: terminalNotebookId || '', terminalExplorerOpen, sidebarOpen,
     });
-  }, [activeNotebookId, collapsedNotebookIds, collapsedPageIds, selected?.id, sessionReady, sidebarNotebookId, sidebarOpen, terminalExplorerOpen, terminalNotebookId, terminalOpen]);
+  }, [activeNotebookId, collapsedPageIds, expandedOverviewNotebookIds, selected?.id, sessionReady, sidebarNotebookId, sidebarOpen, terminalExplorerOpen, terminalNotebookId, terminalOpen]);
 
   useEffect(() => {
     const resume = resumeSessionRef.current;
@@ -424,7 +423,7 @@ const NoteStudio = () => {
     setLoading(true);
     try {
       const [{ data }, notebookResponse] = await Promise.all([
-        axios.get('/api/note-studio/notes', { params: { deleted: trashMode, q: query }, withCredentials: true }),
+        axios.get('/api/note-studio/notes', { params: { deleted: trashMode, q: sidebarNotebookId ? query : '' }, withCredentials: true }),
         axios.get('/api/note-studio/notebooks', { withCredentials: true })
       ]);
       const nextNotes = data.notes || [];
@@ -436,7 +435,7 @@ const NoteStudio = () => {
       if (!keepSelection || (selectedRef.current && !nextNotes.some((note) => note.id === selectedRef.current.id))) setSelected(null);
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '노트 목록을 불러오지 못했습니다.') }); }
     finally { setLoading(false); }
-  }, [query, trashMode]);
+  }, [query, sidebarNotebookId, trashMode]);
 
   useEffect(() => {
     const timer = setTimeout(() => loadList(), 220);
@@ -1315,12 +1314,18 @@ const NoteStudio = () => {
   };
 
   const renderNotebookOverviewRow = (notebook) => {
+    const tree = notesByNotebook.find((item) => item.notebook.id === notebook.id);
     const pageCount = notes.filter((note) => note.notebookId === notebook.id).length;
-    return <ListItemButton key={notebook.id} className="note-notebook-tree-row" role="treeitem" onClick={() => enterNotebook(notebook)} onDoubleClick={() => openNotebookTerminal(notebook.id)} onContextMenu={(event) => openNotebookContextMenu(event, notebook)} onKeyDown={(event) => { if (event.key === 'F2' && !trashMode) { event.preventDefault(); startRenameNotebook(notebook); } }} sx={{ py: 0.85, px: 1.25, minHeight: 48, position: 'relative', '&:hover .note-tree-row-actions, &:focus-within .note-tree-row-actions': { opacity: 1 } }}>
-      <ListItemIcon sx={{ minWidth: 34 }}>{notebook.kind === 'project' ? <TerminalIcon fontSize="small" /> : <MenuBookOutlinedIcon fontSize="small" />}</ListItemIcon>
-      <ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : `${notebook.kind === 'project' ? '프로젝트' : '노트'} · ${pageCount}개 페이지`} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10.5, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} />
-      {!trashMode && <Box className="note-tree-row-actions" sx={{ display: 'flex', opacity: 0, transition: 'opacity 100ms ease' }}><Tooltip title="노트북 작업"><IconButton size="small" aria-label={`${notebook.title} 작업`} onClick={(event) => openNotebookContextMenu(event, notebook)}><MoreHorizIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip></Box>}
-    </ListItemButton>;
+    const expanded = expandedOverviewNotebookIds.has(notebook.id);
+    return <Box key={notebook.id} role="treeitem" aria-expanded={pageCount ? expanded : undefined}>
+      <ListItemButton className="note-notebook-tree-row" onClick={() => enterNotebook(notebook)} onDoubleClick={() => openNotebookTerminal(notebook.id)} onContextMenu={(event) => openNotebookContextMenu(event, notebook)} onKeyDown={(event) => { if (event.key === 'F2' && !trashMode) { event.preventDefault(); startRenameNotebook(notebook); } }} sx={{ py: 0.75, px: 0.75, minHeight: 48, position: 'relative', '&:hover .note-tree-row-actions, &:focus-within .note-tree-row-actions': { opacity: 1 } }}>
+        <IconButton size="small" disabled={!pageCount} aria-label={pageCount ? (expanded ? `${notebook.title} 하위 목록 접기` : `${notebook.title} 하위 목록 펼치기`) : undefined} onClick={(event) => { event.stopPropagation(); setExpandedOverviewNotebookIds((current) => { const next = new Set(current); if (next.has(notebook.id)) next.delete(notebook.id); else next.add(notebook.id); return next; }); }} sx={{ width: 26, height: 26, mr: 0.25, visibility: pageCount ? 'visible' : 'hidden' }}><KeyboardArrowRightIcon sx={{ fontSize: 18, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 120ms ease' }} /></IconButton>
+        <ListItemIcon sx={{ minWidth: 31 }}>{notebook.kind === 'project' ? <TerminalIcon fontSize="small" /> : <MenuBookOutlinedIcon fontSize="small" />}</ListItemIcon>
+        <ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : `${notebook.kind === 'project' ? '프로젝트' : '노트'} · ${pageCount}개 페이지`} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10.5, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} />
+        {!trashMode && <Box className="note-tree-row-actions" sx={{ display: 'flex', opacity: 0, transition: 'opacity 100ms ease' }}><Tooltip title="노트북 작업"><IconButton size="small" aria-label={`${notebook.title} 작업`} onClick={(event) => openNotebookContextMenu(event, notebook)}><MoreHorizIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip></Box>}
+      </ListItemButton>
+      {expanded && <Box role="group" sx={{ bgcolor: alpha(theme.palette.text.primary, 0.018) }}>{tree?.notes.map((note) => renderNoteTreeRow(note, tree.childCounts, notebook.id))}</Box>}
+    </Box>;
   };
 
   return (
@@ -1329,14 +1334,12 @@ const NoteStudio = () => {
       <Paper square elevation={0} sx={{ display: { xs: sidebarOpen && !(selected || terminalOpen) ? 'flex' : 'none', md: sidebarOpen ? 'flex' : 'none' }, minHeight: 0, flexDirection: 'column', borderRight: { md: '1px solid' }, borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" className="note-studio-compact-controls" sx={{ minHeight: 38, px: 0.75, borderBottom: '1px solid', borderColor: 'divider' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-            <Tooltip title="목록 숨기기 · Ctrl+B"><IconButton size="small" aria-label="노트북 목록 숨기기" onClick={() => setSidebarOpen(false)}><ViewSidebarOutlinedIcon fontSize="small" /></IconButton></Tooltip>
+            {!sidebarNotebook && <Tooltip title="목록 숨기기 · Ctrl+B"><IconButton size="small" aria-label="노트북 목록 숨기기" onClick={() => setSidebarOpen(false)}><ViewSidebarOutlinedIcon fontSize="small" /></IconButton></Tooltip>}
             {sidebarNotebook && <Button size="small" color="inherit" onClick={leaveNotebook} sx={{ minWidth: 0, px: 0.75, fontWeight: 900 }}>BACK</Button>}
             {sidebarNotebook && <Typography variant="body2" title={sidebarNotebook.title} sx={{ fontWeight: 900, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sidebarNotebook.title}</Typography>}
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
             {sidebarNotebook ? <>
-              <Tooltip title="모든 하위 페이지 접기"><span><IconButton size="small" aria-label="모든 하위 페이지 접기" disabled={!sidebarNotebookTree?.notes.length} onClick={() => setCollapsedPageIds((current) => new Set([...current, ...(sidebarNotebookTree?.notes || []).map((note) => note.id)]))}><UnfoldLessIcon fontSize="small" /></IconButton></span></Tooltip>
-              <Tooltip title="이 노트북에서 터미널 열기"><span><IconButton size="small" aria-label="노트북 터미널 열기" disabled={sidebarNotebook.available === false} onClick={() => openNotebookTerminal(sidebarNotebook.id)}><TerminalIcon fontSize="small" /></IconButton></span></Tooltip>
               <Tooltip title="새 페이지"><IconButton size="small" aria-label="새 페이지" color="primary" disabled={sidebarNotebook.available === false} onClick={(event) => { setPendingParentId(null); setActiveNotebookId(sidebarNotebook.id); setCreateAnchor(event.currentTarget); }}><AddIcon fontSize="small" /></IconButton></Tooltip>
               <Tooltip title="노트북 작업"><IconButton size="small" aria-label={`${sidebarNotebook.title} 작업`} onClick={(event) => openNotebookContextMenu(event, sidebarNotebook)}><MoreHorizIcon fontSize="small" /></IconButton></Tooltip>
             </> : <Tooltip title="새 노트북"><IconButton size="small" aria-label="새 노트북" onClick={() => setNotebookDialogOpen(true)}><CreateNewFolderOutlinedIcon fontSize="small" /></IconButton></Tooltip>}
@@ -1489,12 +1492,13 @@ const NoteStudio = () => {
       </Menu>
       <Menu open={!!notebookMenu} onClose={() => setNotebookMenu(null)} anchorReference="anchorPosition" anchorPosition={notebookMenu ? { top: notebookMenu.mouseY, left: notebookMenu.mouseX } : undefined} MenuListProps={{ dense: true, 'aria-label': '노트북 트리 작업' }}>
         <MenuItem onClick={() => { const target = notebookMenu.notebook; setNotebookMenu(null); if (sidebarNotebookId === target.id) leaveNotebook(); else enterNotebook(target); }}>{sidebarNotebookId === notebookMenu?.notebook?.id ? '전체 노트북 보기' : '노트북 열기'}</MenuItem>
-        <MenuItem disabled={!notes.some((note) => note.notebookId === notebookMenu?.notebook?.id)} onClick={() => { const targetId = notebookMenu.notebook.id; setCollapsedPageIds((current) => new Set([...current, ...notes.filter((note) => note.notebookId === targetId).map((note) => note.id)])); setNotebookMenu(null); }}>모든 하위 페이지 접기</MenuItem>
+        <MenuItem disabled={!notes.some((note) => note.notebookId === notebookMenu?.notebook?.id)} onClick={() => { const targetId = notebookMenu.notebook.id; if (sidebarNotebookId === targetId) setCollapsedPageIds((current) => new Set([...current, ...notes.filter((note) => note.notebookId === targetId).map((note) => note.id)])); else setExpandedOverviewNotebookIds((current) => { const next = new Set(current); if (next.has(targetId)) next.delete(targetId); else next.add(targetId); return next; }); setNotebookMenu(null); }}>{sidebarNotebookId === notebookMenu?.notebook?.id ? '모든 하위 페이지 접기' : expandedOverviewNotebookIds.has(notebookMenu?.notebook?.id) ? '목록에서 하위 페이지 접기' : '목록에서 하위 페이지 펼치기'}</MenuItem>
         <Divider />
         <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => createPageInNotebook(notebookMenu.notebook, notebookMenu.anchorEl)}><ListItemIcon><AddIcon fontSize="small" /></ListItemIcon><ListItemText primary="새 페이지" secondary="형식을 다음 메뉴에서 선택" /></MenuItem>
         <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => { const target = notebookMenu.notebook; setNotebookMenu(null); openNotebookTerminal(target.id); }}><ListItemIcon><TerminalIcon fontSize="small" /></ListItemIcon><ListItemText primary="터미널 열기" secondary="이 노트북 폴더로 제한" /></MenuItem>
         {notebookMenu?.notebook?.kind === 'project' && <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => openNotebookTools(notebookMenu.notebook)}><ListItemIcon><ExtensionOutlinedIcon fontSize="small" /></ListItemIcon><ListItemText primary="개발 도구" secondary="Open VSX·VS Code 권장 확장" /></MenuItem>}
         <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => { const target = notebookMenu.notebook; setNotebookMenu(null); openFolderWindowByPath(target.path); }}>NAS 파일관리자에서 열기</MenuItem>
+        <MenuItem onClick={() => { setNotebookMenu(null); setSidebarOpen(false); }}>사이드바 숨기기 <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>Ctrl+B</Typography></MenuItem>
         <Divider />
         <MenuItem onClick={() => startRenameNotebook(notebookMenu.notebook)}><ListItemIcon><DriveFileRenameOutlineIcon fontSize="small" /></ListItemIcon><ListItemText primary="이름 바꾸기" secondary="F2 · 실제 폴더 경로 유지" /></MenuItem>
         <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={async () => { await copyTextToClipboard(notebookMenu.notebook.path); setNotebookMenu(null); }}><ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon><ListItemText primary="NAS 경로 복사" /></MenuItem>

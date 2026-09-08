@@ -1646,3 +1646,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: `verify-note-studio-notebook-scope.mjs`를 추가해 전체 목록에서 모든 노트북 페이지 트리를 동시에 렌더링하는 회귀를 차단했다. scope·compact layout·전역 UI·window manager verifier와 production frontend build, react-pdf/PDF.js compatibility gate가 통과했다. 마스터·전용 workbook을 artifact-tool로 갱신하고 재열기, 수식 오류·문자 깨짐 검사, 변경 행 렌더를 확인했다.
 - 운영 검증·배포: commit `89ea94e`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. NAS에서 notebook scope·compact layout·전역 UI·window manager verifier가 모두 통과했다. 검증된 로컬 production build의 `main.8a10aea6.js`와 Note Studio lazy chunk `955.6a9cfa89.chunk.js`를 운영 배포했고 두 파일의 로컬/운영 SHA-256이 각각 일치한다. 내부 3030·공개 HTTPS 200, 필수 6개 서비스 active, PM2 `msp-backend` online, NAS checkout clean이다.
 - 남은 확인: Chrome 운영 탭은 인증되지 않은 로그인 화면이므로 실제 노트북 데이터가 있는 화면에서 `노트북 선택 → 해당 페이지만 표시 → BACK → 전체 목록`, 범위 검색, 새로고침 복원을 포인터·키보드로 누르는 시각 E2E는 수행하지 않았다. 정적 UI 계약·production compile·NAS verifier·실제 운영 bundle 반영은 완료했다.
+
+### 2026-09-08 노트북 인라인 펼침·상단 버튼 밀도 교정
+
+- 사용자 교정: 직전 구현처럼 전체 목록에서 페이지를 완전히 숨기는 것이 아니라, 각 노트북 왼쪽 버튼으로 그 노트북의 하위 페이지를 필요할 때만 펼쳐 볼 수 있어야 한다. 동시에 전용 보기 상단의 빽빽한 버튼 배열을 정리해야 한다.
+- 탐색 동작: 전체 목록의 chevron은 클릭 이벤트를 행에 전달하지 않고 해당 노트북의 페이지 트리만 인라인으로 펼치거나 접는다. 노트북 이름/행을 선택하면 기존처럼 그 노트북 전용 보기로 진입하고 `BACK`으로 전체 목록에 돌아온다. 인라인 child page를 선택해도 해당 노트북 전용 보기와 편집 문맥을 맞춘다.
+- 버튼 정리: 전용 상단에는 `BACK`, 말줄임 처리된 노트북명, `새 페이지`, `더보기`만 상시 표시한다. 터미널, 모든 하위 페이지 접기, 사이드바 숨기기는 노트북 더보기 메뉴로 이동해 기능은 잃지 않고 시각 밀도만 낮췄다. 전체 보기에는 사이드바 숨기기와 새 노트북만 유지한다.
+- 상태·검색: 전체 목록 펼침 상태는 `expandedOverviewNotebookIds`로 계정·장치 view-state에 저장한다. 전체 보기 검색은 노트북명만 필터링하며 서버의 page 목록을 검색어로 잘라내지 않아 펼친 트리와 페이지 수가 왜곡되지 않는다. 전용 보기 검색만 해당 노트북 페이지에 적용한다.
+- 검증: notebook scope·compact layout·전역 UI contract·window manager verifier와 production build, react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. 마스터·Note Studio workbook은 artifact-tool로 갱신했고 재열기, 수식 오류 0건, 변경 행 렌더를 확인했다.
+- 현재 상태: 코드와 문서는 로컬 검증 완료, 운영 배포 대기다. 로그인된 실제 여러 노트북 화면에서 chevron, 행 진입, BACK, 좁은 폭과 키보드 포커스를 누르는 시각 E2E는 배포 뒤에도 인증 세션에서 한 번 확인해야 한다.

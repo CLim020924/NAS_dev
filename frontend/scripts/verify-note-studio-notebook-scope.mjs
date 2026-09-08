@@ -12,6 +12,11 @@ const required = [
   ['scoped search label', "placeholder={sidebarNotebook ? '이 노트북 검색' : '노트북 검색'}"],
   ['scoped page tree', 'sidebarNotebookTree.notes.map'],
   ['scope entry on notebook click', 'onClick={() => enterNotebook(notebook)}'],
+  ['overview inline expansion state', 'const [expandedOverviewNotebookIds, setExpandedOverviewNotebookIds]'],
+  ['overview child toggle', '하위 목록 펼치기'],
+  ['overview inline child tree', 'expanded && <Box role="group"'],
+  ['compact scoped toolbar', '>BACK</Button>'],
+  ['secondary actions in overflow', '>사이드바 숨기기 <Typography'],
 ];
 
 for (const [label, marker] of required) {
@@ -20,6 +25,11 @@ for (const [label, marker] of required) {
 
 if (source.includes('notesByNotebook.map(({ notebook, notes: notebookNotes')) {
   throw new Error('Overview must not render every notebook page tree at once.');
+}
+
+const scopedToolbar = source.match(/\{sidebarNotebook \? <>[\s\S]*?<\/>(?:\s*:\s*<Tooltip)/)?.[0] || '';
+if (scopedToolbar.includes('모든 하위 페이지 접기') || scopedToolbar.includes('이 노트북에서 터미널 열기')) {
+  throw new Error('Scoped toolbar must keep terminal and bulk collapse inside the overflow menu.');
 }
 
 console.log('Note Studio notebook scope verifier passed.');
