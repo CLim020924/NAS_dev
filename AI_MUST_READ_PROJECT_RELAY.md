@@ -1595,3 +1595,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 회귀: `frontend/scripts/verify-note-studio-compact-layout.mjs`가 중복 제목 제거, 30/40px 높이, 짧은 실행·문서 라벨, Note Studio/전역 한 줄 규칙을 검사한다. 로컬 verifier와 production/PDF.js 4.8.69 build가 통과했고 NAS에서도 verifier와 기존 frontend 8/8이 통과했다.
 - NAS 빌드 관찰: NAS 직접 production build는 swap 976MiB가 전부 사용된 상태에서 조기 종료됐고 당시 load average가 42까지 상승했다. 소스·테스트 오류는 아니며 최종 commit과 동일한 검증된 Windows 로컬 build `main.48759c30.js`를 staging 경로로 전송해 `/var/www/html`에 배포했다. 내부 3030과 공개 HTTPS는 200이다. 저사양 NAS에서 production build를 연속 실행하지 않는다.
 - 현재 경계: 자동 브라우저의 NAS 탭은 로그인 화면이라 실제 사용자 Note Studio의 좁은 창, 매우 긴 노트명, hover tooltip을 육안 확인하지 못했다. 정적 정책·production compile·NAS 회귀·운영 번들 반영은 완료했고 다음 로그인 세션에서는 창 폭을 줄여 한 줄 유지와 제목 입력 폭을 최종 확인한다.
+
+### 2026-09-08 전체 플랫폼 UI 컨트롤 계약·취약 영역 교정
+
+- 사용자 요청: Note Studio에서 발견한 두 줄 버튼 문제만 고치는 데 그치지 말고 전체 플랫폼의 다른 화면도 전수 확인한다. 앞으로 추가하는 버튼과 기능에도 같은 UI 주의사항이 자동으로 적용되고 회귀 검증되어야 한다.
+- 전수 진단: `frontend/src`의 115개 JavaScript/TypeScript source를 대상으로 버튼·탭·Chip·DialogActions·가로 툴바·창 title·파일/폴더/사용자/앱 동적 이름을 검색했다. 실제 공통 결함은 Button nowrap만으로 부모 행의 overflow를 해결하지 못하는 점, 탭과 DialogActions의 좁은 화면 정책 부재, 동적 Chip/창 이름이 제어 버튼을 밀 수 있는 점, 문서 변환의 고정 가로 버튼 그룹이었다.
+- 전역 계약: `ThemeContext`에서 Button 한 줄·비축소를 유지하고 DialogActions는 버튼 단위 wrap과 일정 gap을 사용한다. Tabs는 작은 화면에서 가로 스크롤 버튼을 제공하고 Chip label은 정해진 폭에서 말줄임표를 사용한다. `.nas-control-row`와 `.nas-dynamic-label`을 추가해 새 기능도 컨트롤 단위 재배치와 `min-width:0 + ellipsis` 규칙을 재사용한다. 설명 본문이나 사용자가 쓴 문장까지 전역으로 자르지는 않는다.
+- 실제 교정: `TopBar`, `GlobalAppWindowLayer`, 구·신 NAS 창 구현, 기본 `Header`, `DocumentStudio`를 수정했다. 긴 최소화 파일·폴더·앱·채팅 이름과 창 title에는 전체 title을 남기고, 창 제어 그룹은 줄어들지 않게 했다. 모바일 top bar에서는 최소화 Chip을 숨기고 기존 웹 창 전환 기능으로 접근한다. Document Studio의 기기/NAS 불러오기 버튼은 작은 화면에서 세로 배치하고, 순서/진행 버튼은 컨트롤 단위로 wrap하며 긴 picker 경로와 항목 이름을 안전하게 자른다. 주요 IconButton에는 aria-label/title을 보강했다.
+- 향후 필수 규칙: 버튼 텍스트를 두 줄로 접어 공간 문제를 숨기지 않는다. 짧은 라벨+tooltip/aria-label을 우선하고, 의미를 줄일 수 없으면 부모 action group을 wrap 또는 세로 배치한다. 동적 compact 이름은 `minWidth:0`, ellipsis, 전체 title을 함께 사용하고 창 닫기·최대화 같은 제어 그룹은 `flexShrink:0`을 유지한다. 작은 화면에서 기능을 숨길 때는 창 전환기 같은 대체 접근 경로가 반드시 있어야 한다.
+- 자동 검증: `frontend/scripts/verify-ui-contract.mjs`와 `verify:ui-contract`를 추가했다. 실행 위치와 무관하게 frontend root를 찾으며 Button, DialogActions, Tabs, Chip, 동적 이름과 주요 창 title 계약이 제거되면 실패한다. UI contract, window manager, Note Studio compact verifier가 통과했고 production build 및 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. 로컬 중복 ESLint 설치 경로 충돌은 `DISABLE_ESLINT_PLUGIN=true`로 compile을 별도 확인했으며 소스 컴파일 오류는 없었다.
+- 배포: 코드 commits `a9c4b8c`, `5a80b8e`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. 검증된 로컬 산출물 `main.29ae622b.js`를 `/var/www/html`에 배포했고 내부 3030과 공개 HTTPS는 모두 200이다. 마스터 workbook의 feature/relation/code/do-not-break/patch/request/check 기록을 artifact-tool로 갱신하고 수식 오류·문자 깨짐 검사와 변경 시트 렌더를 확인했다.
+- 남은 확인: 자동 브라우저에는 로그인된 NAS 세션이 없어 실제 사용자 데이터의 매우 긴 파일명·사용자명·노트명과 360px 폭에서 hover/title을 육안으로 누르는 E2E는 수행하지 않았다. 코드 계약·production build·NAS verifier·운영 번들 반영은 완료했으며, 다음 인증된 화면 확인에서는 이 시각 검증만 남는다.
