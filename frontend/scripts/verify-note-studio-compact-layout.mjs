@@ -20,7 +20,7 @@ const assert = (condition, message) => {
 
 assert(noteStudio.includes('className="note-studio-shell"'), 'Note Studio must scope compact label rules.');
 assert(noteStudio.includes('minHeight: 40, maxHeight: 40'), 'The note title/action row must remain 40px tall.');
-assert(noteStudio.includes("codeRunning ? '실행 중' : '실행'"), 'The code action must use the compact run label.');
+assert(noteStudio.includes("codeRunning ? '대기·실행'") && noteStudio.includes("? '검증' : '실행'"), 'Code actions must keep compact queue, validate, and run labels.');
 assert(!noteStudio.includes("'Python' : 'JavaScript'} 실행`}</Button>"), 'Language names must not be repeated inside the run button.');
 assert(noteStudio.includes('>문서</Button>'), 'The connected-document action must use a compact label.');
 assert(noteStudio.includes('aria-label="페이지 작업 더보기"') && noteStudio.includes('primary="버전 기록"') && noteStudio.includes('primary="파일로 내보내기"'), 'Secondary page actions must remain grouped in the overflow menu.');
