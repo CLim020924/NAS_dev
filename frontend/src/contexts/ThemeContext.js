@@ -19,6 +19,8 @@ const sharedComponents = {
         boxShadow: 'none',
         minHeight: 36,
         paddingInline: 14,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
         transition: 'background-color 120ms ease, border-color 120ms ease, color 120ms ease',
         '&:active': { transform: 'none' }
       },

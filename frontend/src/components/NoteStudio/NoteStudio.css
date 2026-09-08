@@ -1,3 +1,35 @@
+.note-studio-shell .MuiButton-root,
+.note-studio-shell .MuiChip-label,
+.note-studio-shell .MuiToggleButton-root {
+  white-space: nowrap;
+}
+
+.note-studio-shell .MuiButton-root,
+.note-studio-shell .MuiChip-root,
+.note-studio-shell .MuiIconButton-root,
+.note-studio-shell .MuiToggleButton-root {
+  flex-shrink: 0;
+}
+
+.note-studio-shell .MuiChip-root {
+  max-width: min(320px, 100%);
+}
+
+.note-studio-shell .MuiChip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.note-studio-page-bar,
+.note-studio-compact-controls {
+  scrollbar-width: none;
+}
+
+.note-studio-page-bar::-webkit-scrollbar,
+.note-studio-compact-controls::-webkit-scrollbar {
+  display: none;
+}
+
 .note-studio-editor {
   height: 100%;
   overflow: auto;

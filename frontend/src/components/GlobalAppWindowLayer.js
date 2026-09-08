@@ -100,6 +100,7 @@ const GlobalAppWindowLayer = () => {
       <AnimatePresence>
         {appWindows.map((win) => {
           const isActive = focusedContext === win.id;
+          const compactAppChrome = win.appId === 'note-studio';
           return (
             <Rnd
               key={win.id}
@@ -126,12 +127,12 @@ const GlobalAppWindowLayer = () => {
             >
               <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97 }} style={{ height: '100%', width: '100%' }}>
                 <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: win.isMaximized ? 0 : 1.5, border: `1px solid ${isActive ? alpha(theme.palette.primary.main, 0.62) : theme.palette.divider}`, boxShadow: `0 12px 34px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.38 : 0.12)}` }}>
-                  <Box className="platform-window-header" sx={{ height: 46, px: 1.25, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, cursor: win.isMaximized ? 'default' : 'move', bgcolor: isActive ? alpha(theme.palette.primary.main, 0.07) : 'background.paper' }}>
-                    <Typography sx={{ fontWeight: 900 }}>{win.name}</Typography>
+                  <Box className="platform-window-header" data-compact-app-chrome={compactAppChrome ? 'true' : undefined} sx={{ height: compactAppChrome ? 30 : 46, px: compactAppChrome ? 0.5 : 1.25, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, cursor: win.isMaximized ? 'default' : 'move', bgcolor: isActive ? alpha(theme.palette.primary.main, compactAppChrome ? 0.035 : 0.07) : 'background.paper', flexShrink: 0 }}>
+                    {compactAppChrome ? <Box aria-hidden="true" sx={{ flex: 1, height: '100%' }} /> : <Typography sx={{ fontWeight: 900 }}>{win.name}</Typography>}
                     <Box onMouseDown={(e) => e.stopPropagation()}>
-                      <IconButton size="small" onClick={() => toggleMinimize(win.id)}><RemoveIcon fontSize="small" /></IconButton>
-                      <IconButton size="small" onClick={() => toggleMaximize(win.id)}><CropSquareIcon fontSize="small" /></IconButton>
-                      <IconButton size="small" color="error" onClick={() => handleClose(win)}><CloseIcon fontSize="small" /></IconButton>
+                      <IconButton size="small" aria-label="최소화" onClick={() => toggleMinimize(win.id)} sx={compactAppChrome ? { width: 28, height: 28 } : undefined}><RemoveIcon fontSize="small" /></IconButton>
+                      <IconButton size="small" aria-label="최대화" onClick={() => toggleMaximize(win.id)} sx={compactAppChrome ? { width: 28, height: 28 } : undefined}><CropSquareIcon fontSize="small" /></IconButton>
+                      <IconButton size="small" aria-label="닫기" color="error" onClick={() => handleClose(win)} sx={compactAppChrome ? { width: 28, height: 28 } : undefined}><CloseIcon fontSize="small" /></IconButton>
                     </Box>
                   </Box>
                   <Box sx={{ flex: 1, minHeight: 0 }}>

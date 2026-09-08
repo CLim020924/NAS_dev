@@ -444,9 +444,9 @@ function ServicePlatform() {
   if (inlineApp) {
     return (
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
-        <Box sx={{ height: 54, px: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: 'background.paper', flexShrink: 0 }}>
+        {inlineApp.id !== 'note-studio' && <Box sx={{ height: 54, px: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, bgcolor: 'background.paper', flexShrink: 0 }}>
           <Typography sx={{ fontWeight: 900 }}>{inlineApp.title}</Typography>
-        </Box>
+        </Box>}
         <Box sx={{ flex: 1, minHeight: 0 }}>
           {inlineApp.id === 'meeting' ? (
             <MeetingApp

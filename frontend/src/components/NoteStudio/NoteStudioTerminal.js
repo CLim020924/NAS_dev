@@ -167,7 +167,7 @@ const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onCl
             })}
           </List>}
         </Box>
-        <Button onClick={() => onOpenFolder?.(notebook.path)} sx={{ m: 1, color: '#c4ccd6', borderColor: '#394250' }} size="small" variant="outlined">NAS 파일관리자에서 열기</Button>
+        <Tooltip title="NAS 파일관리자에서 노트북 폴더 열기"><Button onClick={() => onOpenFolder?.(notebook.path)} sx={{ m: 1, color: '#c4ccd6', borderColor: '#394250' }} size="small" variant="outlined">파일관리자에서 열기</Button></Tooltip>
       </Box>}
 
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
