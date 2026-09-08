@@ -466,7 +466,7 @@ const DocumentStudio = () => {
 
           {results.length > 0 && (
             <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1, borderColor: 'success.main' }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}><Stack direction="row" spacing={1} alignItems="center"><CheckCircleIcon color="success" /><Typography sx={{ fontWeight: 900 }}>완료 파일</Typography></Stack><Button startIcon={<FolderOpenIcon />} onClick={() => openFolderWindowByPath(ensureSlash(outputPath))}>완료 파일 폴더 열기</Button></Stack>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}><Stack direction="row" spacing={1} alignItems="center"><CheckCircleIcon color="success" /><Typography sx={{ fontWeight: 900 }}>완료 파일</Typography></Stack><Tooltip title="완료 파일이 저장된 폴더 열기"><Button startIcon={<FolderOpenIcon />} onClick={() => openFolderWindowByPath(ensureSlash(outputPath))}>결과 폴더</Button></Tooltip></Stack>
               <Stack spacing={0.75}>{results.map((result) => {
                 const isPdf = (result.outputFormat || getStudioExtension(result.name)) === 'pdf';
                 const compatibilityLabel = result.compatibility === 'original-pdf-merge'

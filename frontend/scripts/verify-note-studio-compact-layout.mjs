@@ -9,6 +9,8 @@ const noteCss = read('src/components/NoteStudio/NoteStudio.css');
 const appWindows = read('src/components/GlobalAppWindowLayer.js');
 const platform = read('src/components/ServicePlatform.js');
 const theme = read('src/contexts/ThemeContext.js');
+const aiAgent = read('src/components/AiAgentPanel.js');
+const documentStudio = read('src/components/DocumentStudio/DocumentStudio.js');
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -25,5 +27,8 @@ assert(appWindows.includes("const compactAppChrome = win.appId === 'note-studio'
 assert(appWindows.includes('compactAppChrome ? 30 : 46'), 'The compact app chrome must be 30px tall.');
 assert(platform.includes("inlineApp.id !== 'note-studio'"), 'Inline Note Studio must not duplicate the app heading.');
 assert(theme.includes("whiteSpace: 'nowrap'") && theme.includes('flexShrink: 0'), 'Global NAS buttons must not split into multiple lines.');
+assert(aiAgent.includes('>답변 이어가기</Button>') && !aiAgent.includes('>작업 재실행 없이 답변 이어받기</Button>'), 'Long AI continuation labels must be compact.');
+assert(platform.includes('>설치 앱 연결</Button>') && platform.includes('>탐색기 열기</Button>'), 'PC connection dialog actions must use compact labels.');
+assert(documentStudio.includes('>결과 폴더</Button>'), 'Document Studio result toolbar must use a compact folder label.');
 
 console.log('Note Studio compact layout and single-line control policy verified.');

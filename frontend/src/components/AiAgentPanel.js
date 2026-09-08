@@ -426,7 +426,9 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                     </Stack>
                   )}
                   {action.continuationStatus === 'response_pending' && action.agentRunId && (
-                    <Button size="small" sx={{ mt: 1 }} disabled={loading} onClick={() => resumeRun(action.agentRunId)}>작업 재실행 없이 답변 이어받기</Button>
+                    <Tooltip title="작업을 다시 실행하지 않고 승인 이후 답변만 이어받기">
+                      <Button size="small" sx={{ mt: 1 }} disabled={loading} onClick={() => resumeRun(action.agentRunId)}>답변 이어가기</Button>
+                    </Tooltip>
                   )}
                 </Paper>
               ))}

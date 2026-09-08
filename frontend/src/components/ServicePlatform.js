@@ -542,13 +542,13 @@ function ServicePlatform() {
             )}
           </Stack>
         </DialogContent>
-        <DialogActions>
-          {!pcLinkedHere && <Button variant="outlined" onClick={openInstalledDrive}>설치된 NAS Drive 열기</Button>}
-          {(pcSyncState === 'needs-install' || pcSyncState === 'installing') && <Button variant="outlined" onClick={connectInstalledPcAgent}>이미 설치됨 · 이 계정 연결</Button>}
-          {(pcSyncState === 'needs-install' || pcSyncState === 'installing') && <Button variant="contained" onClick={downloadPcAgent}>{pcSyncState === 'installing' ? '설치 프로그램 다시 받기' : '설치 프로그램 다운로드'}</Button>}
+        <DialogActions sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+          {!pcLinkedHere && <Tooltip title="설치된 NAS Drive 열기"><Button variant="outlined" onClick={openInstalledDrive}>Drive 열기</Button></Tooltip>}
+          {(pcSyncState === 'needs-install' || pcSyncState === 'installing') && <Tooltip title="이미 설치된 앱을 현재 계정에 연결"><Button variant="outlined" onClick={connectInstalledPcAgent}>설치 앱 연결</Button></Tooltip>}
+          {(pcSyncState === 'needs-install' || pcSyncState === 'installing') && <Tooltip title={pcSyncState === 'installing' ? '설치 프로그램 다시 받기' : '설치 프로그램 다운로드'}><Button variant="contained" onClick={downloadPcAgent}>{pcSyncState === 'installing' ? '다시 받기' : '다운로드'}</Button></Tooltip>}
           {pcSyncState === 'error' && <Button variant="contained" onClick={startPcSyncFlow}>다시 시도</Button>}
-          {pcSyncState === 'connected' && <Button variant="contained" onClick={openLinkedDrive}>파일 탐색기에서 열기</Button>}
-          {pcSyncState === 'manager' && pcLinkedHere && <Button variant="contained" onClick={openLinkedDrive}>파일 탐색기에서 열기</Button>}
+          {pcSyncState === 'connected' && <Tooltip title="Windows 파일 탐색기에서 NAS Drive 열기"><Button variant="contained" onClick={openLinkedDrive}>탐색기 열기</Button></Tooltip>}
+          {pcSyncState === 'manager' && pcLinkedHere && <Tooltip title="Windows 파일 탐색기에서 NAS Drive 열기"><Button variant="contained" onClick={openLinkedDrive}>탐색기 열기</Button></Tooltip>}
           <Button onClick={() => setPcSyncOpen(false)}>닫기</Button>
         </DialogActions>
       </Dialog>
