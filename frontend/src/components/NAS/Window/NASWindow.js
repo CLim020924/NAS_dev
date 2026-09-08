@@ -231,14 +231,16 @@ const NASWindow = ({
             cursor: fillsParent ? 'default' : 'move',
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
             {isFolder && (
               <>
-                <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleSidebar?.(safeWin.id); }}>
+                <IconButton size="small" aria-label="사이드바 전환" title="사이드바 전환" onClick={(e) => { e.stopPropagation(); toggleSidebar?.(safeWin.id); }}>
                   <MenuIcon fontSize="small" />
                 </IconButton>
                 <IconButton
                   size="small"
+                  aria-label="상위 폴더"
+                  title="상위 폴더"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (typeof handleUp === 'function') handleUp(safeWin);
@@ -252,6 +254,8 @@ const NASWindow = ({
 
             <Typography
               variant="body2"
+              className="nas-dynamic-label"
+              title={isFolder ? (safeWin.currentPath || safeWin.name || '/') : (safeWin.name || 'file')}
               sx={{
                 ml: 1,
                 fontWeight: 800,
@@ -264,7 +268,7 @@ const NASWindow = ({
             </Typography>
           </Box>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flexShrink: 0 }}>
             <IconButton size="small" onClick={(e) => { e.stopPropagation(); toggleMinimize?.(safeWin.id); }} title="최소화">
               <RemoveIcon fontSize="small" />
             </IconButton>

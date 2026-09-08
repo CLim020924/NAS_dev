@@ -275,7 +275,7 @@ const TopBar = ({
   return (
     <>
       <AppBar position="fixed" elevation={0} sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.94), backdropFilter: 'blur(14px)', color: 'text.primary', borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
-        <Toolbar size="small" sx={{ minHeight: '48px !important', gap: 1 }}>
+        <Toolbar size="small" sx={{ minHeight: '48px !important', gap: 1, minWidth: 0, overflow: 'hidden' }}>
           <IconButton
             size="small"
             aria-label={taskSwitcherOpen ? '웹 내부 창 전환 모드 끄기' : '웹 내부 창 전환 모드 켜기'}
@@ -300,7 +300,7 @@ const TopBar = ({
           >
             <ViewCarouselOutlinedIcon sx={{ fontSize: 15 }} />
           </IconButton>
-          {taskSwitcherOpen && <Chip size="small" color="error" variant="outlined" label="웹 창 전환 · Tab / Shift+Tab" sx={{ height: 26, flex: '0 0 auto' }} />}
+          {taskSwitcherOpen && <Chip size="small" color="error" variant="outlined" label="웹 창 전환 · Tab / Shift+Tab" title="웹 창 전환 · Tab / Shift+Tab" sx={{ height: 26, flex: '0 1 auto', maxWidth: { xs: 120, sm: 220 } }} />}
           <Box onClick={goDesktop} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
             <Box sx={{ width: 28, height: 28, borderRadius: 1, display: 'grid', placeItems: 'center', color: 'primary.main', border: (theme) => `1px solid ${theme.palette.divider}` }}>
               <FolderIcon sx={{ fontSize: 18 }} />
@@ -377,8 +377,11 @@ const TopBar = ({
                     setFolderMenuAnchorEl(e.currentTarget);
                   }
                 }}
+                title={minimizedFolders.length === 1 ? (minimizedFolders[0]?.name || '열린 폴더') : `열린 폴더 ${minimizedFolders.length}`}
                 sx={{
                   ml: 1,
+                  maxWidth: { xs: 112, md: 190 },
+                  display: { xs: 'none', md: 'inline-flex' },
                   backgroundColor: 'action.hover',
                   color: 'text.primary',
                   cursor: 'pointer'
@@ -401,8 +404,8 @@ const TopBar = ({
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
                       <FolderIcon fontSize="small" sx={{ mt: 0.2, color: 'warning.main' }} />
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography className="nas-dynamic-label" title={win.name} variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                           {win.name}
                         </Typography>
                         <Typography
@@ -439,8 +442,11 @@ const TopBar = ({
                     setFileMenuAnchorEl(e.currentTarget);
                   }
                 }}
+                title={minimizedFiles.length === 1 ? (minimizedFiles[0]?.name || '열린 파일') : `열린 파일 ${minimizedFiles.length}`}
                 sx={{
                   ml: 1,
+                  maxWidth: { xs: 112, md: 190 },
+                  display: { xs: 'none', md: 'inline-flex' },
                   backgroundColor: 'action.hover',
                   color: 'text.primary',
                   cursor: 'pointer'
@@ -463,8 +469,8 @@ const TopBar = ({
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
                       <InsertDriveFileIcon fontSize="small" sx={{ mt: 0.2, color: 'text.secondary' }} />
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography className="nas-dynamic-label" title={win.name} variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                           {win.name}
                         </Typography>
                         <Typography
@@ -501,8 +507,11 @@ const TopBar = ({
                     setAppMenuAnchorEl(e.currentTarget);
                   }
                 }}
+                title={minimizedApps.length === 1 ? (minimizedApps[0]?.name || '실행 중인 앱') : `실행 앱 ${minimizedApps.length}`}
                 sx={{
                   ml: 1,
+                  maxWidth: { xs: 112, md: 190 },
+                  display: { xs: 'none', md: 'inline-flex' },
                   backgroundColor: 'action.hover',
                   color: 'text.primary',
                   cursor: 'pointer'
@@ -525,8 +534,8 @@ const TopBar = ({
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
                       <VideocamIcon fontSize="small" sx={{ mt: 0.2, color: 'info.main' }} />
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography className="nas-dynamic-label" title={win.name} variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                           {win.name}
                         </Typography>
                         <Typography
@@ -563,8 +572,11 @@ const TopBar = ({
                     setChatMenuAnchorEl(e.currentTarget);
                   }
                 }}
+                title={minimizedChats.length === 1 ? (minimizedChats[0]?.name || '열린 채팅') : `열린 채팅 ${minimizedChats.length}`}
                 sx={{
                   ml: 1,
+                  maxWidth: { xs: 112, md: 190 },
+                  display: { xs: 'none', md: 'inline-flex' },
                   backgroundColor: 'action.hover',
                   color: 'text.primary',
                   cursor: 'pointer'
@@ -587,8 +599,8 @@ const TopBar = ({
                       sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}
                     >
                       <ChatBubbleOutlineIcon fontSize="small" sx={{ mt: 0.2, color: 'primary.main' }} />
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography className="nas-dynamic-label" title={win.name} variant="body2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
                           {win.name}
                         </Typography>
                         <Typography
@@ -638,12 +650,12 @@ const TopBar = ({
             />
           )}
 
-          <Box sx={{ display: 'flex', gap: 0.5 }}>
-            <IconButton onClick={onOpenAi} size="small" sx={{ color: 'primary.main', bgcolor: 'action.hover' }} title="AI 에이전트">
+          <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
+            <IconButton aria-label="AI 에이전트 열기" onClick={onOpenAi} size="small" sx={{ color: 'primary.main', bgcolor: 'action.hover' }} title="AI 에이전트">
               <SmartToyIcon fontSize="small" />
             </IconButton>
 
-            <IconButton onClick={onOpenNotifications} size="small" sx={{ color: 'text.primary', bgcolor: 'action.hover' }}>
+            <IconButton aria-label="알림 열기" title="알림" onClick={onOpenNotifications} size="small" sx={{ color: 'text.primary', bgcolor: 'action.hover' }}>
               <Badge
                 color="error"
                 badgeContent={unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
@@ -654,6 +666,8 @@ const TopBar = ({
             </IconButton>
 
             <IconButton
+              aria-label="채팅방 열기"
+              title="채팅방"
               onClick={onOpenRooms}
               size="small"
               sx={{
@@ -667,6 +681,8 @@ const TopBar = ({
             </IconButton>
 
             <IconButton
+              aria-label="친구 관리 열기"
+              title="친구 관리"
               onClick={onOpenFriends}
               size="small"
               sx={{
@@ -679,10 +695,10 @@ const TopBar = ({
               <ManageAccountsIcon fontSize="small" />
             </IconButton>
 
-            <IconButton onClick={() => { showDesktop(); navigate('/nas'); }} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
-            <IconButton onClick={() => { showDesktop(); navigate('/settings'); }} size="small" sx={{ color: 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
+            <IconButton aria-label="파일 관리자 열기" title="파일 관리자" onClick={() => { showDesktop(); navigate('/nas'); }} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
+            <IconButton aria-label="설정 열기" title="설정" onClick={() => { showDesktop(); navigate('/settings'); }} size="small" sx={{ color: 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
 
-            <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} size="small">
+            <IconButton aria-label="계정 메뉴 열기" title="계정 메뉴" onClick={(e) => setAnchorEl(e.currentTarget)} size="small">
               <Avatar sx={{ width: 28, height: 28, fontSize: '0.8rem', bgcolor: 'primary.main', fontWeight: 'bold' }}>
                 {(user.nickname || user.displayName || user.username)?.[0]?.toUpperCase()}
               </Avatar>
@@ -691,7 +707,7 @@ const TopBar = ({
 
           <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)} PaperProps={{ elevation: 0, sx: { mt: 1, minWidth: 150, borderRadius: 1 } }}>
             <Box sx={{ px: 2, py: 1, outline: 'none' }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>{user.nickname || user.displayName || user.username}</Typography>
+              <Typography className="nas-dynamic-label" title={user.nickname || user.displayName || user.username} variant="subtitle2" sx={{ fontWeight: 'bold', maxWidth: 220 }}>{user.nickname || user.displayName || user.username}</Typography>
               <Typography variant="caption" color="text.secondary">
                 {(user.displayName && user.displayName !== user.username ? `@${user.username} · ` : '')}{user.role}
               </Typography>

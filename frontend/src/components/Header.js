@@ -25,7 +25,7 @@ function Header({ onMenuClick }) {
 
   return (
     <AppBar position="static" sx={{ backgroundColor }}>
-      <Toolbar sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'nowrap' }}>
+      <Toolbar sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'nowrap', minWidth: 0, gap: 1, overflow: 'hidden' }}>
         
 
         {/* [추가] 햄버거 버튼: 로그인한 사용자에게만 보여줍니다 */}
@@ -33,19 +33,20 @@ function Header({ onMenuClick }) {
           <IconButton
             edge="start"
             color="inherit"
-            aria-label="menu"
+            aria-label="메뉴 열기"
+            title="메뉴"
             onClick={onMenuClick} // 클릭 시 부모(App.js)의 사이드바 토글 함수 실행
             sx={{ mr: 2 }}
           >
             <MenuIcon />
           </IconButton>
         )}
-        <Typography variant="h6" sx={{ flexGrow: 1 }}>
+        <Typography className="nas-dynamic-label" title="My Service Platform" variant="h6" sx={{ flexGrow: 1 }}>
           My Service Platform
         </Typography>
         {currentUser ? (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="body1">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flexShrink: 0 }}>
+            <Typography className="nas-dynamic-label" title={currentUser.id} variant="body1" sx={{ display: { xs: 'none', sm: 'block' }, maxWidth: 160 }}>
               {currentUser.id}
             </Typography>
             <Button color="inherit" onClick={() => navigate('/my-info')}>

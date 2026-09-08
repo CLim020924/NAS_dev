@@ -31,6 +31,16 @@ const sharedComponents = {
       outlined: { borderColor: 'currentColor' }
     }
   },
+  MuiDialogActions: {
+    styleOverrides: {
+      root: {
+        flexWrap: 'wrap',
+        gap: 8,
+        minWidth: 0,
+        '& > :not(style) ~ :not(style)': { marginLeft: 0 }
+      }
+    }
+  },
   MuiPaper: {
     styleOverrides: {
       root: {
@@ -99,7 +109,26 @@ const sharedComponents = {
     }
   },
   MuiChip: {
-    styleOverrides: { root: { borderRadius: 4, fontWeight: 650 } }
+    styleOverrides: {
+      root: { borderRadius: 4, fontWeight: 650, maxWidth: '100%', minWidth: 0 },
+      label: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+    }
+  },
+  MuiTab: {
+    styleOverrides: {
+      root: {
+        minHeight: 40,
+        whiteSpace: 'nowrap',
+        flexShrink: 0
+      }
+    }
+  },
+  MuiTabs: {
+    defaultProps: {
+      variant: 'scrollable',
+      scrollButtons: 'auto',
+      allowScrollButtonsMobile: true
+    }
   },
   MuiListItemButton: {
     styleOverrides: { root: { borderRadius: 4, transition: 'background-color 120ms ease, color 120ms ease' } }
@@ -281,6 +310,21 @@ export const CustomThemeProvider = ({ children }) => {
           '.MuiButtonBase-root:focus-visible': {
             outline: `2px solid ${alpha(activeTheme.palette.primary.main, 0.7)}`,
             outlineOffset: 2
+          },
+          '.nas-control-row': {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            minWidth: 0,
+            flexWrap: 'wrap'
+          },
+          '.nas-dynamic-label': {
+            display: 'block',
+            minWidth: 0,
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
           },
           '*::-webkit-scrollbar': {
             width: 10,

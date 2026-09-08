@@ -420,9 +420,9 @@ const DocumentStudio = () => {
           <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
               <Box><Typography sx={{ fontWeight: 900 }}>{['convert-pdf', 'template-pptx'].includes(mode) ? '2' : '1'}. 파일 불러오기</Typography><Typography variant="caption" color="text.secondary">두 출처의 파일을 같은 목록에 추가할 수 있습니다.</Typography></Box>
-              <Stack direction="row" spacing={1}>
-                <Button variant="outlined" startIcon={<FolderOpenIcon />} onClick={openNasPicker}>NAS에서 불러오기</Button>
-                <Button variant="contained" startIcon={uploading ? <CircularProgress size={16} color="inherit" /> : <UploadFileIcon />} disabled={uploading} onClick={() => deviceInputRef.current?.click()}>이 기기에서 불러오기</Button>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>
+                <Button variant="outlined" startIcon={<FolderOpenIcon />} onClick={openNasPicker} sx={{ width: { xs: '100%', sm: 'auto' } }}>NAS에서 불러오기</Button>
+                <Button variant="contained" startIcon={uploading ? <CircularProgress size={16} color="inherit" /> : <UploadFileIcon />} disabled={uploading} onClick={() => deviceInputRef.current?.click()} sx={{ width: { xs: '100%', sm: 'auto' } }}>이 기기에서 불러오기</Button>
                 <input ref={deviceInputRef} type="file" accept={activeAccept} multiple hidden onChange={handleDeviceFiles} />
               </Stack>
             </Stack>
@@ -431,7 +431,7 @@ const DocumentStudio = () => {
               <Box sx={{ py: 4, textAlign: 'center', color: 'text.secondary' }}><DescriptionIcon sx={{ fontSize: 42, opacity: 0.4 }} /><Typography>파일을 불러오면 이곳에 순서대로 표시됩니다.</Typography></Box>
             ) : (
               <Stack spacing={0.75}>
-                <Stack direction="row" justifyContent="space-between" alignItems="center"><Typography variant="caption" color="text.secondary">끌어서 놓거나 화살표로 순서를 바꿀 수 있습니다.</Typography><Button size="small" startIcon={<SwapVertIcon />} onClick={() => setItems((current) => [...current].reverse())}>순서 반전</Button></Stack>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={0.5}><Typography variant="caption" color="text.secondary">끌어서 놓거나 화살표로 순서를 바꿀 수 있습니다.</Typography><Button size="small" startIcon={<SwapVertIcon />} onClick={() => setItems((current) => [...current].reverse())}>순서 반전</Button></Stack>
                 {items.map((item, index) => (
                   <Paper key={`${item.fullPath}-${index}`} draggable onDragStart={() => { dragIndexRef.current = index; }} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (dragIndexRef.current !== null) moveItem(dragIndexRef.current, index); dragIndexRef.current = null; }} elevation={0} sx={{ px: 1, py: 0.75, display: 'flex', gap: 1, alignItems: 'center', border: `1px solid ${theme.palette.divider}`, borderRadius: 1.5, cursor: 'grab' }}>
                     <Box sx={{ width: 28, height: 28, borderRadius: 1, display: 'grid', placeItems: 'center', bgcolor: 'action.hover', fontWeight: 900 }}>{index + 1}</Box>
@@ -457,7 +457,7 @@ const DocumentStudio = () => {
             {selectionError && items.length > 0 && <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.75 }}>{selectionError}</Typography>}
             {activeJob && (
               <Box sx={{ mt: 1.25 }}>
-                <Stack direction="row" spacing={1} alignItems="center"><Box sx={{ flex: 1 }}><LinearProgress variant="determinate" value={activeJob.progress || 0} /><Typography variant="caption" color="text.secondary">{activeJob.stage || activeJob.status} · {activeJob.progress || 0}%</Typography></Box>{['queued', 'running'].includes(activeJob.status) && <Button color="error" startIcon={<StopCircleIcon />} onClick={cancelJob}>취소</Button>}{activeJob.canRetry && <Button startIcon={<ReplayIcon />} onClick={retryJob}>재시도</Button>}</Stack>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap"><Box sx={{ flex: '1 1 220px', minWidth: 0 }}><LinearProgress variant="determinate" value={activeJob.progress || 0} /><Typography className="nas-dynamic-label" title={activeJob.stage || activeJob.status} variant="caption" color="text.secondary">{activeJob.stage || activeJob.status} · {activeJob.progress || 0}%</Typography></Box>{['queued', 'running'].includes(activeJob.status) && <Button color="error" startIcon={<StopCircleIcon />} onClick={cancelJob}>취소</Button>}{activeJob.canRetry && <Button startIcon={<ReplayIcon />} onClick={retryJob}>재시도</Button>}</Stack>
               </Box>
             )}
           </Paper>
@@ -487,12 +487,12 @@ const DocumentStudio = () => {
       <Dialog open={pickerOpen} onClose={() => setPickerOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>NAS에서 파일 불러오기</DialogTitle>
         <DialogContent dividers sx={{ p: 0 }}>
-          <Stack direction="row" alignItems="center" spacing={0.5} sx={{ px: 1.5, py: 1, borderBottom: `1px solid ${theme.palette.divider}` }}><IconButton size="small" disabled={pickerPath === '/'} onClick={() => loadPickerPath(parentNasPath(pickerPath))}><ArrowBackIcon fontSize="small" /></IconButton><Typography variant="body2" sx={{ fontWeight: 800 }}>{pickerPath}</Typography></Stack>
+          <Stack direction="row" alignItems="center" spacing={0.5} sx={{ px: 1.5, py: 1, borderBottom: `1px solid ${theme.palette.divider}`, minWidth: 0 }}><IconButton aria-label="상위 폴더" title="상위 폴더" size="small" disabled={pickerPath === '/'} onClick={() => loadPickerPath(parentNasPath(pickerPath))}><ArrowBackIcon fontSize="small" /></IconButton><Typography className="nas-dynamic-label" title={pickerPath} variant="body2" sx={{ fontWeight: 800 }}>{pickerPath}</Typography></Stack>
           {pickerLoading ? <Box sx={{ py: 6, display: 'grid', placeItems: 'center' }}><CircularProgress /></Box> : <Stack divider={<Divider flexItem />}>{pickerItems.map((item) => {
             const isFolder = item.type === 'folder' || item.type === 'linked-device';
             const fullPath = ensureSlash(item.fullPath);
             const checked = !!pickerSelected[fullPath];
-            return <Box key={fullPath} onDoubleClick={() => isFolder && loadPickerPath(fullPath)} sx={{ px: 1.5, py: 0.7, display: 'flex', alignItems: 'center', gap: 1, cursor: isFolder ? 'pointer' : 'default', '&:hover': { bgcolor: 'action.hover' } }}>{isFolder ? <FolderIcon color="primary" /> : <Checkbox size="small" checked={checked} onChange={(event) => setPickerSelected((current) => { const next = { ...current }; if (event.target.checked) next[fullPath] = { id: `nas-${fullPath}`, source: 'nas', name: item.name, fullPath }; else delete next[fullPath]; return next; })} />}<Typography sx={{ flex: 1, fontWeight: isFolder ? 800 : 600 }}>{item.name}</Typography>{isFolder && <IconButton size="small" onClick={() => loadPickerPath(fullPath)}><ChevronRightIcon /></IconButton>}</Box>;
+            return <Box key={fullPath} onDoubleClick={() => isFolder && loadPickerPath(fullPath)} sx={{ px: 1.5, py: 0.7, display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, cursor: isFolder ? 'pointer' : 'default', '&:hover': { bgcolor: 'action.hover' } }}>{isFolder ? <FolderIcon color="primary" /> : <Checkbox size="small" checked={checked} onChange={(event) => setPickerSelected((current) => { const next = { ...current }; if (event.target.checked) next[fullPath] = { id: `nas-${fullPath}`, source: 'nas', name: item.name, fullPath }; else delete next[fullPath]; return next; })} />}<Typography className="nas-dynamic-label" title={item.name} sx={{ flex: 1, fontWeight: isFolder ? 800 : 600 }}>{item.name}</Typography>{isFolder && <IconButton aria-label={`${item.name} 열기`} title="폴더 열기" size="small" onClick={() => loadPickerPath(fullPath)}><ChevronRightIcon /></IconButton>}</Box>;
           })}{pickerItems.length === 0 && <Typography color="text.secondary" sx={{ py: 6, textAlign: 'center' }}>지원하는 문서가 없습니다.</Typography>}</Stack>}
         </DialogContent>
         <DialogActions><Button onClick={() => setPickerOpen(false)}>취소</Button><Button variant="contained" disabled={Object.keys(pickerSelected).length === 0} onClick={addPickerSelection}>선택한 파일 추가 ({Object.keys(pickerSelected).length})</Button></DialogActions>
