@@ -1,12 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { DEFAULT_IMAGE } = require('./pythonRuntimeCatalog');
 
 const MAX_COMMAND_BYTES = 16 * 1024;
 const MAX_OUTPUT_BYTES = 128 * 1024;
 const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_SANDBOX_UID = 65532;
 
 const safeContainerName = () => `msp-terminal-${crypto.randomUUID().replace(/-/g, '')}`;
 const clamp = (value, minimum, maximum, fallback) => Math.max(minimum, Math.min(Number(value) || fallback, maximum));
@@ -71,28 +72,40 @@ const buildDockerArgs = ({
 
 const createManagedNotebookTerminal = ({
   dockerPath = '/usr/bin/docker',
+  setfaclPath = '/usr/bin/setfacl',
   image = process.env.MSP_PYTHON_IMAGE || DEFAULT_IMAGE,
   spawnImpl = spawn,
+  execFileImpl = execFile,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  sandboxUid = DEFAULT_SANDBOX_UID,
 } = {}) => {
-  const available = () => fs.existsSync(dockerPath) && fs.statSync(dockerPath).isFile();
+  const available = () => fs.existsSync(dockerPath) && fs.statSync(dockerPath).isFile()
+    && fs.existsSync(setfaclPath) && fs.statSync(setfaclPath).isFile();
   const removeContainer = (name) => new Promise((resolve) => {
     const cleanup = spawnImpl(dockerPath, ['rm', '-f', name], { stdio: 'ignore', windowsHide: true });
     cleanup.once('error', () => resolve());
     cleanup.once('exit', () => resolve());
   });
 
-  const run = ({ workspacePath, workingDirectory = '', command, cpuCores, memoryBytes, pids } = {}) => new Promise((resolve, reject) => {
-    if (!available()) return reject(Object.assign(new Error('격리 터미널 실행기가 준비되지 않았습니다.'), { status: 503, code: 'TERMINAL_WORKER_UNAVAILABLE' }));
+  const prepareWorkspaceAccess = (workspace) => new Promise((resolve, reject) => {
+    execFileImpl(setfaclPath, ['-R', '-m', `u:${sandboxUid}:rwX`, workspace], { windowsHide: true, timeout: 10_000 }, (error) => {
+      if (error) return reject(Object.assign(new Error('노트북 터미널의 제한된 쓰기 권한을 준비하지 못했습니다.'), { status: 503, code: 'TERMINAL_ACL_FAILED' }));
+      return resolve();
+    });
+  });
+
+  const run = async ({ workspacePath, workingDirectory = '', command, cpuCores, memoryBytes, pids } = {}) => {
+    if (!available()) throw Object.assign(new Error('격리 터미널 실행기가 준비되지 않았습니다.'), { status: 503, code: 'TERMINAL_WORKER_UNAVAILABLE' });
     const source = String(command || '');
-    if (!source.trim()) return reject(Object.assign(new Error('실행할 명령을 입력해 주세요.'), { status: 400, code: 'TERMINAL_EMPTY_COMMAND' }));
-    if (Buffer.byteLength(source, 'utf8') > MAX_COMMAND_BYTES) return reject(Object.assign(new Error('한 번에 실행할 명령은 16KB까지입니다.'), { status: 413, code: 'TERMINAL_COMMAND_LIMIT' }));
+    if (!source.trim()) throw Object.assign(new Error('실행할 명령을 입력해 주세요.'), { status: 400, code: 'TERMINAL_EMPTY_COMMAND' });
+    if (Buffer.byteLength(source, 'utf8') > MAX_COMMAND_BYTES) throw Object.assign(new Error('한 번에 실행할 명령은 16KB까지입니다.'), { status: 413, code: 'TERMINAL_COMMAND_LIMIT' });
     const workspace = path.resolve(String(workspacePath || ''));
-    if (!workspacePath || !fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) return reject(Object.assign(new Error('터미널 작업 폴더를 찾을 수 없습니다.'), { status: 409, code: 'TERMINAL_WORKSPACE_MISSING' }));
-    const stat = fs.statSync(workspace);
+    if (!workspacePath || !fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) throw Object.assign(new Error('터미널 작업 폴더를 찾을 수 없습니다.'), { status: 409, code: 'TERMINAL_WORKSPACE_MISSING' });
+    await prepareWorkspaceAccess(workspace);
+    return new Promise((resolve, reject) => {
     const name = safeContainerName();
     const startedAt = Date.now();
-    const child = spawnImpl(dockerPath, buildDockerArgs({ name, workspacePath: workspace, workingDirectory, command: source, image, cpuCores, memoryBytes, pids, uid: stat.uid, gid: stat.gid }), {
+    const child = spawnImpl(dockerPath, buildDockerArgs({ name, workspacePath: workspace, workingDirectory, command: source, image, cpuCores, memoryBytes, pids, uid: sandboxUid, gid: sandboxUid }), {
       stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     let stdout = Buffer.alloc(0);
@@ -136,9 +149,10 @@ const createManagedNotebookTerminal = ({
       child.kill('SIGKILL');
       finishError(Object.assign(new Error('터미널 명령이 20초 제한을 넘어 중단되었습니다.'), { status: 408, code: 'TERMINAL_TIMEOUT' }));
     }, clamp(timeoutMs, 1000, 30_000, DEFAULT_TIMEOUT_MS));
-  });
+    });
+  };
 
   return { available, run };
 };
 
-module.exports = { createManagedNotebookTerminal, buildDockerArgs, normalizeTerminalRelativePath, resolveTerminalDirectory, MAX_COMMAND_BYTES, MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS };
+module.exports = { createManagedNotebookTerminal, buildDockerArgs, normalizeTerminalRelativePath, resolveTerminalDirectory, MAX_COMMAND_BYTES, MAX_OUTPUT_BYTES, DEFAULT_TIMEOUT_MS, DEFAULT_SANDBOX_UID };
