@@ -14,7 +14,7 @@ test('sends standard input from the docked run console', () => {
 
 test('keeps completed output selectable and disables further input', () => {
   render(<CodeRunPanel session={{ state: 'finished', displayName: 'JavaScript', noteTitle: '완료 예제', exitCode: 0 }} events={[{ sequence: 1, stream: 'stdout', text: '완료' }]} />);
-  expect(screen.getByText('완료')).toBeInTheDocument();
+  expect(screen.getAllByText('완료')).toHaveLength(2);
   expect(screen.getByLabelText('실행 중인 프로그램에 표준 입력')).toBeDisabled();
   expect(screen.getByText(/프로그램 종료/)).toBeInTheDocument();
 });
