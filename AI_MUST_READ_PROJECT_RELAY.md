@@ -1585,3 +1585,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 보존된 동작: 좌측 노트북/페이지 sidebar, 위 편집기, 터미널 파일 탐색기, stdin, 중지, 숨김·재열기, 실행 세션 소유자·노트북 경계와 자원 제한은 그대로 유지한다. 터미널을 닫아야만 편집기로 돌아가는 이전 전체 화면 전환은 제거했다.
 - 검증·배포: 코드 commit `406f8c8`을 GitHub와 NAS 활성 브랜치에 fast-forward했다. 로컬 production build와 PDF.js 4.8.69 gate, NAS frontend focused 8/8와 production/PDF.js build가 통과했다. 운영 `/var/www/html`은 `main.0de8ab2d.js`를 제공하고 내부 3030·공개 HTTPS는 200이다.
 - 검증 경계: 자동 브라우저에 로그인된 NAS 세션이 없어 실제 사용자 노트에서 편집기 위·터미널 아래 배치를 육안으로 누르는 E2E만 남는다. 코드 구조·빌드·관련 회귀·운영 반영은 완료했다.
+
+### 2026-09-08 Note Studio 상단 공간 압축·긴 버튼 한 줄 교정
+
+- 사용자 요청: Note Studio의 중복 상단바를 없애고 노트 제목 입력 줄을 얇게 만들어 편집 영역을 최대화한다. `Python 실행`처럼 긴 버튼이 두 줄로 깨지는 현상과 다른 UI의 동일 위험도 함께 검사한다.
+- 원인: 앱 창의 46px 이름 header, 왼쪽 sidebar의 Note Studio 이름·설명 header, 선택 페이지의 55px 제목/도구줄이 겹쳐 있었다. MUI Button의 공통 테마에는 줄바꿈 방지 규칙이 없고 좁은 도구줄에 언어명과 동작명을 함께 넣어 버튼 높이가 늘어날 수 있었다.
+- 구현: inline으로 연 Note Studio의 앱 이름 header는 제거했다. 별도 창은 이동·최소화·최대화·닫기를 잃지 않도록 이름만 숨긴 30px compact chrome으로 줄였다. sidebar 이름·설명은 제거하고 38px 아이콘 도구줄만 남겼으며 페이지 제목/도구줄은 40px로 고정했다. 제목 입력이 남은 폭을 우선 사용하고 도구줄은 한 줄 가로 overflow로 처리한다.
+- 라벨 교정: 언어 선택에 이미 Python/JavaScript가 표시되므로 실행 버튼은 `실행`, 연결 문서는 `문서`, import는 `파일 가져오기`, 터미널 탐색기는 `파일관리자에서 열기`로 줄였다. AI의 긴 재개 동작은 `답변 이어가기`, PC 연결 dialog는 `Drive 열기/설치 앱 연결/다운로드/탐색기 열기`, 문서 변환 완료 도구는 `결과 폴더`로 축약했다. 전체 의미는 tooltip과 aria-label에 유지한다. 저장 상태도 `대기/저장 중/충돌/실패`로 줄였고 모든 NAS MUI Button에 `white-space: nowrap`과 `flex-shrink: 0`을 적용해 다른 프로그램의 버튼도 두 줄로 갈라지지 않게 했다.
+- 회귀: `frontend/scripts/verify-note-studio-compact-layout.mjs`가 중복 제목 제거, 30/40px 높이, 짧은 실행·문서 라벨, Note Studio/전역 한 줄 규칙을 검사한다. 로컬 verifier와 production/PDF.js 4.8.69 build가 통과했고 NAS에서도 verifier와 기존 frontend 8/8이 통과했다.
+- NAS 빌드 관찰: NAS 직접 production build는 swap 976MiB가 전부 사용된 상태에서 조기 종료됐고 당시 load average가 42까지 상승했다. 소스·테스트 오류는 아니며 최종 commit과 동일한 검증된 Windows 로컬 build `main.48759c30.js`를 staging 경로로 전송해 `/var/www/html`에 배포했다. 내부 3030과 공개 HTTPS는 200이다. 저사양 NAS에서 production build를 연속 실행하지 않는다.
+- 현재 경계: 자동 브라우저의 NAS 탭은 로그인 화면이라 실제 사용자 Note Studio의 좁은 창, 매우 긴 노트명, hover tooltip을 육안 확인하지 못했다. 정적 정책·production compile·NAS 회귀·운영 번들 반영은 완료했고 다음 로그인 세션에서는 창 폭을 줄여 한 줄 유지와 제목 입력 폭을 최종 확인한다.
