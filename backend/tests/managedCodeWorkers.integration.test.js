@@ -6,6 +6,7 @@ const path = require('node:path');
 const { createManagedPythonWorker } = require('../managedPythonWorker');
 const { createManagedJavaScriptWorker } = require('../managedJavaScriptWorker');
 const { createManagedNotebookTerminal } = require('../managedNotebookTerminal');
+const { createManagedCodeSessionManager } = require('../managedCodeSession');
 
 const enabled = process.env.NAS_TEST_CODE_RUNTIME === '1';
 const packageSmokeEnabled = enabled && process.env.NAS_TEST_PYTHON_PACKAGES === '1';
@@ -40,6 +41,38 @@ test('real notebook terminal is writable only through its selected workspace', {
       command: "python -c \"import socket; socket.create_connection(('1.1.1.1', 53), 1)\"",
     });
     assert.notEqual(networkResult.exitCode, 0, 'terminal container unexpectedly reached the network');
+  } finally {
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('real interactive code session accepts stdin and remains owner-bound', { skip: !enabled }, async () => {
+  const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-code-session-workspace-'));
+  let released = 0;
+  try {
+    const manager = createManagedCodeSessionManager({ timeoutMs: 8_000 });
+    const started = await manager.start({
+      ownerKey: 'owner-a', language: 'python', workspacePath,
+      code: "name = input('Name: ')\nprint('Hello, ' + name)",
+      cpuCores: 0.5, memoryBytes: 256 * 1024 * 1024, pids: 32,
+      onFinish: () => { released += 1; },
+    });
+    assert.throws(() => manager.get({ ownerKey: 'owner-b', sessionId: started.sessionId }), (error) => error.code === 'CODE_SESSION_NOT_FOUND');
+    let current = started;
+    for (let attempt = 0; attempt < 40 && !current.events.map((event) => event.text).join('').includes('Name:'); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      current = manager.get({ ownerKey: 'owner-a', sessionId: started.sessionId });
+    }
+    assert.match(current.events.map((event) => event.text).join(''), /Name:/);
+    manager.input({ ownerKey: 'owner-a', sessionId: started.sessionId, text: 'NAS' });
+    for (let attempt = 0; attempt < 80 && current.state === 'running'; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      current = manager.get({ ownerKey: 'owner-a', sessionId: started.sessionId });
+    }
+    assert.equal(current.state, 'finished');
+    assert.equal(current.exitCode, 0);
+    assert.match(current.events.map((event) => event.text).join(''), /Hello, NAS/);
+    assert.equal(released, 1);
   } finally {
     fs.rmSync(workspacePath, { recursive: true, force: true });
   }

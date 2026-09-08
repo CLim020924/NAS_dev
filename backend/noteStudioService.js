@@ -9,6 +9,7 @@ const NOTEBOOK_INDEX_VERSION = 1;
 const MAX_NOTE_BYTES = 5 * 1024 * 1024;
 const MAX_VERSIONS_PER_NOTE = 100;
 const ALLOWED_TYPES = new Set(['block', 'markdown', 'text', 'code']);
+const ALLOWED_NOTEBOOK_KINDS = new Set(['notes', 'project']);
 const ATTACHMENT_SCAN_SKIP = new Set(['.note_studio', '.agent_trash', '.agent_versions', '.ai_backups', '.agent_incoming', 'chat_tmp', 'backup']);
 
 const nowIso = () => new Date().toISOString();
@@ -60,6 +61,10 @@ const normalizeType = (value) => {
   }
   return type;
 };
+
+const normalizeNotebookKind = (value) => ALLOWED_NOTEBOOK_KINDS.has(String(value || '').toLowerCase())
+  ? String(value).toLowerCase()
+  : 'notes';
 
 const emptyContentFor = (type) => type === 'block'
   ? { type: 'doc', content: [{ type: 'paragraph' }] }
@@ -212,19 +217,19 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   const listNotebooks = ({ deleted = false } = {}) => readNotebooks().notebooks
     .filter((item) => deleted ? !!item.deletedAt : !item.deletedAt)
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
-    .map((item) => ({ ...item, ...notebookAvailability(item), path: `/${NOTE_MANAGER_ROOT}/${item.directoryName}` }));
+    .map((item) => ({ ...item, kind: normalizeNotebookKind(item.kind), ...notebookAvailability(item), path: `/${NOTE_MANAGER_ROOT}/${item.directoryName}` }));
 
   const getNotebookWorkspace = (id) => {
     const notebook = findNotebook(readNotebooks(), id);
     const absolutePath = notebookDirectory(notebook);
     assertPhysicalDirectory(absolutePath);
     return {
-      notebook: { ...notebook, ...notebookAvailability(notebook), path: `/${NOTE_MANAGER_ROOT}/${notebook.directoryName}` },
+      notebook: { ...notebook, kind: normalizeNotebookKind(notebook.kind), ...notebookAvailability(notebook), path: `/${NOTE_MANAGER_ROOT}/${notebook.directoryName}` },
       absolutePath,
     };
   };
 
-  const createNotebook = ({ title } = {}) => {
+  const createNotebook = ({ title, kind } = {}) => {
     const registry = readNotebooks();
     const normalizedTitle = normalizeTitle(title || '새 노트북');
     const directoryName = uniqueDirectoryName(managerRoot, normalizedTitle, '새 노트북');
@@ -234,7 +239,7 @@ const createNoteStudioStore = ({ personalRootPath }) => {
     try {
       assertPhysicalDirectory(targetPath);
       const createdAt = nowIso();
-      const notebook = { id: crypto.randomUUID(), title: normalizedTitle, directoryName, revision: 1, createdAt, updatedAt: createdAt, deletedAt: null };
+      const notebook = { id: crypto.randomUUID(), title: normalizedTitle, directoryName, kind: normalizeNotebookKind(kind), revision: 1, createdAt, updatedAt: createdAt, deletedAt: null };
       registry.notebooks.push(notebook);
       writeNotebooks(registry);
       return { ...notebook, path: `/${NOTE_MANAGER_ROOT}/${directoryName}` };

@@ -223,6 +223,16 @@ test('keeps notebook registries isolated by account root', () => {
   }
 });
 
+test('distinguishes notes notebooks from project workspaces and migrates old records safely', () => withStore((store) => {
+  const notes = store.createNotebook({ title: '회의 노트', kind: 'notes' });
+  const project = store.createNotebook({ title: '분석 프로젝트', kind: 'project' });
+  const fallback = store.createNotebook({ title: '기존 형식', kind: 'unknown' });
+  assert.equal(notes.kind, 'notes');
+  assert.equal(project.kind, 'project');
+  assert.equal(fallback.kind, 'notes');
+  assert.deepEqual(store.listNotebooks().map((item) => item.kind), ['notes', 'project', 'notes']);
+}));
+
 test('reports an externally missing notebook path and returns a stable conflict', () => withStore((store, root) => {
   const notebook = store.createNotebook({ title: '이동될 노트북' });
   fs.rmdirSync(path.join(root, NOTE_MANAGER_ROOT, notebook.directoryName));

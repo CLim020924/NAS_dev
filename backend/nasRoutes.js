@@ -66,6 +66,7 @@ const { createManagedPythonWorker } = require('./managedPythonWorker');
 const { getPythonRuntimeCatalog } = require('./pythonRuntimeCatalog');
 const { createManagedJavaScriptWorker } = require('./managedJavaScriptWorker');
 const { createManagedNotebookTerminal, normalizeTerminalRelativePath, resolveTerminalDirectory } = require('./managedNotebookTerminal');
+const { createManagedCodeSessionManager } = require('./managedCodeSession');
 const { classifyCodeExecutionError } = require('./codeExecutionErrors');
 const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore');
 const { createPdfOcrService } = require('./pdfOcrService');
@@ -85,6 +86,7 @@ const router = express.Router();
 const managedPythonWorker = createManagedPythonWorker();
 const managedJavaScriptWorker = createManagedJavaScriptWorker();
 const managedNotebookTerminal = createManagedNotebookTerminal();
+const managedCodeSessions = createManagedCodeSessionManager();
 const pdfOcrService = createPdfOcrService();
 
 // 🔥 [최종 방어선] 403 에러 강제 세탁 미들웨어 (프론트엔드 폭파 방지)
@@ -1529,6 +1531,61 @@ const executeCodeNote = ({ language, displayName, worker }) => async (req, res) 
 
 router.post('/note-studio/notes/:noteId/python/run', verifyToken, express.json({ limit: '8kb' }), executeCodeNote({ language: 'python', displayName: 'Python', worker: managedPythonWorker }));
 router.post('/note-studio/notes/:noteId/javascript/run', verifyToken, express.json({ limit: '8kb' }), executeCodeNote({ language: 'javascript', displayName: 'JavaScript', worker: managedJavaScriptWorker }));
+
+router.post('/note-studio/notes/:noteId/:language/session', verifyToken, express.json({ limit: '8kb' }), async (req, res) => {
+  let reservationId = '';
+  let reservationTransferred = false;
+  try {
+    const language = String(req.params.language || '').toLowerCase();
+    const displayName = language === 'python' ? 'Python' : language === 'javascript' ? 'JavaScript' : '';
+    if (!displayName) return res.status(400).json({ error: '대화형 실행을 지원하지 않는 언어입니다.' });
+    const store = getNoteStudioStore(req.user);
+    const note = store.get(req.params.noteId);
+    if (note.deletedAt) return res.status(409).json({ error: '휴지통의 코드는 실행할 수 없습니다.' });
+    if (note.type !== 'code' || String(note.language || '').toLowerCase() !== language) return res.status(400).json({ error: `${displayName} 코드 노트만 실행할 수 있습니다.` });
+    if (!note.notebookId) return res.status(409).json({ error: '실제 노트북에 연결된 코드 페이지만 실행할 수 있습니다.' });
+    if (Number(req.body?.expectedRevision) !== note.revision) return res.status(409).json({ error: '실행 전에 페이지가 변경되었습니다. 최신 저장본을 다시 여세요.' });
+    const { notebook, absolutePath } = store.getNotebookWorkspace(note.notebookId);
+    const resourceControl = req.app.get('resourceControl');
+    if (!resourceControl) return res.status(503).json({ error: '서버 자원 보호 정책이 준비되지 않았습니다.' });
+    const isPython = language === 'python';
+    const requested = { cpuPercent: isPython ? 25 : 12.5, memoryBytes: (isPython ? 512 : 256) * 1024 * 1024 };
+    const admission = resourceControl.reserve({ jobId: `${language}-session:${crypto.randomUUID()}`, user: req.user, requested });
+    if (admission.state !== 'available') return res.status(429).json({ error: admission.state === 'queued' ? '서버가 바빠 잠시 뒤 다시 실행해 주세요.' : '현재 사용자 또는 서버 자원 제한으로 실행할 수 없습니다.', state: admission.state, reasons: admission.reasons || [] });
+    reservationId = admission.jobId;
+    const session = await managedCodeSessions.start({
+      ownerKey: getActivityActor(req.user), language, code: note.content, workspacePath: absolutePath,
+      cpuCores: isPython ? 0.75 : 0.5, memoryBytes: requested.memoryBytes, pids: 64,
+      onFinish: () => resourceControl.release(reservationId),
+    });
+    reservationTransferred = true;
+    return res.status(201).json({
+      success: true, session, notebook: { id: notebook.id, title: notebook.title, kind: notebook.kind },
+      sandbox: { runtime: displayName, network: 'none', timeoutSeconds: 120, memoryMiB: isPython ? 512 : 256, pids: 64, readOnlyRoot: true, notebookMount: 'read-write', user: 'non-root' },
+    });
+  } catch (error) { return sendNoteStudioError(res, error); }
+  finally {
+    if (reservationId && !reservationTransferred) req.app.get('resourceControl')?.release(reservationId);
+  }
+});
+
+router.get('/note-studio/code-sessions/:sessionId', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, session: managedCodeSessions.get({ ownerKey: getActivityActor(req.user), sessionId: req.params.sessionId, cursor: req.query.cursor }) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/code-sessions/:sessionId/input', verifyToken, express.json({ limit: '12kb' }), (req, res) => {
+  try {
+    return res.json({ success: true, session: managedCodeSessions.input({ ownerKey: getActivityActor(req.user), sessionId: req.params.sessionId, text: req.body?.text }) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.delete('/note-studio/code-sessions/:sessionId', verifyToken, async (req, res) => {
+  try {
+    return res.json({ success: true, session: await managedCodeSessions.stop({ ownerKey: getActivityActor(req.user), sessionId: req.params.sessionId }) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
 router.get('/note-studio/python/runtime', verifyToken, (_req, res) => res.json({ success: true, ...getPythonRuntimeCatalog() }));
 
 const getOnlyOfficeUser = (req) => {
