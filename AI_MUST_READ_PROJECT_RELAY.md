@@ -1570,3 +1570,9 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: 로컬 backend 전체 119개 중 111 pass·8 환경 skip·0 fail, focused 35/35와 production/PDF.js 4.8.69 build가 통과했다. NAS 전체는 119개 중 113 pass·6 환경 skip·0 fail이다. root 운영 Docker 통합에서 Python/JavaScript one-shot, 노트북 write/network 경계와 새 Python stdin 세션·타 owner 차단 4/4가 통과했다. 프런트 실행 콘솔·명령 테스트 8/8와 production/PDF.js build가 통과했다.
 - 배포: 기능 commits `990aca8`, `043358a`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. 운영 build와 `/var/www/html`은 `main.98fb0725.js` SHA-256이 일치한다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared` active, PM2 `msp-backend` online/save, 내부 3030·공개 HTTPS 200, 무인증 세션 생성 API 401이다.
 - 현재 경계: 대화형 실행은 현재 준비된 Python과 JavaScript에만 제공한다. `scanf`가 필요한 C/C++ compiler/runtime은 아직 등록하지 않았으므로 C 입력 프로그램을 지원한다고 표시하지 않는다. 지속 PTY/TUI는 기존 노트북 터미널의 별도 후속 범위다. 자동 브라우저에 로그인된 NAS 세션이 없어 실제 사용자 데이터로 사이드바·하단 콘솔의 최종 육안 E2E는 수행하지 않았으며, 코어 UI unit·실제 Docker stdin·운영 bundle까지는 확인했다.
+
+### 2026-09-08 하단 실행 콘솔 높이 교정
+
+- 사용자 교정: 하단 터미널이 편집기를 다 가려서는 안 된다. 원인은 기본 `32vh/330px`, 확대 `58vh/560px` 상한이 작은 Note Studio 창에서 지나치게 컸기 때문이다.
+- 수정: 기본 콘솔은 작업영역 24%·최대 220px, 확대도 42%·최대 420px으로 제한했다. 편집기 영역은 최소 58%를 유지한다. 콘솔 숨김·재열기, stdin, 실행 중지와 자동 재연결 동작은 그대로 유지한다.
+- 검증·배포: commit `ca6ee58`을 GitHub와 NAS 활성 브랜치에 fast-forward했다. NAS frontend 8/8, production build와 PDF.js 4.8.69 gate가 통과했다. build와 `/var/www/html`은 `main.0b20a64b.js` SHA-256이 일치하고 내부·공개 HTTP 200, PM2 `msp-backend` online이다. 로그인된 실제 작은 창의 체감 높이 육안 확인만 남는다.
