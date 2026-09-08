@@ -37,8 +37,8 @@ source = pathlib.Path('/code/query.sql').read_text(encoding='utf-8')
 connection = sqlite3.connect(':memory:')
 buffer = ''
 try:
-    for line in source.splitlines(True):
-        buffer += line
+    for character in source:
+        buffer += character
         if not sqlite3.complete_statement(buffer):
             continue
         statement, buffer = buffer.strip(), ''
