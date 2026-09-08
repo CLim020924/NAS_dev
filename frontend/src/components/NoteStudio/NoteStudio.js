@@ -51,6 +51,7 @@ import { copyTextToClipboard } from '../../utils/copyTextToClipboard';
 import { BLOCK_BACKGROUNDS, BLOCK_COLORS, BLOCK_TRANSFORMS, blockTextStats, findContextBlock } from './noteStudioBlockMenu';
 import NoteStudioTerminal from './NoteStudioTerminal';
 import CodeRunPanel from './CodeRunPanel';
+import CodePreviewDialog from './CodePreviewDialog';
 import './NoteStudio.css';
 
 const BlockIndent = Extension.create({
@@ -89,7 +90,32 @@ const TYPE_OPTIONS = [
   { type: 'code', label: '코드 노트', detail: 'Monaco 편집기와 언어 선택', Icon: CodeIcon }
 ];
 
-const languageOptions = ['plaintext', 'javascript', 'typescript', 'python', 'json', 'html', 'css', 'sql', 'shell', 'yaml', 'markdown'];
+const languageOptions = [
+  { id: 'plaintext', label: 'Plain text', mode: 'edit' },
+  { id: 'javascript', label: 'JavaScript', mode: 'execute', interactive: true },
+  { id: 'typescript', label: 'TypeScript', mode: 'execute', interactive: true },
+  { id: 'python', label: 'Python', mode: 'execute', interactive: true },
+  { id: 'json', label: 'JSON', mode: 'validate' },
+  { id: 'html', label: 'HTML', mode: 'preview' },
+  { id: 'css', label: 'CSS', mode: 'preview' },
+  { id: 'sql', label: 'SQL', mode: 'execute' },
+  { id: 'shell', label: 'Shell', mode: 'execute', interactive: true },
+  { id: 'yaml', label: 'YAML', mode: 'validate' },
+  { id: 'markdown', label: 'Markdown', mode: 'preview' },
+];
+const languageById = Object.fromEntries(languageOptions.map((item) => [item.id, item]));
+const detectCodeLanguage = (title, source) => {
+  const extension = String(title || '').toLowerCase().match(/\.[a-z0-9]+$/)?.[0];
+  const byExtension = { '.js': 'javascript', '.mjs': 'javascript', '.jsx': 'javascript', '.ts': 'typescript', '.tsx': 'typescript', '.py': 'python', '.json': 'json', '.html': 'html', '.htm': 'html', '.css': 'css', '.sql': 'sql', '.sh': 'shell', '.yaml': 'yaml', '.yml': 'yaml', '.md': 'markdown' };
+  if (byExtension[extension]) return byExtension[extension];
+  const head = String(source || '').slice(0, 4096).trimStart();
+  if (/^#!.*\bpython(?:3)?\b/m.test(head) || (/\b(?:def|import|from)\s+[A-Za-z_]/.test(head) && /:\s*(?:\r?\n|$)/.test(head))) return 'python';
+  if (/^#!.*\b(?:bash|sh|zsh)\b/m.test(head)) return 'shell';
+  if (/^\s*(?:<!doctype\s+html|<html\b)/i.test(head)) return 'html';
+  if (/\b(?:const|let|var|function|console\.)\b/.test(head)) return 'javascript';
+  if (/^\s*[\[{]/.test(head)) { try { JSON.parse(head); return 'json'; } catch {} }
+  return '';
+};
 const errorMessage = (error, fallback) => error.response?.data?.error || error.message || fallback;
 const formatTime = (value) => value ? new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '';
 
@@ -176,6 +202,8 @@ const NoteStudio = () => {
   const [codeSession, setCodeSession] = useState(null);
   const [codeEvents, setCodeEvents] = useState([]);
   const [codePanelOpen, setCodePanelOpen] = useState(false);
+  const [executionJob, setExecutionJob] = useState(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [pythonRuntimeOpen, setPythonRuntimeOpen] = useState(false);
   const [pythonRuntime, setPythonRuntime] = useState(null);
   const [pythonRuntimeLoading, setPythonRuntimeLoading] = useState(false);
@@ -214,6 +242,7 @@ const NoteStudio = () => {
   const openNoteSequenceRef = useRef(0);
   const codeSessionCursorRef = useRef(0);
   const codePollTimerRef = useRef(null);
+  const jobPollTimerRef = useRef(null);
   const codePollFailureRef = useRef(0);
 
   const editor = useEditor({
@@ -567,6 +596,11 @@ const NoteStudio = () => {
     pendingContentRef.current = value;
     editGenerationRef.current += 1;
     setSavingState('dirty');
+    const current = selectedRef.current;
+    if (current?.type === 'code' && (!current.language || current.language === 'plaintext')) {
+      const detected = detectCodeLanguage(current.title, value);
+      if (detected) updateMeta({ language: detected });
+    }
   };
 
   const updateMeta = (patch) => {
@@ -780,12 +814,13 @@ const NoteStudio = () => {
   const runCode = async () => {
     const current = selectedRef.current;
     const language = String(current?.language || '').toLowerCase();
-    if (!current || codeRunning || !['python', 'javascript'].includes(language)) return;
+    const info = languageById[language];
+    if (!current || codeRunning || !['execute', 'validate'].includes(info?.mode)) return;
     if (savingState === 'dirty' || savingState === 'saving') {
       setMessage({ severity: 'info', text: '최신 코드 저장이 끝난 뒤 실행해 주세요.' });
       return;
     }
-    const displayName = language === 'python' ? 'Python' : 'JavaScript';
+    const displayName = info.label;
     setCodeRunning(true);
     setTerminalOpen(false);
     setCodePanelOpen(true);
@@ -795,9 +830,8 @@ const NoteStudio = () => {
     setCodeSession({ state: 'starting', language, displayName, noteId: current.id, noteTitle: current.title });
     try {
       const { data } = await axios.post(`/api/note-studio/notes/${encodeURIComponent(current.id)}/${language}/session`, { expectedRevision: current.revision }, { withCredentials: true });
-      codeSessionCursorRef.current = data.session?.cursor || 0;
-      setCodeEvents(data.session?.events || []);
-      setCodeSession({ ...data.session, language, displayName, noteId: current.id, noteTitle: current.title, sandbox: data.sandbox });
+      setExecutionJob({ ...data.job, sandbox: data.sandbox, language, displayName, noteId: current.id, noteTitle: current.title, interactive: !!info.interactive });
+      setCodeSession({ state: 'queued', jobId: data.job?.jobId, position: data.job?.position, language, displayName, noteId: current.id, noteTitle: current.title, interactive: !!info.interactive, sandbox: data.sandbox });
     } catch (error) {
       const response = error.response?.data;
       setCodeEvents([{ sequence: `error-${Date.now()}`, stream: 'stderr', text: `${response?.error || error.message || `${displayName} 실행에 실패했습니다.`}\n` }]);
@@ -805,6 +839,42 @@ const NoteStudio = () => {
       setCodeRunning(false);
     }
   };
+
+  useEffect(() => {
+    if (!executionJob?.jobId || !['queued', 'starting'].includes(executionJob.state)) return undefined;
+    let cancelled = false;
+    const pollJob = async () => {
+      try {
+        const { data } = await axios.get(`/api/note-studio/execution-jobs/${encodeURIComponent(executionJob.jobId)}`, { withCredentials: true });
+        if (cancelled) return;
+        const job = data.job;
+        if (job.session?.sessionId) {
+          codeSessionCursorRef.current = job.session.cursor || 0;
+          setCodeEvents(job.session.events || []);
+          setCodeSession({ ...job.session, language: executionJob.language, displayName: executionJob.displayName, noteId: executionJob.noteId, noteTitle: executionJob.noteTitle, interactive: executionJob.interactive, sandbox: executionJob.sandbox });
+          setExecutionJob(null);
+          return;
+        }
+        if (['blocked', 'failed', 'cancelled'].includes(job.state)) {
+          setCodeEvents([{ sequence: `queue-${Date.now()}`, stream: job.state === 'cancelled' ? 'system' : 'stderr', text: `${job.error || (job.state === 'cancelled' ? '대기 중인 실행을 취소했습니다.' : '실행 대기 작업을 시작하지 못했습니다.')}\n` }]);
+          setCodeSession((current) => ({ ...current, state: job.state, position: 0 }));
+          setCodeRunning(false);
+          setExecutionJob(null);
+          return;
+        }
+        setExecutionJob((current) => current?.jobId === job.jobId ? { ...current, ...job } : current);
+        setCodeSession((current) => ({ ...current, state: job.state, position: job.position, reasons: job.reasons }));
+        jobPollTimerRef.current = window.setTimeout(pollJob, 500);
+      } catch (error) {
+        if (!cancelled) jobPollTimerRef.current = window.setTimeout(pollJob, 1500);
+      }
+    };
+    jobPollTimerRef.current = window.setTimeout(pollJob, 100);
+    return () => {
+      cancelled = true;
+      if (jobPollTimerRef.current) window.clearTimeout(jobPollTimerRef.current);
+    };
+  }, [executionJob?.jobId, executionJob?.state]);
 
   useEffect(() => {
     if (codeSession?.state !== 'running' || !codeSession.sessionId) return undefined;
@@ -848,6 +918,15 @@ const NoteStudio = () => {
   };
 
   const stopCodeSession = async () => {
+    if (executionJob?.jobId && ['queued', 'starting'].includes(executionJob.state)) {
+      try {
+        const { data } = await axios.delete(`/api/note-studio/execution-jobs/${encodeURIComponent(executionJob.jobId)}`, { withCredentials: true });
+        setCodeSession((current) => ({ ...current, state: data.job?.state || 'cancelled', position: 0 }));
+        setExecutionJob(null);
+      } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '실행 대기를 취소하지 못했습니다.') }); }
+      finally { setCodeRunning(false); }
+      return;
+    }
     if (!codeSession?.sessionId || codeSession.state !== 'running') return;
     try {
       const { data } = await axios.delete(`/api/note-studio/code-sessions/${encodeURIComponent(codeSession.sessionId)}`, { withCredentials: true });
@@ -1201,11 +1280,13 @@ const NoteStudio = () => {
             <Tooltip title={{ idle: '저장 완료', saved: '저장 완료', dirty: '자동 저장 대기', saving: '저장 중', conflict: '저장 충돌 — 다시 확인 필요', error: '저장 실패' }[savingState]}><Chip size="small" label={saveLabel} color={savingState === 'error' || savingState === 'conflict' ? 'warning' : savingState === 'saved' || savingState === 'idle' ? 'success' : 'default'} variant="outlined" sx={{ height: 24 }} /></Tooltip>
             {selected.type === 'code' && <Divider flexItem orientation="vertical" sx={{ mx: 0.25 }} />}
             {selected.type === 'code' && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <Select size="small" value={selected.language || 'plaintext'} onChange={(event) => updateMeta({ language: event.target.value })} sx={{ minWidth: 104, height: 30, flexShrink: 0 }}>{languageOptions.map((language) => <MenuItem key={language} value={language}>{language}</MenuItem>)}</Select>
-              {['python', 'javascript'].includes(String(selected.language || '').toLowerCase()) && !selected.deletedAt && <Tooltip title={`${selected.language === 'python' ? 'Python' : 'JavaScript'} 코드 실행`}><span><Button size="small" variant="contained" startIcon={codeRunning ? <CircularProgress size={15} color="inherit" /> : <PlayArrowIcon />} disabled={codeRunning || savingState === 'dirty' || savingState === 'saving'} onClick={runCode}>{codeRunning ? '실행 중' : '실행'}</Button></span></Tooltip>}
+              <Select size="small" value={selected.language || 'plaintext'} onChange={(event) => updateMeta({ language: event.target.value })} sx={{ minWidth: 116, height: 30, flexShrink: 0 }}>{languageOptions.map((language) => <MenuItem key={language.id} value={language.id}>{language.label}</MenuItem>)}</Select>
+              {['execute', 'validate'].includes(languageById[String(selected.language || '').toLowerCase()]?.mode) && !selected.deletedAt && <Tooltip title={`${languageById[selected.language]?.label || selected.language} ${languageById[selected.language]?.mode === 'validate' ? '검증·정리' : '격리 실행'}`}><span><Button size="small" variant="contained" startIcon={codeRunning ? <CircularProgress size={15} color="inherit" /> : <PlayArrowIcon />} disabled={codeRunning || savingState === 'dirty' || savingState === 'saving'} onClick={runCode}>{codeRunning ? '대기·실행' : languageById[selected.language]?.mode === 'validate' ? '검증' : '실행'}</Button></span></Tooltip>}
+              {languageById[String(selected.language || '').toLowerCase()]?.mode === 'preview' && !selected.deletedAt && <Button size="small" variant="contained" onClick={() => setPreviewOpen(true)}>미리보기</Button>}
               {codeSession && !codePanelOpen && <Tooltip title="실행 콘솔 보기"><IconButton size="small" aria-label="실행 콘솔 보기" onClick={() => { setTerminalOpen(false); setCodePanelOpen(true); }}><TerminalIcon fontSize="small" /></IconButton></Tooltip>}
               {selected.language === 'python' && !selected.deletedAt && <Tooltip title="Python 기본 패키지 확인"><Button size="small" variant="text" onClick={openPythonRuntime}>패키지</Button></Tooltip>}
             </Box>}
+            {selected.type === 'markdown' && !selected.deletedAt && <Button size="small" variant="contained" onClick={() => setPreviewOpen(true)}>미리보기</Button>}
             {!selected.deletedAt && <Divider flexItem orientation="vertical" sx={{ mx: 0.25 }} />}
             {!selected.deletedAt && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
               <Tooltip title="현재 노트북 경로에서 격리 터미널 열기"><span><IconButton size="small" aria-label="터미널 열기" disabled={!selected.notebookId} onClick={() => openNotebookTerminal(selected.notebookId)}><TerminalIcon fontSize="small" /></IconButton></span></Tooltip>
@@ -1385,6 +1466,7 @@ const NoteStudio = () => {
         </DialogContent>
         <DialogActions><Button onClick={() => setPythonRuntimeOpen(false)}>닫기</Button></DialogActions>
       </Dialog>
+      <CodePreviewDialog open={previewOpen} onClose={() => setPreviewOpen(false)} language={selected?.type === 'markdown' ? 'markdown' : selected?.language} title={selected?.title} source={plainContent} />
       <NasItemPickerDialog open={attachmentPickerOpen} onClose={() => setAttachmentPickerOpen(false)} onSelect={addAttachment} title="노트에 NAS 항목 첨부" confirmLabel="첨부" allowCurrentFolder />
       <NasItemPickerDialog open={officeLocationPickerOpen} onClose={() => setOfficeLocationPickerOpen(false)} onSelect={chooseOfficeDestination} title="새 문서를 저장할 NAS 폴더" confirmLabel="여기에 만들기" folderOnly allowCurrentFolder />
     </Box>

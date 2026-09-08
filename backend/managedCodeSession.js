@@ -13,6 +13,52 @@ const MAX_OUTPUT_BYTES = 256 * 1024;
 const SESSION_TIMEOUT_MS = 120_000;
 const RESULT_RETENTION_MS = 10 * 60_000;
 
+const JSON_RUNNER = `'use strict';
+const fs = require('fs');
+try {
+  const value = JSON.parse(fs.readFileSync('/code/input.json', 'utf8'));
+  process.stdout.write(JSON.stringify(value, null, 2) + '\\n');
+} catch (error) {
+  console.error('JSON validation failed: ' + error.message);
+  process.exitCode = 1;
+}`;
+
+const YAML_RUNNER = `import pathlib, sys, yaml
+try:
+    value = yaml.safe_load(pathlib.Path('/code/input.yaml').read_text(encoding='utf-8'))
+    print(yaml.safe_dump(value, allow_unicode=True, sort_keys=False), end='')
+except Exception as exc:
+    print(f'YAML validation failed: {exc}', file=sys.stderr)
+    raise SystemExit(1)
+`;
+
+const SQL_RUNNER = `import pathlib, sqlite3, sys
+source = pathlib.Path('/code/query.sql').read_text(encoding='utf-8')
+connection = sqlite3.connect(':memory:')
+buffer = ''
+try:
+    for line in source.splitlines(True):
+        buffer += line
+        if not sqlite3.complete_statement(buffer):
+            continue
+        statement, buffer = buffer.strip(), ''
+        if not statement:
+            continue
+        cursor = connection.execute(statement)
+        if cursor.description:
+            print('\\t'.join(column[0] for column in cursor.description))
+            for row in cursor.fetchall():
+                print('\\t'.join('NULL' if value is None else str(value) for value in row))
+    if buffer.strip():
+        connection.execute(buffer)
+    connection.commit()
+except Exception as exc:
+    print(f'SQL execution failed: {exc}', file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    connection.close()
+`;
+
 const runtimeFor = (language, images = {}) => {
   if (language === 'python') return {
     image: images.python || process.env.MSP_PYTHON_IMAGE || DEFAULT_PYTHON_IMAGE,
@@ -23,6 +69,31 @@ const runtimeFor = (language, images = {}) => {
     image: images.javascript || process.env.MSP_JAVASCRIPT_IMAGE || DEFAULT_JAVASCRIPT_IMAGE,
     fileName: 'main.js',
     command: ['node', '/code/main.js'],
+  };
+  if (language === 'typescript') return {
+    image: images.javascript || process.env.MSP_JAVASCRIPT_IMAGE || DEFAULT_JAVASCRIPT_IMAGE,
+    fileName: 'main.ts',
+    command: ['node', '--experimental-strip-types', '/code/main.ts'],
+  };
+  if (language === 'shell') return {
+    image: images.python || process.env.MSP_PYTHON_IMAGE || DEFAULT_PYTHON_IMAGE,
+    fileName: 'main.sh',
+    command: ['sh', '-eu', '/code/main.sh'],
+  };
+  if (language === 'json') return {
+    image: images.javascript || process.env.MSP_JAVASCRIPT_IMAGE || DEFAULT_JAVASCRIPT_IMAGE,
+    fileName: 'input.json', companionFiles: { 'runner.js': JSON_RUNNER },
+    command: ['node', '/code/runner.js'],
+  };
+  if (language === 'yaml') return {
+    image: images.python || process.env.MSP_PYTHON_IMAGE || DEFAULT_PYTHON_IMAGE,
+    fileName: 'input.yaml', companionFiles: { 'runner.py': YAML_RUNNER },
+    command: ['python', '-I', '-B', '-u', '/code/runner.py'],
+  };
+  if (language === 'sql') return {
+    image: images.python || process.env.MSP_PYTHON_IMAGE || DEFAULT_PYTHON_IMAGE,
+    fileName: 'query.sql', companionFiles: { 'runner.py': SQL_RUNNER },
+    command: ['python', '-I', '-B', '-u', '/code/runner.py'],
   };
   throw Object.assign(new Error('대화형 실행을 지원하지 않는 언어입니다.'), { status: 400, code: 'CODE_SESSION_LANGUAGE' });
 };
@@ -115,6 +186,9 @@ const createManagedCodeSessionManager = ({
     const codeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-code-session-'));
     fs.chmodSync(codeDirectory, 0o755);
     fs.writeFileSync(path.join(codeDirectory, runtime.fileName), source, { mode: 0o644, flag: 'wx' });
+    for (const [fileName, contents] of Object.entries(runtime.companionFiles || {})) {
+      fs.writeFileSync(path.join(codeDirectory, fileName), contents, { mode: 0o644, flag: 'wx' });
+    }
     const id = crypto.randomUUID();
     const containerName = `msp-code-session-${id.replace(/-/g, '')}`;
     const session = {

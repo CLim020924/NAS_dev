@@ -22,7 +22,12 @@ test('interactive code session keeps stdin and mounts only code plus selected wo
   assert.deepEqual(args.slice(-7), ['timeout', '-s', 'KILL', '120', 'python', '-I', '-B', '-u', '/code/main.py'].slice(-7));
 });
 
-test('interactive session supports only prepared Python and JavaScript runtimes', () => {
+test('interactive session maps each executable and validator to a prepared offline runtime', () => {
   assert.equal(runtimeFor('javascript').fileName, 'main.js');
-  assert.throws(() => runtimeFor('shell'), (error) => error.code === 'CODE_SESSION_LANGUAGE');
+  assert.equal(runtimeFor('typescript').fileName, 'main.ts');
+  assert.equal(runtimeFor('shell').fileName, 'main.sh');
+  assert.equal(runtimeFor('sql').fileName, 'query.sql');
+  assert.equal(runtimeFor('json').fileName, 'input.json');
+  assert.equal(runtimeFor('yaml').fileName, 'input.yaml');
+  assert.throws(() => runtimeFor('html'), (error) => error.code === 'CODE_SESSION_LANGUAGE');
 });
