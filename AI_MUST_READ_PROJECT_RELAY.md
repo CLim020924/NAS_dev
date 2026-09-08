@@ -1636,3 +1636,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: 로컬 backend 전체 127개 중 119 pass·8 환경 의존 skip·0 fail, Open VSX catalog·노트북 revision·프로젝트/계정 경계·manifest 보존 unit test, Node syntax, production frontend build와 react-pdf/PDF.js version gate가 통과했다. 전용 `NAS_NOTE_STUDIO_SPEC.xlsx`와 마스터 `NAS_PROJECT_LOG.xlsx`를 artifact-tool로 갱신하고 재열기·수식 오류 검사·변경 행 렌더를 확인했다.
 - 운영 검증·배포: commit `b911ee9`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. NAS backend 전체 127개 중 121 pass·6 환경 조건부 skip·0 fail, Open VSX 공식 API 200, 새 무인증 API 401, 내부 3030·공개 HTTPS 200을 확인했다. 검증된 로컬 production build `main.446d91eb.js`를 배포했고 로컬/운영 SHA-256이 일치한다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active이고 PM2 `msp-backend`는 online/save 상태다.
 - 남은 경계: 현재 단계는 안전한 확장 탐색과 VS Code workspace recommendation 연결이다. NAS 브라우저 안에서 임의 VSIX를 실행하거나 모든 VS Code 확장을 자동완성으로 제공한다고 주장하지 않는다. 실제 NAS 자동완성 확대는 언어별 LSP를 격리된 adapter로 등록하고 각 server command·workspace 파일 접근·자원 제한을 검증한 뒤 기능별로 추가한다. Chrome 운영 탭은 로그인 화면이라 최신 공개 로그인 화면까지만 확인했으며, 인증된 실제 Note Studio에서 우클릭·F2·검색·권장 추가/제거를 누르는 최종 시각 E2E만 남는다.
+
+### 2026-09-08 전체 노트북 목록·선택 노트북 전용 보기
+
+- 사용자 요청: 현재 노트북 목록은 유지하되 한 노트북을 선택하면 사이드바에는 해당 노트북 요소만 표시하고, 좌상단 또는 우상단의 뒤로가기 버튼으로 전체 노트북 목록에 돌아가게 한다.
+- 구조 교정: 기존 `activeNotebookId`는 페이지 생성·터미널·편집 작업 대상이면서 탐색 범위처럼 사용되어 첫 노트북 자동 선택과 실제 사용자의 목록 진입을 구분할 수 없었다. 새 `sidebarNotebookId`를 별도로 두어 `전체 노트북 목록`과 `선택 노트북 전용 페이지 트리` 상태를 분리했다.
+- UI 동작: 전체 보기에는 노트북 행과 새 노트북 동작만 표시한다. 노트북을 선택하면 좌상단에 짧은 `BACK`과 말줄임 처리된 노트북명을 표시하고, 해당 노트북의 페이지 트리·범위 검색·모든 하위 페이지 접기·터미널·새 페이지·더보기·파일 가져오기만 노출한다. `BACK`은 열린 문서를 강제로 닫지 않아 작성 중 내용과 자동 저장을 보존한다. 중앙 빈 화면도 전체 보기에서는 “노트북을 선택하세요”, 전용 보기에서는 선택 종류에 맞는 노트/프로젝트 작업공간으로 구분한다.
+- 상태·예외: 전용 보기 ID를 기존 계정·장치 session view-state에 저장한다. 새로고침 뒤 존재하는 노트북만 복원하며 삭제·권한 회수·잘못된 ID는 전체 목록으로 자동 복구한다. 노트 직접 열기와 터미널 열기는 해당 노트북 전용 보기로 맞추고 검색어는 범위 전환 때 초기화해 다른 노트북 결과가 섞이지 않게 한다.
+- 검증: `verify-note-studio-notebook-scope.mjs`를 추가해 전체 목록에서 모든 노트북 페이지 트리를 동시에 렌더링하는 회귀를 차단했다. scope·compact layout·전역 UI·window manager verifier와 production frontend build, react-pdf/PDF.js compatibility gate가 통과했다. 마스터·전용 workbook을 artifact-tool로 갱신하고 재열기, 수식 오류·문자 깨짐 검사, 변경 행 렌더를 확인했다.
+- 배포 경계: 코드 커밋·NAS 반영·운영 bundle 검증과 로그인된 실제 화면 E2E 결과는 배포 후 이 항목에 이어 기록한다.

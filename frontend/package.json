@@ -46,6 +46,7 @@
     "verify:pdf-editor": "node scripts/verify-pdf-editor.mjs",
     "verify:window-manager": "node scripts/verify-window-manager.mjs",
     "verify:ui-contract": "node scripts/verify-ui-contract.mjs",
+    "verify:notebook-scope": "node scripts/verify-note-studio-notebook-scope.mjs",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

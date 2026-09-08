@@ -34,7 +34,7 @@ assert(theme.includes("whiteSpace: 'nowrap'") && theme.includes('flexShrink: 0')
 assert(aiAgent.includes('>답변 이어가기</Button>') && !aiAgent.includes('>작업 재실행 없이 답변 이어받기</Button>'), 'Long AI continuation labels must be compact.');
 assert(platform.includes('>설치 앱 연결</Button>') && platform.includes('>탐색기 열기</Button>'), 'PC connection dialog actions must use compact labels.');
 assert(documentStudio.includes('>결과 폴더</Button>'), 'Document Studio result toolbar must use a compact folder label.');
-assert(noteStudio.includes('role="tree" aria-label="노트북과 페이지 트리"'), 'Notebook pages must expose a real accessible tree.');
+assert(noteStudio.includes('role="tree" aria-label="전체 노트북 목록"') && noteStudio.includes('aria-label={`${sidebarNotebook.title} 페이지 트리`}'), 'Notebook overview and scoped pages must expose separate accessible trees.');
 assert(noteStudio.includes('className="note-page-tree-row"') && noteStudio.includes('collapsedPageIds'), 'Individual pages must render tree guides and retain collapse state.');
 assert(noteStudio.includes('이름 바꾸기 · F2') && noteStudio.includes('휴지통으로 이동'), 'Page context actions must include edit and trash operations.');
 assert(terminal.includes('role="tree" aria-label="노트북 파일 트리"') && terminal.includes('className="note-file-tree-row"'), 'Project files must expose a guided explorer tree.');
