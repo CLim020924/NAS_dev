@@ -72,3 +72,17 @@ export const flattenNoteTree = (notes = []) => {
   for (const note of notes) if (!visited.has(note.id)) result.push({ ...note, depth: 0 });
   return result;
 };
+
+export const visibleNoteTree = (notes = [], collapsedIds = new Set()) => {
+  const hidden = new Set();
+  return flattenNoteTree(notes).filter((note) => {
+    const parentHidden = note.parentId && hidden.has(note.parentId);
+    if (parentHidden || (note.parentId && collapsedIds.has(note.parentId))) hidden.add(note.id);
+    return !parentHidden && !(note.parentId && collapsedIds.has(note.parentId));
+  });
+};
+
+export const noteChildCounts = (notes = []) => notes.reduce((counts, note) => {
+  if (note.parentId) counts.set(note.parentId, (counts.get(note.parentId) || 0) + 1);
+  return counts;
+}, new Map());

@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
-  Alert, Box, Button, CircularProgress, Divider, IconButton, List, ListItemButton,
-  ListItemIcon, ListItemText, Stack, Tooltip, Typography
+  Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
+  Divider, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Menu, MenuItem,
+  Stack, TextField, Tooltip, Typography
 } from '@mui/material';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -12,6 +13,13 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import CloseIcon from '@mui/icons-material/Close';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined';
+import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import { copyTextToClipboard } from '../../utils/copyTextToClipboard';
 
 const formatBytes = (value) => {
   if (!Number.isFinite(value)) return '';
@@ -21,6 +29,7 @@ const formatBytes = (value) => {
 };
 
 const commandError = (error) => error.response?.data?.error || error.message || '명령을 실행하지 못했습니다.';
+const joinNasPath = (parent, name) => `${String(parent || '/').replace(/\/+$/, '')}/${name}`.replace(/^\/{2,}/, '/');
 
 const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onClose, onOpenFile, onOpenFolder }) => {
   const [entries, setEntries] = useState([]);
@@ -28,6 +37,11 @@ const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onCl
   const [filesError, setFilesError] = useState('');
   const [truncated, setTruncated] = useState(false);
   const [collapsedDirectories, setCollapsedDirectories] = useState(() => new Set());
+  const [selectedEntryId, setSelectedEntryId] = useState('');
+  const [fileMenu, setFileMenu] = useState(null);
+  const [editDialog, setEditDialog] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const [editing, setEditing] = useState(false);
   const [cwd, setCwd] = useState('');
   const [ownerLabel, setOwnerLabel] = useState('사용자');
   const [command, setCommand] = useState('');
@@ -60,6 +74,8 @@ const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onCl
     setHistory([]);
     setHistoryIndex(-1);
     setCollapsedDirectories(new Set());
+    setSelectedEntryId('');
+    setFileMenu(null);
     loadFiles();
   }, [loadFiles, notebook?.title]);
 
@@ -84,6 +100,51 @@ const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onCl
       else next.add(entry.relativePath);
       return next;
     });
+  };
+
+  const openFileMenu = (event, entry = null) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (entry) setSelectedEntryId(entry.id);
+    setFileMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, entry });
+  };
+
+  const startEdit = (mode, entry = null) => {
+    const parentPath = entry?.kind === 'folder' ? entry.path : entry?.path?.slice(0, Math.max(1, entry.path.lastIndexOf('/'))) || notebook.path;
+    setFileMenu(null);
+    setEditValue(mode === 'rename' ? entry?.name || '' : mode === 'new-file' ? '새 파일.txt' : '새 폴더');
+    setEditDialog({ mode, entry, parentPath });
+  };
+
+  const submitEdit = async () => {
+    const name = editValue.trim();
+    if (!name || editing) return;
+    setEditing(true);
+    try {
+      if (editDialog.mode === 'new-folder') {
+        await axios.post('/api/file', { path: editDialog.parentPath, folderName: name }, { withCredentials: true });
+      } else if (editDialog.mode === 'new-file') {
+        const body = new FormData();
+        body.append('path', editDialog.parentPath);
+        body.append('file', new Blob([''], { type: 'text/plain' }), name);
+        await axios.post('/api/file', body, { withCredentials: true });
+      } else if (editDialog.mode === 'rename') {
+        await axios.put('/api/file', { oldPath: editDialog.entry.path, newPath: joinNasPath(editDialog.parentPath, name) }, { withCredentials: true });
+      }
+      setEditDialog(null);
+      await loadFiles();
+    } catch (error) { setFilesError(commandError(error)); }
+    finally { setEditing(false); }
+  };
+
+  const trashEntry = async (entry) => {
+    setFileMenu(null);
+    if (!window.confirm(`“${entry.name}”을(를) 휴지통으로 이동할까요?`)) return;
+    try {
+      await axios.delete('/api/file', { params: { path: entry.path }, data: { path: entry.path }, withCredentials: true });
+      setSelectedEntryId('');
+      await loadFiles();
+    } catch (error) { setFilesError(commandError(error)); }
   };
 
   const runCommand = async () => {
@@ -154,15 +215,17 @@ const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onCl
         <Divider sx={{ borderColor: '#2a313c' }} />
         {filesError && <Alert severity="error" sx={{ borderRadius: 0 }}>{filesError}</Alert>}
         {truncated && <Alert severity="warning" sx={{ borderRadius: 0 }}>항목이 많아 2,000개까지만 표시합니다.</Alert>}
-        <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          {filesLoading ? <Box sx={{ py: 4, display: 'grid', placeItems: 'center' }}><CircularProgress size={22} /></Box> : visibleEntries.length === 0 ? <Typography variant="body2" sx={{ p: 2, color: '#7f8a99' }}>아직 실제 파일이 없습니다.</Typography> : <List dense disablePadding>
+        <Box onContextMenu={(event) => openFileMenu(event)} sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          {filesLoading ? <Box sx={{ py: 4, display: 'grid', placeItems: 'center' }}><CircularProgress size={22} /></Box> : visibleEntries.length === 0 ? <Typography variant="body2" sx={{ p: 2, color: '#7f8a99' }}>아직 실제 파일이 없습니다.</Typography> : <List role="tree" aria-label="노트북 파일 트리" dense disablePadding>
             {visibleEntries.map((entry) => {
               const folder = entry.kind === 'folder';
               const collapsed = collapsedDirectories.has(entry.relativePath);
-              return <ListItemButton key={entry.id} onClick={() => folder ? toggleDirectory(entry) : onOpenFile?.(entry.path)} onDoubleClick={() => folder && onOpenFolder?.(entry.path)} sx={{ minHeight: 34, pl: 0.75 + Math.min(entry.depth, 8) * 1.65, color: '#d8dee9', '&:hover': { bgcolor: '#202733' } }}>
+              return <ListItemButton className="note-file-tree-row" role="treeitem" aria-level={entry.depth + 1} aria-expanded={folder ? !collapsed : undefined} key={entry.id} selected={selectedEntryId === entry.id} onClick={() => { setSelectedEntryId(entry.id); if (folder) toggleDirectory(entry); else onOpenFile?.(entry.path); }} onDoubleClick={() => folder && onOpenFolder?.(entry.path)} onContextMenu={(event) => openFileMenu(event, entry)} sx={{ minHeight: 32, py: 0.15, pl: 0.65 + Math.min(entry.depth, 10) * 1.55, color: '#d8dee9', position: 'relative', '&:hover': { bgcolor: '#202733' }, '&.Mui-selected': { bgcolor: '#263345' }, '&.Mui-selected:hover': { bgcolor: '#2d3c50' } }}>
+                {Array.from({ length: Math.min(entry.depth, 10) }).map((_, index) => <Box aria-hidden="true" key={index} sx={{ position: 'absolute', top: 0, bottom: 0, left: 13 + index * 24.8, borderLeft: '1px solid #303846', pointerEvents: 'none' }} />)}
                 {folder ? (collapsed ? <ChevronRightIcon sx={{ fontSize: 17, color: '#7f8a99' }} /> : <ExpandMoreIcon sx={{ fontSize: 17, color: '#7f8a99' }} />) : <Box sx={{ width: 17 }} />}
                 <ListItemIcon sx={{ minWidth: 27, color: '#9ba7b6' }}>{folder ? <FolderOutlinedIcon sx={{ fontSize: 18 }} /> : <InsertDriveFileOutlinedIcon sx={{ fontSize: 17 }} />}</ListItemIcon>
                 <ListItemText primary={entry.name} secondary={folder ? '' : formatBytes(entry.size)} primaryTypographyProps={{ noWrap: true, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 9.5, color: '#737f8f' }} />
+                <IconButton className="note-tree-row-actions" size="small" aria-label={`${entry.name} 작업`} onClick={(event) => openFileMenu(event, entry)} sx={{ color: '#aeb8c5' }}><MoreHorizIcon sx={{ fontSize: 17 }} /></IconButton>
               </ListItemButton>;
             })}
           </List>}
@@ -190,6 +253,19 @@ const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onCl
           <Button size="small" disabled={running || !command.trim()} onClick={runCommand} sx={{ color: '#b7c3d2' }}>실행</Button>
         </Stack>
       </Box>
+      <Menu open={!!fileMenu} onClose={() => setFileMenu(null)} anchorReference="anchorPosition" anchorPosition={fileMenu ? { top: fileMenu.mouseY, left: fileMenu.mouseX } : undefined} MenuListProps={{ dense: true, 'aria-label': '파일 트리 작업' }}>
+        {fileMenu?.entry && <MenuItem onClick={() => { const entry = fileMenu.entry; setFileMenu(null); entry.kind === 'folder' ? onOpenFolder?.(entry.path) : onOpenFile?.(entry.path); }}>열기</MenuItem>}
+        {fileMenu?.entry?.kind === 'folder' && <MenuItem onClick={() => { toggleDirectory(fileMenu.entry); setFileMenu(null); }}>{collapsedDirectories.has(fileMenu.entry.relativePath) ? '펼치기' : '접기'}</MenuItem>}
+        <Divider />
+        <MenuItem onClick={() => startEdit('new-file', fileMenu?.entry)}><ListItemIcon><NoteAddOutlinedIcon fontSize="small" /></ListItemIcon><ListItemText>새 파일</ListItemText></MenuItem>
+        <MenuItem onClick={() => startEdit('new-folder', fileMenu?.entry)}><ListItemIcon><CreateNewFolderOutlinedIcon fontSize="small" /></ListItemIcon><ListItemText>새 폴더</ListItemText></MenuItem>
+        {fileMenu?.entry && <><Divider /><MenuItem onClick={() => startEdit('rename', fileMenu.entry)}><ListItemIcon><DriveFileRenameOutlineIcon fontSize="small" /></ListItemIcon><ListItemText>이름 바꾸기</ListItemText></MenuItem><MenuItem onClick={async () => { await copyTextToClipboard(fileMenu.entry.path); setFileMenu(null); }}><ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon><ListItemText>NAS 경로 복사</ListItemText></MenuItem><Divider /><MenuItem onClick={() => trashEntry(fileMenu.entry)} sx={{ color: 'error.main' }}><ListItemIcon sx={{ color: 'error.main' }}><DeleteOutlineIcon fontSize="small" /></ListItemIcon><ListItemText>휴지통으로 이동</ListItemText></MenuItem></>}
+      </Menu>
+      <Dialog open={!!editDialog} onClose={() => !editing && setEditDialog(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>{editDialog?.mode === 'rename' ? '이름 바꾸기' : editDialog?.mode === 'new-file' ? '새 파일' : '새 폴더'}</DialogTitle>
+        <DialogContent><TextField autoFocus fullWidth margin="dense" label="이름" value={editValue} onChange={(event) => setEditValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitEdit(); }} helperText={editDialog?.parentPath} /></DialogContent>
+        <DialogActions><Button color="inherit" onClick={() => setEditDialog(null)} disabled={editing}>취소</Button><Button variant="contained" onClick={submitEdit} disabled={editing || !editValue.trim()}>{editing ? '처리 중…' : '확인'}</Button></DialogActions>
+      </Dialog>
     </Box>
   );
 };

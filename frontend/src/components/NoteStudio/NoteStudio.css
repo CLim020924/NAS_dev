@@ -143,3 +143,18 @@
   text-align: center;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
+
+.note-tree-row-actions {
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.note-file-tree-row:hover .note-tree-row-actions,
+.note-file-tree-row:focus-within .note-tree-row-actions,
+.note-file-tree-row.Mui-selected .note-tree-row-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .note-tree-row-actions { opacity: 1; }
+}

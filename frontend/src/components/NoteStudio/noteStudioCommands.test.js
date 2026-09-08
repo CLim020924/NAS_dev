@@ -1,6 +1,6 @@
 /** @jest-environment node */
 
-import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, nextBlockIndent, normalizeBlockIndent, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
+import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, nextBlockIndent, normalizeBlockIndent, noteChildCounts, parseSlashQuery, tabShortcutForParagraph, visibleNoteTree } from './noteStudioCommands';
 
 test('filters block commands with Korean and English aliases', () => {
   expect(filterCommands(BLOCK_COMMANDS, '제목').map((item) => item.id)).toEqual(['heading-1', 'heading-2', 'heading-3']);
@@ -21,6 +21,18 @@ test('keeps orphaned or cyclic legacy rows visible once', () => {
   const flat = flattenNoteTree([{ id: 'a', parentId: 'b' }, { id: 'b', parentId: 'a' }, { id: 'orphan', parentId: 'missing' }]);
   expect(new Set(flat.map((item) => item.id))).toEqual(new Set(['a', 'b', 'orphan']));
   expect(flat).toHaveLength(3);
+});
+
+test('hides every descendant below a collapsed page while keeping siblings visible', () => {
+  const notes = [
+    { id: 'root', parentId: null },
+    { id: 'child', parentId: 'root' },
+    { id: 'grandchild', parentId: 'child' },
+    { id: 'sibling', parentId: null }
+  ];
+  expect(visibleNoteTree(notes, new Set(['root'])).map((item) => item.id)).toEqual(['root', 'sibling']);
+  expect(noteChildCounts(notes).get('root')).toBe(1);
+  expect(noteChildCounts(notes).get('child')).toBe(1);
 });
 
 test('detects only a slash command next to the caret', () => {

@@ -11,6 +11,8 @@ const platform = read('src/components/ServicePlatform.js');
 const theme = read('src/contexts/ThemeContext.js');
 const aiAgent = read('src/components/AiAgentPanel.js');
 const documentStudio = read('src/components/DocumentStudio/DocumentStudio.js');
+const terminal = read('src/components/NoteStudio/NoteStudioTerminal.js');
+const commands = read('src/components/NoteStudio/noteStudioCommands.js');
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
@@ -32,5 +34,11 @@ assert(theme.includes("whiteSpace: 'nowrap'") && theme.includes('flexShrink: 0')
 assert(aiAgent.includes('>답변 이어가기</Button>') && !aiAgent.includes('>작업 재실행 없이 답변 이어받기</Button>'), 'Long AI continuation labels must be compact.');
 assert(platform.includes('>설치 앱 연결</Button>') && platform.includes('>탐색기 열기</Button>'), 'PC connection dialog actions must use compact labels.');
 assert(documentStudio.includes('>결과 폴더</Button>'), 'Document Studio result toolbar must use a compact folder label.');
+assert(noteStudio.includes('role="tree" aria-label="노트북과 페이지 트리"'), 'Notebook pages must expose a real accessible tree.');
+assert(noteStudio.includes('className="note-page-tree-row"') && noteStudio.includes('collapsedPageIds'), 'Individual pages must render tree guides and retain collapse state.');
+assert(noteStudio.includes('이름 바꾸기 · F2') && noteStudio.includes('휴지통으로 이동'), 'Page context actions must include edit and trash operations.');
+assert(terminal.includes('role="tree" aria-label="노트북 파일 트리"') && terminal.includes('className="note-file-tree-row"'), 'Project files must expose a guided explorer tree.');
+assert(terminal.includes("startEdit('new-file'") && terminal.includes("startEdit('new-folder'") && terminal.includes("startEdit('rename'"), 'Project explorer must support common create and rename actions.');
+assert(commands.includes('visibleNoteTree') && commands.includes('noteChildCounts'), 'Page tree visibility must be derived by tested pure helpers.');
 
-console.log('Note Studio compact layout and single-line control policy verified.');
+console.log('Note Studio compact layout, tree navigation, and single-line control policy verified.');

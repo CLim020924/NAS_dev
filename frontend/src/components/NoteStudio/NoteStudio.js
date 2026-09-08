@@ -45,7 +45,7 @@ import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
-import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, nextBlockIndent, normalizeBlockIndent, parseSlashQuery, tabShortcutForParagraph } from './noteStudioCommands';
+import { BLOCK_COMMANDS, filterCommands, nextBlockIndent, normalizeBlockIndent, noteChildCounts, parseSlashQuery, tabShortcutForParagraph, visibleNoteTree } from './noteStudioCommands';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
 import { copyTextToClipboard } from '../../utils/copyTextToClipboard';
 import { BLOCK_BACKGROUNDS, BLOCK_COLORS, BLOCK_TRANSFORMS, blockTextStats, findContextBlock } from './noteStudioBlockMenu';
@@ -181,6 +181,10 @@ const NoteStudio = () => {
   const [pythonRuntimeLoading, setPythonRuntimeLoading] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
   const [collapsedNotebookIds, setCollapsedNotebookIds] = useState(() => new Set());
+  const [collapsedPageIds, setCollapsedPageIds] = useState(() => new Set());
+  const [renameNote, setRenameNote] = useState(null);
+  const [renameTitle, setRenameTitle] = useState('');
+  const [renamingNote, setRenamingNote] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalNotebookId, setTerminalNotebookId] = useState(null);
   const [terminalExplorerOpen, setTerminalExplorerOpen] = useState(true);
@@ -343,6 +347,7 @@ const NoteStudio = () => {
       resumeSessionRef.current = record?.state || null;
       if (record?.state?.activeNotebookId) setActiveNotebookId(record.state.activeNotebookId);
       if (Array.isArray(record?.state?.collapsedNotebookIds)) setCollapsedNotebookIds(new Set(record.state.collapsedNotebookIds));
+      if (Array.isArray(record?.state?.collapsedPageIds)) setCollapsedPageIds(new Set(record.state.collapsedPageIds));
       if (record?.state?.terminalNotebookId) setTerminalNotebookId(record.state.terminalNotebookId);
       setTerminalOpen(!!record?.state?.terminalOpen);
       if (typeof record?.state?.terminalExplorerOpen === 'boolean') setTerminalExplorerOpen(record.state.terminalExplorerOpen);
@@ -360,10 +365,10 @@ const NoteStudio = () => {
     if (!sessionHydratedRef.current || !sessionReady) return;
     sessionViewStateQueueRef.current.schedule({ kind: 'note-studio-session' }, {
       activeNotebookId: activeNotebookId || '', selectedNoteId: selected?.id || '',
-      collapsedNotebookIds: [...collapsedNotebookIds], terminalOpen,
+      collapsedNotebookIds: [...collapsedNotebookIds], collapsedPageIds: [...collapsedPageIds], terminalOpen,
       terminalNotebookId: terminalNotebookId || '', terminalExplorerOpen, sidebarOpen,
     });
-  }, [activeNotebookId, collapsedNotebookIds, selected?.id, sessionReady, sidebarOpen, terminalExplorerOpen, terminalNotebookId, terminalOpen]);
+  }, [activeNotebookId, collapsedNotebookIds, collapsedPageIds, selected?.id, sessionReady, sidebarOpen, terminalExplorerOpen, terminalNotebookId, terminalOpen]);
 
   useEffect(() => {
     const resume = resumeSessionRef.current;
@@ -905,11 +910,13 @@ const NoteStudio = () => {
   };
 
   const saveLabel = useMemo(() => ({ idle: '저장됨', saved: '저장됨', dirty: '대기', saving: '저장 중', conflict: '충돌', error: '실패' }[savingState]), [savingState]);
-  const notesByNotebook = useMemo(() => notebooks.map((notebook) => ({
-    notebook,
-    notes: flattenNoteTree(notes.filter((note) => note.notebookId === notebook.id))
-  })), [notebooks, notes]);
-  const legacyTreeNotes = useMemo(() => flattenNoteTree(notes.filter((note) => !note.notebookId)), [notes]);
+  const notesByNotebook = useMemo(() => notebooks.map((notebook) => {
+    const notebookNotes = notes.filter((note) => note.notebookId === notebook.id);
+    return { notebook, notes: visibleNoteTree(notebookNotes, collapsedPageIds), childCounts: noteChildCounts(notebookNotes) };
+  }), [collapsedPageIds, notebooks, notes]);
+  const legacyNotes = useMemo(() => notes.filter((note) => !note.notebookId), [notes]);
+  const legacyTreeNotes = useMemo(() => visibleNoteTree(legacyNotes, collapsedPageIds), [collapsedPageIds, legacyNotes]);
+  const legacyChildCounts = useMemo(() => noteChildCounts(legacyNotes), [legacyNotes]);
   const visibleCommands = useMemo(() => filterCommands(BLOCK_COMMANDS, commandQuery), [commandQuery]);
   const terminalNotebook = useMemo(() => notebooks.find((item) => item.id === terminalNotebookId) || null, [notebooks, terminalNotebookId]);
   const activeNotebook = useMemo(() => notebooks.find((item) => item.id === activeNotebookId) || null, [activeNotebookId, notebooks]);
@@ -919,6 +926,14 @@ const NoteStudio = () => {
       const next = new Set(current);
       if (next.has(notebookId)) next.delete(notebookId);
       else next.add(notebookId);
+      return next;
+    });
+  };
+
+  const togglePageCollapsed = (noteId) => {
+    setCollapsedPageIds((current) => {
+      const next = new Set(current);
+      if (next.has(noteId)) next.delete(noteId); else next.add(noteId);
       return next;
     });
   };
@@ -1096,6 +1111,59 @@ const NoteStudio = () => {
     } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '노트를 이동하지 못했습니다.') }); }
   };
 
+  const startRenameNote = (note) => {
+    setContextMenu(null);
+    setRenameNote(note);
+    setRenameTitle(note.title || '');
+  };
+
+  const submitRenameNote = async () => {
+    const title = renameTitle.trim();
+    if (!renameNote || !title || renamingNote) return;
+    setRenamingNote(true);
+    try {
+      const { data } = await axios.patch(`/api/note-studio/notes/${encodeURIComponent(renameNote.id)}`, { expectedRevision: renameNote.revision, title, reason: 'tree-rename' }, { withCredentials: true });
+      setNotes((items) => items.map((item) => item.id === renameNote.id ? { ...item, ...data.note, content: undefined } : item));
+      if (selectedRef.current?.id === renameNote.id) {
+        selectedRef.current = { ...selectedRef.current, ...data.note };
+        setSelected(selectedRef.current);
+      }
+      setRenameNote(null);
+    } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '페이지 이름을 바꾸지 못했습니다.') }); }
+    finally { setRenamingNote(false); }
+  };
+
+  const trashNoteFromTree = async (note) => {
+    setContextMenu(null);
+    try {
+      await axios.delete(`/api/note-studio/notes/${encodeURIComponent(note.id)}`, { data: { expectedRevision: note.revision }, withCredentials: true });
+      if (selectedRef.current?.id === note.id) { setSelected(null); selectedRef.current = null; }
+      await loadList({ keepSelection: selectedRef.current?.id !== note.id });
+      setMessage({ severity: 'success', text: '페이지를 휴지통으로 이동했습니다.' });
+    } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '페이지를 휴지통으로 이동하지 못했습니다.') }); }
+  };
+
+  const openTreeContextMenu = (event, note) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, note, anchorEl: event.currentTarget });
+  };
+
+  const renderNoteTreeRow = (note, childCounts, notebookId = null) => {
+    const type = TYPE_OPTIONS.find((option) => option.type === note.type) || TYPE_OPTIONS[0];
+    const Icon = type.Icon;
+    const hasChildren = (childCounts.get(note.id) || 0) > 0;
+    const collapsed = collapsedPageIds.has(note.id);
+    const depth = Math.min(note.depth, 8);
+    return <ListItemButton className="note-page-tree-row" role="treeitem" aria-level={depth + 1} aria-expanded={hasChildren ? !collapsed : undefined} key={note.id} selected={selected?.id === note.id} onClick={() => { if (notebookId) setActiveNotebookId(notebookId); openNote(note); }} onContextMenu={(event) => openTreeContextMenu(event, note)} onKeyDown={(event) => { if (event.key === 'F2' && !trashMode) { event.preventDefault(); startRenameNote(note); } }} sx={{ py: 0.65, pl: 0.75 + depth * 2, minHeight: 42, position: 'relative', '&:hover .note-tree-row-actions, &:focus-within .note-tree-row-actions': { opacity: 1 } }}>
+      {Array.from({ length: depth }).map((_, index) => <Box aria-hidden="true" key={index} sx={{ position: 'absolute', top: 0, bottom: 0, left: 17 + index * 16, borderLeft: '1px solid', borderColor: alpha(theme.palette.text.primary, 0.13), pointerEvents: 'none' }} />)}
+      <IconButton size="small" tabIndex={-1} disabled={!hasChildren} aria-label={hasChildren ? (collapsed ? `${note.title} 하위 페이지 펼치기` : `${note.title} 하위 페이지 접기`) : undefined} onClick={(event) => { event.stopPropagation(); if (hasChildren) togglePageCollapsed(note.id); }} sx={{ width: 24, height: 24, mr: 0.25, visibility: hasChildren ? 'visible' : 'hidden' }}><KeyboardArrowRightIcon sx={{ fontSize: 17, transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform 120ms ease' }} /></IconButton>
+      <ListItemIcon sx={{ minWidth: 29 }}><Icon sx={{ fontSize: 18 }} /></ListItemIcon>
+      <ListItemText primary={note.title} secondary={`${type.label} · ${formatTime(note.updatedAt)}`} primaryTypographyProps={{ noWrap: true, fontWeight: 750, fontSize: 13 }} secondaryTypographyProps={{ noWrap: true, fontSize: 10.5 }} />
+      {!trashMode && <Box className="note-tree-row-actions" sx={{ display: 'flex', opacity: 0, transition: 'opacity 100ms ease', bgcolor: 'inherit' }}><Tooltip title="하위 페이지 만들기"><IconButton size="small" aria-label={`${note.title} 아래에 페이지 만들기`} onClick={(event) => { event.stopPropagation(); setPendingParentId(note.id); setCreateAnchor(event.currentTarget); }}><AddIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip><Tooltip title="페이지 작업"><IconButton size="small" aria-label={`${note.title} 작업`} onClick={(event) => openTreeContextMenu(event, note)}><MoreHorizIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip></Box>}
+    </ListItemButton>;
+  };
+
   return (
     <Box className="note-studio-shell" sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateColumns: sidebarOpen ? { xs: '1fr', md: '270px minmax(0, 1fr)' } : '42px minmax(0, 1fr)', bgcolor: 'background.default' }}>
       {!sidebarOpen && <Box sx={{ minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', pt: 0.75, bgcolor: 'background.paper', borderRight: '1px solid', borderColor: 'divider' }}><Tooltip title="노트북 목록 보기 · Ctrl+B"><IconButton size="small" aria-label="노트북 목록 보기" onClick={() => setSidebarOpen(true)}><ViewSidebarOutlinedIcon fontSize="small" /></IconButton></Tooltip></Box>}
@@ -1119,11 +1187,7 @@ const NoteStudio = () => {
         </Stack>
         <Divider />
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 && notebooks.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트북을 만들어 시작하세요.'}</Typography></Box> : <List dense disablePadding>{notesByNotebook.map(({ notebook, notes: notebookNotes }) => <Box key={notebook.id}><ListItemButton selected={activeNotebookId === notebook.id} onClick={() => setActiveNotebookId(notebook.id)} onDoubleClick={() => openNotebookTerminal(notebook.id)} sx={{ py: 0.85, bgcolor: alpha(theme.palette.text.primary, 0.025) }}><IconButton size="small" aria-label={collapsedNotebookIds.has(notebook.id) ? `${notebook.title} 펼치기` : `${notebook.title} 접기`} onClick={(event) => { event.stopPropagation(); toggleNotebookCollapsed(notebook.id); }} sx={{ mr: 0.25 }}><KeyboardArrowRightIcon fontSize="small" sx={{ transform: collapsedNotebookIds.has(notebook.id) ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform 120ms ease' }} /></IconButton><ListItemIcon sx={{ minWidth: 31 }}>{notebook.kind === 'project' ? <TerminalIcon fontSize="small" /> : <MenuBookOutlinedIcon fontSize="small" />}</ListItemIcon><ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : `${notebook.kind === 'project' ? '프로젝트' : '노트'} · ${notebookNotes.length}개 페이지`} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} /></ListItemButton>{!collapsedNotebookIds.has(notebook.id) && notebookNotes.map((note) => {
-            const type = TYPE_OPTIONS.find((option) => option.type === note.type) || TYPE_OPTIONS[0];
-            const Icon = type.Icon;
-            return <ListItemButton key={note.id} selected={selected?.id === note.id} onClick={() => { setActiveNotebookId(notebook.id); openNote(note); }} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, note, anchorEl: event.currentTarget }); }} sx={{ py: 1, pl: 3 + Math.min(note.depth, 5) * 2, borderBottom: '1px solid', borderColor: alpha(theme.palette.divider, 0.7) }}>{note.depth > 0 && <KeyboardArrowRightIcon fontSize="small" color="disabled" sx={{ mr: 0.25 }} />}<ListItemIcon sx={{ minWidth: 34 }}><Icon fontSize="small" /></ListItemIcon><ListItemText primary={note.title} secondary={`${type.label} · ${formatTime(note.updatedAt)}`} primaryTypographyProps={{ noWrap: true, fontWeight: 750 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11 }} /></ListItemButton>;
-          })}</Box>)}{legacyTreeNotes.length > 0 && <Box><Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>기존 노트</Typography>{legacyTreeNotes.map((note) => { const type = TYPE_OPTIONS.find((option) => option.type === note.type) || TYPE_OPTIONS[0]; const Icon = type.Icon; return <ListItemButton key={note.id} selected={selected?.id === note.id} onClick={() => openNote(note)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, note, anchorEl: event.currentTarget }); }} sx={{ pl: 3 + Math.min(note.depth, 5) * 2 }}><ListItemIcon sx={{ minWidth: 34 }}><Icon fontSize="small" /></ListItemIcon><ListItemText primary={note.title} secondary={type.label} /></ListItemButton>; })}</Box>}</List>}
+          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 && notebooks.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트북을 만들어 시작하세요.'}</Typography></Box> : <List role="tree" aria-label="노트북과 페이지 트리" dense disablePadding>{notesByNotebook.map(({ notebook, notes: notebookNotes, childCounts }) => <Box key={notebook.id} role="treeitem" aria-expanded={!collapsedNotebookIds.has(notebook.id)}><ListItemButton selected={activeNotebookId === notebook.id} onClick={() => setActiveNotebookId(notebook.id)} onDoubleClick={() => openNotebookTerminal(notebook.id)} sx={{ py: 0.75, bgcolor: alpha(theme.palette.text.primary, 0.025), '&:hover': { bgcolor: alpha(theme.palette.text.primary, 0.065) } }}><IconButton size="small" aria-label={collapsedNotebookIds.has(notebook.id) ? `${notebook.title} 펼치기` : `${notebook.title} 접기`} onClick={(event) => { event.stopPropagation(); toggleNotebookCollapsed(notebook.id); }} sx={{ mr: 0.25 }}><KeyboardArrowRightIcon fontSize="small" sx={{ transform: collapsedNotebookIds.has(notebook.id) ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform 120ms ease' }} /></IconButton><ListItemIcon sx={{ minWidth: 31 }}>{notebook.kind === 'project' ? <TerminalIcon fontSize="small" /> : <MenuBookOutlinedIcon fontSize="small" />}</ListItemIcon><ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : `${notebook.kind === 'project' ? '프로젝트' : '노트'} · ${notes.filter((note) => note.notebookId === notebook.id).length}개 페이지`} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} /></ListItemButton>{!collapsedNotebookIds.has(notebook.id) && <Box role="group">{notebookNotes.map((note) => renderNoteTreeRow(note, childCounts, notebook.id))}</Box>}</Box>)}{legacyTreeNotes.length > 0 && <Box role="group"><Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>기존 노트</Typography>{legacyTreeNotes.map((note) => renderNoteTreeRow(note, legacyChildCounts))}</Box>}</List>}
         </Box>
         <Box sx={{ p: 0.75, borderTop: '1px solid', borderColor: 'divider' }}><Tooltip title="TXT·Markdown·코드 가져오기"><Button size="small" fullWidth startIcon={<UploadFileIcon />} onClick={() => importInputRef.current?.click()}>파일 가져오기</Button></Tooltip><input ref={importInputRef} hidden type="file" accept=".txt,.md,.markdown,.js,.jsx,.ts,.tsx,.py,.json,.html,.css,.sql,.sh,.yaml,.yml" onChange={importFile} /></Box>
       </Paper>
@@ -1243,11 +1307,21 @@ const NoteStudio = () => {
           <MenuItem onClick={() => { closeBlockMenu(false); setOfficeLocationDialogOpen(true); }}>다른 NAS 위치에 만들기…</MenuItem>
         </>}
       </Menu>
-      <Menu open={!!contextMenu} onClose={() => setContextMenu(null)} anchorReference="anchorPosition" anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined}>
+      <Menu open={!!contextMenu} onClose={() => setContextMenu(null)} anchorReference="anchorPosition" anchorPosition={contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined} MenuListProps={{ dense: true, 'aria-label': '페이지 트리 작업' }}>
         <MenuItem onClick={() => { const target = contextMenu.note; setContextMenu(null); openNote(target); }}>열기</MenuItem>
-        {!trashMode && <MenuItem onClick={() => { const target = contextMenu; setContextMenu(null); setPendingParentId(target.note.id); setCreateAnchor(target.anchorEl); }}>하위 노트 만들기</MenuItem>}
+        {!trashMode && (noteChildCounts(notes).get(contextMenu?.note?.id) || 0) > 0 && <MenuItem onClick={() => { togglePageCollapsed(contextMenu.note.id); setContextMenu(null); }}>{collapsedPageIds.has(contextMenu.note.id) ? '하위 페이지 펼치기' : '하위 페이지 접기'}</MenuItem>}
+        {!trashMode && <Divider />}
+        {!trashMode && <MenuItem onClick={() => { const target = contextMenu; setContextMenu(null); setPendingParentId(target.note.id); setCreateAnchor(target.anchorEl); }}>하위 페이지 만들기</MenuItem>}
+        {!trashMode && <MenuItem onClick={() => startRenameNote(contextMenu.note)}>이름 바꾸기 · F2</MenuItem>}
         {!trashMode && contextMenu?.note?.parentId && !contextMenu?.note?.storageRelativePath && <MenuItem onClick={() => moveNoteToRoot(contextMenu.note)}>최상위로 이동</MenuItem>}
+        {!trashMode && <Divider />}
+        {!trashMode && <MenuItem onClick={() => trashNoteFromTree(contextMenu.note)} sx={{ color: 'error.main' }}>휴지통으로 이동</MenuItem>}
       </Menu>
+      <Dialog open={!!renameNote} onClose={() => !renamingNote && setRenameNote(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>페이지 이름 바꾸기</DialogTitle>
+        <DialogContent><TextField autoFocus fullWidth margin="dense" label="페이지 이름" value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitRenameNote(); }} /></DialogContent>
+        <DialogActions><Button color="inherit" disabled={renamingNote} onClick={() => setRenameNote(null)}>취소</Button><Button variant="contained" disabled={renamingNote || !renameTitle.trim()} onClick={submitRenameNote}>{renamingNote ? '변경 중…' : '변경'}</Button></DialogActions>
+      </Dialog>
       <Menu
         open={commandOpen}
         onClose={() => { commandOpenRef.current = false; slashFromRef.current = null; setCommandOpen(false); editor?.commands.focus(); }}
