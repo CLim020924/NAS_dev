@@ -21,6 +21,8 @@ assert(noteStudio.includes('minHeight: 40, maxHeight: 40'), 'The note title/acti
 assert(noteStudio.includes("codeRunning ? '실행 중' : '실행'"), 'The code action must use the compact run label.');
 assert(!noteStudio.includes("'Python' : 'JavaScript'} 실행`}</Button>"), 'Language names must not be repeated inside the run button.');
 assert(noteStudio.includes('>문서</Button>'), 'The connected-document action must use a compact label.');
+assert(noteStudio.includes('aria-label="페이지 작업 더보기"') && noteStudio.includes('primary="버전 기록"') && noteStudio.includes('primary="파일로 내보내기"'), 'Secondary page actions must remain grouped in the overflow menu.');
+assert(noteStudio.includes('justifyContent="space-between" className="note-studio-compact-controls"'), 'Sidebar controls must remain separated into navigation and creation groups.');
 assert(!noteStudio.includes('NOTE MANAGER의 개인 작업대'), 'The redundant Note Studio sidebar heading must be removed.');
 assert(noteCss.includes('.note-studio-shell .MuiButton-root') && noteCss.includes('white-space: nowrap'), 'Note Studio controls must never wrap labels.');
 assert(appWindows.includes("const compactAppChrome = win.appId === 'note-studio'"), 'The Note Studio app chrome must be compact.');
