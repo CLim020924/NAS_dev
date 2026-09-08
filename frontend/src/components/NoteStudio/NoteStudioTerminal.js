@@ -145,7 +145,7 @@ const NoteStudioTerminal = ({ notebook, explorerOpen, onExplorerOpenChange, onCl
   };
 
   return (
-    <Box className="note-studio-terminal" sx={{ flex: 1, minHeight: 0, display: 'flex', bgcolor: '#0d1117', color: '#d8dee9' }}>
+    <Box className="note-studio-terminal" data-testid="note-studio-terminal-panel" sx={{ flex: '0 1 clamp(180px, 32%, 320px)', minHeight: 150, maxHeight: '42%', display: 'flex', bgcolor: '#0d1117', color: '#d8dee9', borderTop: '1px solid #2a313c' }}>
       {explorerOpen && <Box sx={{ width: { xs: 190, sm: 250 }, minWidth: 0, display: 'flex', flexDirection: 'column', bgcolor: '#151a22', borderRight: '1px solid #2a313c' }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.25, minHeight: 43 }}>
           <Typography variant="caption" sx={{ color: '#aeb8c5', fontWeight: 900, letterSpacing: '0.06em' }}>노트북 파일</Typography>
