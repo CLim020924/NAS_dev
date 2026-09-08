@@ -1606,3 +1606,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 자동 검증: `frontend/scripts/verify-ui-contract.mjs`와 `verify:ui-contract`를 추가했다. 실행 위치와 무관하게 frontend root를 찾으며 Button, DialogActions, Tabs, Chip, 동적 이름과 주요 창 title 계약이 제거되면 실패한다. UI contract, window manager, Note Studio compact verifier가 통과했고 production build 및 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. 로컬 중복 ESLint 설치 경로 충돌은 `DISABLE_ESLINT_PLUGIN=true`로 compile을 별도 확인했으며 소스 컴파일 오류는 없었다.
 - 배포: 코드 commits `a9c4b8c`, `5a80b8e`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. 검증된 로컬 산출물 `main.29ae622b.js`를 `/var/www/html`에 배포했고 내부 3030과 공개 HTTPS는 모두 200이다. 마스터 workbook의 feature/relation/code/do-not-break/patch/request/check 기록을 artifact-tool로 갱신하고 수식 오류·문자 깨짐 검사와 변경 시트 렌더를 확인했다.
 - 남은 확인: 자동 브라우저에는 로그인된 NAS 세션이 없어 실제 사용자 데이터의 매우 긴 파일명·사용자명·노트명과 360px 폭에서 hover/title을 육안으로 누르는 E2E는 수행하지 않았다. 코드 계약·production build·NAS verifier·운영 번들 반영은 완료했으며, 다음 인증된 화면 확인에서는 이 시각 검증만 남는다.
+
+### 2026-09-08 Note Studio 상단 버튼 작업 흐름별 재정렬
+
+- 사용자 요청: 기능을 계속 나열해 난잡해진 Note Studio 상단바 버튼을 역할과 사용 순서에 맞게 제대로 정렬한다.
+- 원인: 제목·저장 상태·언어·실행·콘솔·패키지·터미널·문서·버전·내보내기·첨부·삭제가 모두 같은 시각적 수준으로 한 줄에 있었다. 자주 쓰는 작업과 보조/위험 작업의 구분이 없고 작은 창에서는 핵심 동작까지 밀렸다. sidebar 상단도 목록 제어와 생성 동작이 구분되지 않았다.
+- 페이지 상단 구조: `제목 + 저장 상태` → `코드 언어·실행·콘솔·패키지` → `노트북 터미널·문서 생성·첨부` → `더보기` 순서로 배치하고 그룹 사이에 세로 구분선을 넣었다. 일반 노트에는 코드 그룹을 표시하지 않는다. 40px 높이와 한 줄 가로 overflow는 유지한다.
+- 더보기 메뉴: 버전 기록, 파일 내보내기, 휴지통 이동을 상단의 개별 아이콘에서 제거하고 아이콘+텍스트 메뉴로 묶었다. 휴지통 페이지에서는 같은 위치에 복원과 영구 삭제만 표시한다. 메뉴 버튼에는 `aria-haspopup`, `aria-expanded`, accessible label을 넣었고 삭제 색상과 기존 영구 삭제 확인은 유지한다.
+- sidebar 상단: 왼쪽에는 목록 숨기기·모두 접기, 오른쪽에는 터미널·새 노트북·새 페이지를 두고 생성 그룹 앞에 구분선을 넣었다. 누락되어 있던 아이콘 버튼의 접근성 이름도 보강했다.
+- 검증·배포: compact layout verifier에 더보기 메뉴와 sidebar 그룹 회귀를 추가했다. 로컬 compact/UI contract 검사와 production/PDF.js build가 통과했고, 로컬 window-manager verifier는 기존 node_modules의 Babel preset 누락 때문에 실행되지 않았으나 NAS의 정상 의존성에서는 compact/UI contract/window manager 검사가 모두 통과했다. 코드 commit `6c60603`을 GitHub와 NAS에 fast-forward하고 `main.5fd6891d.js`를 운영 배포했다. 내부 3030과 공개 HTTPS는 200이다.
+- 기록·남은 확인: 마스터 workbook과 Note Studio 전용 명세에 UI 배치, 접근성, 회귀, 금지 규칙을 기록하고 artifact-tool 수식·문자 깨짐 검사와 렌더를 통과했다. 자동 브라우저에 로그인 세션이 없어 실제 일반/코드/휴지통 페이지에서 메뉴 포인터·키보드와 좁은 창을 누르는 육안 E2E만 남는다.
