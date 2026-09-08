@@ -26,7 +26,7 @@ const CodeRunPanel = ({ session, events, onInput, onStop, onHide }) => {
     await onInput?.(value);
   };
 
-  return <Box sx={{ flex: expanded ? '0 0 min(58vh, 560px)' : '0 0 clamp(190px, 32vh, 330px)', minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: '#0d1117', color: '#d8dee9', borderTop: '1px solid #2a313c', transition: 'flex-basis 140ms ease' }}>
+  return <Box data-testid="code-run-panel" sx={{ flex: expanded ? '0 1 min(42%, 420px)' : '0 1 clamp(140px, 24%, 220px)', minHeight: 116, maxHeight: '42%', display: 'flex', flexDirection: 'column', bgcolor: '#0d1117', color: '#d8dee9', borderTop: '1px solid #2a313c', transition: 'flex-basis 140ms ease' }}>
     <Stack direction="row" alignItems="center" spacing={1} sx={{ minHeight: 40, px: 1.25, bgcolor: '#11161e', borderBottom: '1px solid #2a313c' }}>
       <TerminalIcon sx={{ fontSize: 17, color: '#aeb8c5' }} />
       <Typography variant="body2" sx={{ fontWeight: 900 }}>실행 콘솔</Typography>
