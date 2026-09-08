@@ -1654,4 +1654,5 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 버튼 정리: 전용 상단에는 `BACK`, 말줄임 처리된 노트북명, `새 페이지`, `더보기`만 상시 표시한다. 터미널, 모든 하위 페이지 접기, 사이드바 숨기기는 노트북 더보기 메뉴로 이동해 기능은 잃지 않고 시각 밀도만 낮췄다. 전체 보기에는 사이드바 숨기기와 새 노트북만 유지한다.
 - 상태·검색: 전체 목록 펼침 상태는 `expandedOverviewNotebookIds`로 계정·장치 view-state에 저장한다. 전체 보기 검색은 노트북명만 필터링하며 서버의 page 목록을 검색어로 잘라내지 않아 펼친 트리와 페이지 수가 왜곡되지 않는다. 전용 보기 검색만 해당 노트북 페이지에 적용한다.
 - 검증: notebook scope·compact layout·전역 UI contract·window manager verifier와 production build, react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. 마스터·Note Studio workbook은 artifact-tool로 갱신했고 재열기, 수식 오류 0건, 변경 행 렌더를 확인했다.
-- 현재 상태: 코드와 문서는 로컬 검증 완료, 운영 배포 대기다. 로그인된 실제 여러 노트북 화면에서 chevron, 행 진입, BACK, 좁은 폭과 키보드 포커스를 누르는 시각 E2E는 배포 뒤에도 인증 세션에서 한 번 확인해야 한다.
+- 운영 검증·배포: commit `cd0955b`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. NAS에서 notebook scope·compact layout·전역 UI contract·window manager verifier가 통과했다. 검증된 로컬 production build의 `main.f780dd07.js`와 Note Studio lazy chunk `955.163c579b.chunk.js`를 운영 배포했고 두 파일의 로컬/운영 SHA-256이 각각 일치한다. 내부 3030·공개 HTTPS 200, 필수 6개 서비스 active, PM2 `msp-backend` online, NAS checkout clean이다.
+- 남은 확인: 자동 브라우저에는 인증된 NAS 사용자 세션이 없어 실제 여러 노트북 화면에서 chevron, 행 진입, BACK, 좁은 폭과 키보드 포커스를 누르는 시각 E2E는 수행하지 않았다. 정적 UI 계약·production compile·NAS verifier·운영 bundle 반영은 완료했다.
