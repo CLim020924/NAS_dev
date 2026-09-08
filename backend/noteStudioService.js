@@ -212,7 +212,17 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   const listNotebooks = ({ deleted = false } = {}) => readNotebooks().notebooks
     .filter((item) => deleted ? !!item.deletedAt : !item.deletedAt)
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
-    .map((item) => ({ ...item, ...notebookAvailability(item) }));
+    .map((item) => ({ ...item, ...notebookAvailability(item), path: `/${NOTE_MANAGER_ROOT}/${item.directoryName}` }));
+
+  const getNotebookWorkspace = (id) => {
+    const notebook = findNotebook(readNotebooks(), id);
+    const absolutePath = notebookDirectory(notebook);
+    assertPhysicalDirectory(absolutePath);
+    return {
+      notebook: { ...notebook, ...notebookAvailability(notebook), path: `/${NOTE_MANAGER_ROOT}/${notebook.directoryName}` },
+      absolutePath,
+    };
+  };
 
   const createNotebook = ({ title } = {}) => {
     const registry = readNotebooks();
@@ -580,7 +590,7 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   };
 
   ensureStore();
-  return { listNotebooks, createNotebook, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment, rewriteAttachmentPaths, updateAttachmentLocation };
+  return { listNotebooks, getNotebookWorkspace, createNotebook, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment, rewriteAttachmentPaths, updateAttachmentLocation };
 };
 
 module.exports = {

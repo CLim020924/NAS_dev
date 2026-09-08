@@ -177,6 +177,16 @@ test('creates notebook, page and child page as contained physical directories', 
   assert.ok(!page.directoryName.includes(':'));
 }));
 
+test('resolves a notebook terminal workspace without exposing another notebook', () => withStore((store, root) => {
+  const first = store.createNotebook({ title: '첫 작업' });
+  const second = store.createNotebook({ title: '둘째 작업' });
+  const resolved = store.getNotebookWorkspace(first.id);
+  assert.equal(resolved.notebook.id, first.id);
+  assert.equal(resolved.notebook.path, `/${NOTE_MANAGER_ROOT}/${first.directoryName}`);
+  assert.equal(resolved.absolutePath, path.join(root, NOTE_MANAGER_ROOT, first.directoryName));
+  assert.notEqual(resolved.absolutePath, path.join(root, NOTE_MANAGER_ROOT, second.directoryName));
+}));
+
 test('resolves duplicate notebook and page folder names without overwriting', () => withStore((store, root) => {
   const first = store.createNotebook({ title: '업무' });
   const second = store.createNotebook({ title: '업무' });

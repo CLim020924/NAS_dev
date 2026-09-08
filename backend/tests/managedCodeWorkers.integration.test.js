@@ -1,7 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createManagedPythonWorker } = require('../managedPythonWorker');
 const { createManagedJavaScriptWorker } = require('../managedJavaScriptWorker');
+const { createManagedNotebookTerminal } = require('../managedNotebookTerminal');
 
 const enabled = process.env.NAS_TEST_CODE_RUNTIME === '1';
 const packageSmokeEnabled = enabled && process.env.NAS_TEST_PYTHON_PACKAGES === '1';
@@ -16,6 +20,29 @@ test('real JavaScript sandbox executes a one-shot program', { skip: !enabled }, 
   const result = await createManagedJavaScriptWorker().run({ code: 'console.log(6 * 7)' });
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout.trim(), '42');
+});
+
+test('real notebook terminal is writable only through its selected workspace', { skip: !enabled }, async () => {
+  const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-notebook-terminal-'));
+  try {
+    fs.mkdirSync(path.join(workspacePath, 'src'));
+    const result = await createManagedNotebookTerminal().run({
+      workspacePath,
+      workingDirectory: 'src',
+      command: "pwd; printf 'terminal-ok' > result.txt; cat result.txt",
+    });
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /^\/workspace\/src\nterminal-ok$/);
+    assert.equal(fs.readFileSync(path.join(workspacePath, 'src', 'result.txt'), 'utf8'), 'terminal-ok');
+
+    const networkResult = await createManagedNotebookTerminal().run({
+      workspacePath,
+      command: "python -c \"import socket; socket.create_connection(('1.1.1.1', 53), 1)\"",
+    });
+    assert.notEqual(networkResult.exitCode, 0, 'terminal container unexpectedly reached the network');
+  } finally {
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+  }
 });
 
 test('curated Python packages import and compute inside the real sandbox', { skip: !packageSmokeEnabled }, async () => {

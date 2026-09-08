@@ -38,6 +38,8 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import ChecklistIcon from '@mui/icons-material/Checklist';
+import TerminalIcon from '@mui/icons-material/Terminal';
+import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
@@ -45,6 +47,7 @@ import { BLOCK_COMMANDS, filterCommands, flattenNoteTree, nextBlockIndent, norma
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
 import { copyTextToClipboard } from '../../utils/copyTextToClipboard';
 import { BLOCK_BACKGROUNDS, BLOCK_COLORS, BLOCK_TRANSFORMS, blockTextStats, findContextBlock } from './noteStudioBlockMenu';
+import NoteStudioTerminal from './NoteStudioTerminal';
 import './NoteStudio.css';
 
 const BlockIndent = Extension.create({
@@ -170,6 +173,10 @@ const NoteStudio = () => {
   const [pythonRuntime, setPythonRuntime] = useState(null);
   const [pythonRuntimeLoading, setPythonRuntimeLoading] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
+  const [collapsedNotebookIds, setCollapsedNotebookIds] = useState(() => new Set());
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalNotebookId, setTerminalNotebookId] = useState(null);
+  const [terminalExplorerOpen, setTerminalExplorerOpen] = useState(true);
   const selectedRef = useRef(null);
   const saveTimerRef = useRef(null);
   const pendingContentRef = useRef(null);
@@ -324,6 +331,10 @@ const NoteStudio = () => {
     loadWorkspaceViewState({ kind: 'note-studio-session' }, controller.signal).then((record) => {
       resumeSessionRef.current = record?.state || null;
       if (record?.state?.activeNotebookId) setActiveNotebookId(record.state.activeNotebookId);
+      if (Array.isArray(record?.state?.collapsedNotebookIds)) setCollapsedNotebookIds(new Set(record.state.collapsedNotebookIds));
+      if (record?.state?.terminalNotebookId) setTerminalNotebookId(record.state.terminalNotebookId);
+      setTerminalOpen(!!record?.state?.terminalOpen);
+      if (typeof record?.state?.terminalExplorerOpen === 'boolean') setTerminalExplorerOpen(record.state.terminalExplorerOpen);
     }).catch(() => {}).finally(() => {
       if (!controller.signal.aborted) {
         sessionHydratedRef.current = true;
@@ -337,8 +348,10 @@ const NoteStudio = () => {
     if (!sessionHydratedRef.current || !sessionReady) return;
     sessionViewStateQueueRef.current.schedule({ kind: 'note-studio-session' }, {
       activeNotebookId: activeNotebookId || '', selectedNoteId: selected?.id || '',
+      collapsedNotebookIds: [...collapsedNotebookIds], terminalOpen,
+      terminalNotebookId: terminalNotebookId || '', terminalExplorerOpen,
     });
-  }, [activeNotebookId, selected?.id, sessionReady]);
+  }, [activeNotebookId, collapsedNotebookIds, selected?.id, sessionReady, terminalExplorerOpen, terminalNotebookId, terminalOpen]);
 
   useEffect(() => {
     const resume = resumeSessionRef.current;
@@ -814,6 +827,27 @@ const NoteStudio = () => {
   })), [notebooks, notes]);
   const legacyTreeNotes = useMemo(() => flattenNoteTree(notes.filter((note) => !note.notebookId)), [notes]);
   const visibleCommands = useMemo(() => filterCommands(BLOCK_COMMANDS, commandQuery), [commandQuery]);
+  const terminalNotebook = useMemo(() => notebooks.find((item) => item.id === terminalNotebookId) || null, [notebooks, terminalNotebookId]);
+
+  const toggleNotebookCollapsed = (notebookId) => {
+    setCollapsedNotebookIds((current) => {
+      const next = new Set(current);
+      if (next.has(notebookId)) next.delete(notebookId);
+      else next.add(notebookId);
+      return next;
+    });
+  };
+
+  const openNotebookTerminal = (notebookId = activeNotebookId) => {
+    const target = notebooks.find((item) => item.id === notebookId && item.available !== false);
+    if (!target) {
+      setMessage({ severity: 'warning', text: '터미널을 열 수 있는 노트북을 먼저 선택해 주세요.' });
+      return;
+    }
+    setActiveNotebookId(target.id);
+    setTerminalNotebookId(target.id);
+    setTerminalOpen(true);
+  };
 
   const runBlockCommand = (commandId) => {
     if (!editor) return;
@@ -978,10 +1012,10 @@ const NoteStudio = () => {
 
   return (
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateColumns: { xs: '1fr', md: '270px minmax(0, 1fr)' }, bgcolor: 'background.default' }}>
-      <Paper square elevation={0} sx={{ display: { xs: selected ? 'none' : 'flex', md: 'flex' }, minHeight: 0, flexDirection: 'column', borderRight: { md: '1px solid' }, borderColor: 'divider' }}>
+      <Paper square elevation={0} sx={{ display: { xs: selected || terminalOpen ? 'none' : 'flex', md: 'flex' }, minHeight: 0, flexDirection: 'column', borderRight: { md: '1px solid' }, borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ p: 1.5 }}>
           <Box><Typography sx={{ fontWeight: 950, letterSpacing: '-0.03em' }}>노트 스튜디오</Typography><Typography variant="caption" color="text.secondary">NOTE MANAGER의 개인 작업대</Typography></Box>
-          <Stack direction="row"><Tooltip title="새 노트북"><IconButton onClick={() => setNotebookDialogOpen(true)}><CreateNewFolderOutlinedIcon /></IconButton></Tooltip><Tooltip title="새 페이지"><IconButton color="primary" onClick={(event) => { setPendingParentId(null); if (!activeNotebookId) setNotebookDialogOpen(true); else setCreateAnchor(event.currentTarget); }}><AddIcon /></IconButton></Tooltip></Stack>
+          <Stack direction="row"><Tooltip title="모든 노트북 접기"><span><IconButton disabled={!notebooks.length} onClick={() => setCollapsedNotebookIds(new Set(notebooks.map((item) => item.id)))}><UnfoldLessIcon /></IconButton></span></Tooltip><Tooltip title="선택한 노트북에서 터미널 열기"><span><IconButton disabled={!activeNotebookId} onClick={() => openNotebookTerminal()}><TerminalIcon /></IconButton></span></Tooltip><Tooltip title="새 노트북"><IconButton onClick={() => setNotebookDialogOpen(true)}><CreateNewFolderOutlinedIcon /></IconButton></Tooltip><Tooltip title="새 페이지"><IconButton color="primary" onClick={(event) => { setPendingParentId(null); if (!activeNotebookId) setNotebookDialogOpen(true); else setCreateAnchor(event.currentTarget); }}><AddIcon /></IconButton></Tooltip></Stack>
         </Stack>
         <Box sx={{ px: 1.25, pb: 1 }}><TextField value={query} onChange={(event) => setQuery(event.target.value)} size="small" fullWidth placeholder="제목과 내용 검색" InputProps={{ startAdornment: <SearchIcon fontSize="small" sx={{ mr: 0.75, color: 'text.secondary' }} /> }} /></Box>
         <Stack direction="row" spacing={0.75} sx={{ px: 1.25, pb: 1 }}>
@@ -990,7 +1024,7 @@ const NoteStudio = () => {
         </Stack>
         <Divider />
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 && notebooks.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트북을 만들어 시작하세요.'}</Typography></Box> : <List dense disablePadding>{notesByNotebook.map(({ notebook, notes: notebookNotes }) => <Box key={notebook.id}><ListItemButton selected={activeNotebookId === notebook.id} onClick={() => setActiveNotebookId(notebook.id)} sx={{ py: 0.85, bgcolor: alpha(theme.palette.text.primary, 0.025) }}><ListItemIcon sx={{ minWidth: 34 }}><MenuBookOutlinedIcon fontSize="small" /></ListItemIcon><ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : notebook.directoryName} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} /></ListItemButton>{notebookNotes.map((note) => {
+          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 && notebooks.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트북을 만들어 시작하세요.'}</Typography></Box> : <List dense disablePadding>{notesByNotebook.map(({ notebook, notes: notebookNotes }) => <Box key={notebook.id}><ListItemButton selected={activeNotebookId === notebook.id} onClick={() => setActiveNotebookId(notebook.id)} onDoubleClick={() => openNotebookTerminal(notebook.id)} sx={{ py: 0.85, bgcolor: alpha(theme.palette.text.primary, 0.025) }}><IconButton size="small" aria-label={collapsedNotebookIds.has(notebook.id) ? `${notebook.title} 펼치기` : `${notebook.title} 접기`} onClick={(event) => { event.stopPropagation(); toggleNotebookCollapsed(notebook.id); }} sx={{ mr: 0.25 }}><KeyboardArrowRightIcon fontSize="small" sx={{ transform: collapsedNotebookIds.has(notebook.id) ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform 120ms ease' }} /></IconButton><ListItemIcon sx={{ minWidth: 31 }}><MenuBookOutlinedIcon fontSize="small" /></ListItemIcon><ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : `${notebook.directoryName} · ${notebookNotes.length}개 페이지`} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} /></ListItemButton>{!collapsedNotebookIds.has(notebook.id) && notebookNotes.map((note) => {
             const type = TYPE_OPTIONS.find((option) => option.type === note.type) || TYPE_OPTIONS[0];
             const Icon = type.Icon;
             return <ListItemButton key={note.id} selected={selected?.id === note.id} onClick={() => { setActiveNotebookId(notebook.id); openNote(note); }} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, note, anchorEl: event.currentTarget }); }} sx={{ py: 1, pl: 3 + Math.min(note.depth, 5) * 2, borderBottom: '1px solid', borderColor: alpha(theme.palette.divider, 0.7) }}>{note.depth > 0 && <KeyboardArrowRightIcon fontSize="small" color="disabled" sx={{ mr: 0.25 }} />}<ListItemIcon sx={{ minWidth: 34 }}><Icon fontSize="small" /></ListItemIcon><ListItemText primary={note.title} secondary={`${type.label} · ${formatTime(note.updatedAt)}`} primaryTypographyProps={{ noWrap: true, fontWeight: 750 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11 }} /></ListItemButton>;
@@ -999,9 +1033,9 @@ const NoteStudio = () => {
         <Box sx={{ p: 1.25, borderTop: '1px solid', borderColor: 'divider' }}><Button size="small" fullWidth startIcon={<UploadFileIcon />} onClick={() => importInputRef.current?.click()}>TXT·Markdown·코드 가져오기</Button><input ref={importInputRef} hidden type="file" accept=".txt,.md,.markdown,.js,.jsx,.ts,.tsx,.py,.json,.html,.css,.sql,.sh,.yaml,.yml" onChange={importFile} /><Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>개인 공간 저장 · 변경 충돌 보호 · 최대 100개 버전</Typography></Box>
       </Paper>
 
-      <Box sx={{ minWidth: 0, minHeight: 0, display: { xs: selected ? 'flex' : 'none', md: 'flex' }, flexDirection: 'column' }}>
+      <Box sx={{ minWidth: 0, minHeight: 0, display: { xs: selected || terminalOpen ? 'flex' : 'none', md: 'flex' }, flexDirection: 'column' }}>
         {message && <Alert severity={message.severity} onClose={() => setMessage(null)} sx={{ borderRadius: 0 }}>{message.text}</Alert>}
-        {!selected ? <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}><Box sx={{ textAlign: 'center', maxWidth: 440 }}><NotesIcon sx={{ fontSize: 64, color: alpha(theme.palette.text.primary, 0.22) }} /><Typography variant="h6" sx={{ mt: 1, fontWeight: 900 }}>노트북 안에 페이지를 구성하세요</Typography><Typography color="text.secondary" sx={{ mt: 0.75 }}>블록, Markdown, TXT, 코드를 같은 트리에서 관리하며 실제 NOTE MANAGER 경로에 연결합니다.</Typography><Button sx={{ mt: 2 }} variant="contained" startIcon={notebooks.length ? <AddIcon /> : <CreateNewFolderOutlinedIcon />} onClick={(event) => { setPendingParentId(null); if (!activeNotebookId) setNotebookDialogOpen(true); else setCreateAnchor(event.currentTarget); }}>{notebooks.length ? '새 페이지' : '첫 노트북 만들기'}</Button></Box></Box> : <>
+        {terminalOpen && terminalNotebook ? <NoteStudioTerminal notebook={terminalNotebook} explorerOpen={terminalExplorerOpen} onExplorerOpenChange={setTerminalExplorerOpen} onClose={() => setTerminalOpen(false)} onOpenFile={openFileWindowByPath} onOpenFolder={openFolderWindowByPath} /> : !selected ? <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}><Box sx={{ textAlign: 'center', maxWidth: 440 }}><NotesIcon sx={{ fontSize: 64, color: alpha(theme.palette.text.primary, 0.22) }} /><Typography variant="h6" sx={{ mt: 1, fontWeight: 900 }}>노트북 안에 페이지를 구성하세요</Typography><Typography color="text.secondary" sx={{ mt: 0.75 }}>블록, Markdown, TXT, 코드를 같은 트리에서 관리하며 실제 NOTE MANAGER 경로에 연결합니다.</Typography><Stack direction="row" spacing={1} justifyContent="center" sx={{ mt: 2 }}><Button variant="contained" startIcon={notebooks.length ? <AddIcon /> : <CreateNewFolderOutlinedIcon />} onClick={(event) => { setPendingParentId(null); if (!activeNotebookId) setNotebookDialogOpen(true); else setCreateAnchor(event.currentTarget); }}>{notebooks.length ? '새 페이지' : '첫 노트북 만들기'}</Button>{activeNotebookId && <Button variant="outlined" startIcon={<TerminalIcon />} onClick={() => openNotebookTerminal()}>터미널</Button>}</Stack></Box></Box> : <>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 1.25, py: 0.85, minHeight: 55, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
             <Button sx={{ display: { md: 'none' }, minWidth: 0 }} onClick={() => setSelected(null)}>BACK</Button>
             <TextField variant="standard" value={selected.title} onChange={(event) => updateMeta({ title: event.target.value })} disabled={!!selected.deletedAt} fullWidth inputProps={{ 'aria-label': '노트 제목' }} InputProps={{ disableUnderline: true, sx: { fontWeight: 900, fontSize: 18 } }} />
@@ -1009,6 +1043,7 @@ const NoteStudio = () => {
             <Chip size="small" label={saveLabel} color={savingState === 'error' || savingState === 'conflict' ? 'warning' : savingState === 'saved' || savingState === 'idle' ? 'success' : 'default'} variant="outlined" />
             {selected.type === 'code' && ['python', 'javascript'].includes(String(selected.language || '').toLowerCase()) && !selected.deletedAt && <Button size="small" variant="contained" startIcon={codeRunning ? <CircularProgress size={15} color="inherit" /> : <PlayArrowIcon />} disabled={codeRunning || savingState === 'dirty' || savingState === 'saving'} onClick={runCode}>{codeRunning ? '실행 중' : `${selected.language === 'python' ? 'Python' : 'JavaScript'} 실행`}</Button>}
             {selected.type === 'code' && selected.language === 'python' && !selected.deletedAt && <Button size="small" variant="outlined" onClick={openPythonRuntime}>패키지</Button>}
+            {!selected.deletedAt && <Tooltip title="현재 노트북 경로에서 격리 터미널 열기"><span><IconButton disabled={!selected.notebookId} onClick={() => openNotebookTerminal(selected.notebookId)}><TerminalIcon /></IconButton></span></Tooltip>}
             {!selected.deletedAt && <Button size="small" variant="outlined" startIcon={<DescriptionIcon />} disabled={officeCreating || savingState === 'dirty' || savingState === 'saving'} onClick={(event) => setOfficeMenu({ anchorEl: event.currentTarget })}>문서 만들기</Button>}
             {!selected.deletedAt && <Tooltip title="버전 기록"><IconButton onClick={openVersions}><HistoryIcon /></IconButton></Tooltip>}
             {!selected.deletedAt && <Tooltip title="파일로 내보내기"><IconButton onClick={exportSelected}><DownloadIcon /></IconButton></Tooltip>}

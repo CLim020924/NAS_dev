@@ -61,10 +61,11 @@ const {
   sanitizeFileName: sanitizeDocumentStudioFileName
 } = require('./documentStudioService');
 const { createBlankOfficeDocument, createBlankRhwpDocument } = require('./blankDocumentService');
-const { createNoteStudioStore, getFilesystemIdentity, sameFilesystemIdentity, findPathByFilesystemIdentity } = require('./noteStudioService');
+const { NOTE_MANAGER_ROOT, createNoteStudioStore, getFilesystemIdentity, sameFilesystemIdentity, findPathByFilesystemIdentity } = require('./noteStudioService');
 const { createManagedPythonWorker } = require('./managedPythonWorker');
 const { getPythonRuntimeCatalog } = require('./pythonRuntimeCatalog');
 const { createManagedJavaScriptWorker } = require('./managedJavaScriptWorker');
+const { createManagedNotebookTerminal, normalizeTerminalRelativePath, resolveTerminalDirectory } = require('./managedNotebookTerminal');
 const { classifyCodeExecutionError } = require('./codeExecutionErrors');
 const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore');
 const { createPdfOcrService } = require('./pdfOcrService');
@@ -83,6 +84,7 @@ const {
 const router = express.Router();
 const managedPythonWorker = createManagedPythonWorker();
 const managedJavaScriptWorker = createManagedJavaScriptWorker();
+const managedNotebookTerminal = createManagedNotebookTerminal();
 const pdfOcrService = createPdfOcrService();
 
 // 🔥 [최종 방어선] 403 에러 강제 세탁 미들웨어 (프론트엔드 폭파 방지)
@@ -1201,6 +1203,90 @@ router.post('/note-studio/notebooks', verifyToken, express.json({ limit: '32kb' 
     const notebook = getNoteStudioStore(req.user).createNotebook(req.body || {});
     return res.status(201).json({ success: true, notebook });
   } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+const getNotebookExplorerEntries = (req, notebookId) => {
+  const { notebook, absolutePath } = getNoteStudioStore(req.user).getNotebookWorkspace(notebookId);
+  const accessBase = getAccessBasePath(normalizeQuotaFields(req.user));
+  const entries = [];
+  let truncated = false;
+  const visit = (directory, parentRelative = '', depth = 0) => {
+    if (depth > 10 || entries.length >= 2000) { truncated = true; return; }
+    const children = fs.readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => !entry.isSymbolicLink())
+      .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name, 'ko'));
+    for (const entry of children) {
+      if (entries.length >= 2000) { truncated = true; break; }
+      const absolute = path.join(directory, entry.name);
+      const relative = parentRelative ? `${parentRelative}/${entry.name}` : entry.name;
+      const stat = fs.statSync(absolute);
+      entries.push({
+        id: relative,
+        name: entry.name,
+        relativePath: relative,
+        path: toNasRelativePath(accessBase, absolute),
+        parentRelativePath: parentRelative,
+        kind: entry.isDirectory() ? 'folder' : 'file',
+        size: entry.isFile() ? stat.size : null,
+        updatedAt: stat.mtime.toISOString(),
+        depth,
+      });
+      if (entry.isDirectory()) visit(absolute, relative, depth + 1);
+    }
+  };
+  visit(absolutePath);
+  return { notebook, entries, truncated };
+};
+
+router.get('/note-studio/notebooks/:notebookId/files', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, ownerLabel: getLoginId(req.user) || '사용자', ...getNotebookExplorerEntries(req, req.params.notebookId) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/notebooks/:notebookId/terminal', verifyToken, express.json({ limit: '24kb' }), async (req, res) => {
+  let reservationId = '';
+  try {
+    const store = getNoteStudioStore(req.user);
+    const { notebook, absolutePath } = store.getNotebookWorkspace(req.params.notebookId);
+    const currentDirectory = resolveTerminalDirectory(absolutePath, req.body?.cwd || '');
+    const command = String(req.body?.command || '');
+    const ownerLabel = getLoginId(req.user) || '사용자';
+    const cdMatch = command.match(/^\s*cd(?:\s+(.+?))?\s*$/);
+    if (cdMatch) {
+      const rawTarget = String(cdMatch[1] || '').trim().replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, '$1$2');
+      const requested = !rawTarget || rawTarget === '~' || rawTarget === '/' || rawTarget === '/workspace'
+        ? ''
+        : rawTarget.startsWith('/')
+          ? normalizeTerminalRelativePath(rawTarget)
+          : normalizeTerminalRelativePath(path.posix.join(currentDirectory, rawTarget));
+      const cwd = resolveTerminalDirectory(absolutePath, requested);
+      return res.json({ success: true, cwd, ownerLabel, notebook: { id: notebook.id, title: notebook.title, directoryName: notebook.directoryName }, result: { exitCode: 0, stdout: '', stderr: '', durationMs: 0 } });
+    }
+    if (/^\s*pwd\s*$/.test(command)) {
+      const virtualPath = `/${ownerLabel}/${NOTE_MANAGER_ROOT}/${notebook.directoryName}${currentDirectory ? `/${currentDirectory}` : ''}`;
+      return res.json({ success: true, cwd: currentDirectory, ownerLabel, notebook: { id: notebook.id, title: notebook.title, directoryName: notebook.directoryName }, result: { exitCode: 0, stdout: `${virtualPath}\n`, stderr: '', durationMs: 0 } });
+    }
+    const resourceControl = req.app.get('resourceControl');
+    if (!resourceControl) return res.status(503).json({ error: '서버 자원 보호 정책이 준비되지 않았습니다.' });
+    const requested = { cpuPercent: 12.5, memoryBytes: 256 * 1024 * 1024 };
+    const admission = resourceControl.reserve({ jobId: `terminal:${crypto.randomUUID()}`, user: req.user, requested });
+    if (admission.state !== 'available') return res.status(429).json({ error: admission.state === 'queued' ? '서버가 바빠 잠시 뒤 다시 실행해 주세요.' : '현재 사용자 또는 서버 자원 제한으로 터미널을 실행할 수 없습니다.', state: admission.state, reasons: admission.reasons || [] });
+    reservationId = admission.jobId;
+    const result = await managedNotebookTerminal.run({ workspacePath: absolutePath, workingDirectory: currentDirectory, command, cpuCores: 0.5, memoryBytes: requested.memoryBytes, pids: 64 });
+    return res.json({
+      success: true,
+      cwd: currentDirectory,
+      ownerLabel,
+      notebook: { id: notebook.id, title: notebook.title, directoryName: notebook.directoryName },
+      result,
+      sandbox: { network: 'none', timeoutSeconds: 20, memoryMiB: 256, pids: 64, rootFilesystem: 'read-only', notebookMount: 'read-write', user: 'non-root' },
+    });
+  } catch (error) {
+    return sendNoteStudioError(res, error);
+  } finally {
+    if (reservationId) req.app.get('resourceControl')?.release(reservationId);
+  }
 });
 
 router.get('/note-studio/notes', verifyToken, (req, res) => {

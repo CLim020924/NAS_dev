@@ -1547,3 +1547,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 기록: 마스터 `NAS_PROJECT_LOG.xlsx`와 Note Studio 전용 명세의 feature, relation, code, context menu, source, test, change/status, request/patch 기록을 갱신했다. artifact-tool로 재열기·수식 오류 0건·변경 시트 렌더를 확인했다. 기존 문서의 `??` 문자열은 인코딩 방지 규칙과 과거 장애 원문이며 새 깨짐이 아니다.
 - 남은 제품 경계: 블록 링크·댓글·제안·다른 페이지 이동·다중 선택 drag·synced block은 현재 JSON에 영구 blockId가 없어 위치 기반으로 흉내 내면 편집 뒤 잘못된 블록을 가리킨다. `PENDING-NOTE-STUDIO-BLOCK-COLLAB-20260907`로 분리했으며 stable blockId migration, 권한, revision/Yjs anchor, 원자 undo를 함께 구현한 뒤 노출한다.
 - 배포 상태: 코드 커밋 `02d21db`를 GitHub와 NAS 활성 브랜치에 fast-forward하고 운영 정적 경로까지 배포했다. 문서 상태 정정 커밋은 같은 브랜치에 후속 반영한다. 로그인된 실제 Note Studio에서 문단·목록·마지막 블록·한글 IME·포인터 메뉴를 육안 확인하는 최종 E2E만 남는다.
+
+## 2026-09-08 계정·노트북 경계형 터미널과 접이식 탐색기
+
+- 사용자 요청: Note Studio에 터미널을 추가하되 로그인한 사용자와 선택한 노트북 경로에서 열고, 노트북별로 하위 페이지를 숨길 수 있게 하며, 터미널 옆에서 실제 하위 파일 목록을 함께 보도록 한다. 관련 제품의 배치·보안·편의 기능도 공식 문서와 비교한다.
+- 조사·결정: JupyterLab의 파일 탐색기+주 작업 영역과 저장되는 레이아웃을 참고하되, xterm.js가 경고하는 강력한 터미널 권한·신뢰 불가 데이터·WebSocket 경계 때문에 첫 단계는 호스트 PTY가 아닌 요청별 격리 명령 터미널로 구현했다. Docker의 기본 무제한 상태를 사용하지 않고 자원 제한을 명시했다.
+- 구현: 선택 노트북 헤더 더블클릭·도구 버튼·페이지 헤더 버튼으로 터미널을 연다. 왼쪽에는 실제 폴더/파일 목록, 오른쪽에는 출력·명령 입력을 배치하고 파일 목록 폭은 별도 토글로 숨긴다. 노트북 트리는 각 노트북마다 하위 페이지 접기/펼치기와 전체 접기를 제공하며 이 상태, 마지막 터미널 노트북, 터미널·파일 목록 열림 상태를 계정 view-state로 복원한다. 표시 경로는 내부 물리 경로를 노출하지 않는 `/<로그인ID>/NOTE MANAGER/<노트북>` 별칭이다. 명령 기록 Up/Down, Ctrl+L, clear, cd, pwd, 실행 후 파일 목록 갱신을 지원한다.
+- 보안: 서버가 현재 로그인 계정의 개인 NOTE MANAGER registry에서 notebookId를 다시 조회하고 realpath로 경계를 검증한다. 선택 노트북 하나만 read-write mount하며 symlink는 탐색기에서 제외한다. 컨테이너는 network none, non-root, read-only rootfs, cap-drop ALL, no-new-privileges, CPU 0.5, RAM/swap 256MiB, PID 64, 20초, 명령 16KiB, 출력 128KiB 제한과 기존 사용자별 resource reservation을 적용한다. 호스트 경로·다른 계정·Docker socket·인증정보는 전달하지 않는다.
+- 로컬 검증: 터미널 경로·Docker argument·노트북 계정 격리 focused 22/22, backend 전체 115개 중 108 pass·7 환경 조건부 skip·0 fail, production build와 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate, Node syntax, `git diff --check`가 통과했다. 실제 Docker 실행·운영 배포·로그인 화면 E2E 결과는 후속 배포 확인 뒤 이 항목에 덧붙인다.
+- 의도적 1차 경계: 현재는 명령마다 새 컨테이너를 여는 one-shot shell이다. 지속 PTY, vim/top 같은 대화형 TUI, shell Tab 자동완성, 장시간 프로세스, 네트워크·패키지 설치는 아직 제공하지 않는다. 이를 열려면 인증된 WebSocket의 origin/session 재검증, resize/interrupt, idle cleanup, 감사·quota·동시성 정책을 별도 완성해야 한다.
