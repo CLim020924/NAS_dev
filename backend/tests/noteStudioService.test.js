@@ -233,6 +233,31 @@ test('distinguishes notes notebooks from project workspaces and migrates old rec
   assert.deepEqual(store.listNotebooks().map((item) => item.kind), ['notes', 'project', 'notes']);
 }));
 
+test('renames a notebook display label without changing its stable workspace path', () => withStore((store) => {
+  const notebook = store.createNotebook({ title: 'Stable Project', kind: 'project' });
+  const renamed = store.updateNotebook(notebook.id, { expectedRevision: notebook.revision, title: '새 표시 이름' });
+  assert.equal(renamed.title, '새 표시 이름');
+  assert.equal(renamed.directoryName, notebook.directoryName);
+  assert.equal(renamed.path, notebook.path);
+  assert.throws(() => store.updateNotebook(notebook.id, { expectedRevision: notebook.revision, title: 'stale' }), (error) => error.code === 'NOTEBOOK_REVISION_CONFLICT');
+}));
+
+test('stores VS Code recommendations only inside project notebooks and preserves manifest fields', () => withStore((store, root) => {
+  const project = store.createNotebook({ title: 'Extension Project', kind: 'project' });
+  const notes = store.createNotebook({ title: 'Notes Only', kind: 'notes' });
+  const vscodeDir = path.join(root, NOTE_MANAGER_ROOT, project.directoryName, '.vscode');
+  fs.mkdirSync(vscodeDir);
+  fs.writeFileSync(path.join(vscodeDir, 'extensions.json'), JSON.stringify({ recommendations: ['safe.existing'], unwantedRecommendations: ['bad.tool'], customField: true }));
+  const added = store.addVscodeRecommendation(project.id, 'Safe.New-Tool');
+  assert.deepEqual(added.recommendations, ['safe.existing', 'safe.new-tool']);
+  const stored = JSON.parse(fs.readFileSync(path.join(vscodeDir, 'extensions.json'), 'utf8'));
+  assert.equal(stored.customField, true);
+  assert.deepEqual(stored.unwantedRecommendations, ['bad.tool']);
+  assert.deepEqual(store.removeVscodeRecommendation(project.id, 'safe.existing').recommendations, ['safe.new-tool']);
+  assert.throws(() => store.addVscodeRecommendation(notes.id, 'safe.tool'), (error) => error.code === 'NOTEBOOK_NOT_PROJECT');
+  assert.throws(() => store.addVscodeRecommendation(project.id, '../unsafe'), (error) => error.code === 'INVALID_EXTENSION_ID');
+}));
+
 test('reports an externally missing notebook path and returns a stable conflict', () => withStore((store, root) => {
   const notebook = store.createNotebook({ title: '이동될 노트북' });
   fs.rmdirSync(path.join(root, NOTE_MANAGER_ROOT, notebook.directoryName));

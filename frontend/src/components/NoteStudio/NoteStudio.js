@@ -42,6 +42,9 @@ import ChecklistIcon from '@mui/icons-material/Checklist';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
+import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useWindows } from '../../contexts/WindowContext';
 import NasItemPickerDialog from '../NasItemPickerDialog';
@@ -52,6 +55,7 @@ import { BLOCK_BACKGROUNDS, BLOCK_COLORS, BLOCK_TRANSFORMS, blockTextStats, find
 import NoteStudioTerminal from './NoteStudioTerminal';
 import CodeRunPanel from './CodeRunPanel';
 import CodePreviewDialog from './CodePreviewDialog';
+import DeveloperToolsDialog from './DeveloperToolsDialog';
 import './NoteStudio.css';
 
 const BlockIndent = Extension.create({
@@ -188,6 +192,7 @@ const NoteStudio = () => {
   const [commandIndex, setCommandIndex] = useState(0);
   const [pendingParentId, setPendingParentId] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [notebookMenu, setNotebookMenu] = useState(null);
   const [notebookDialogOpen, setNotebookDialogOpen] = useState(false);
   const [notebookTitle, setNotebookTitle] = useState('');
   const [notebookKind, setNotebookKind] = useState('notes');
@@ -213,6 +218,10 @@ const NoteStudio = () => {
   const [renameNote, setRenameNote] = useState(null);
   const [renameTitle, setRenameTitle] = useState('');
   const [renamingNote, setRenamingNote] = useState(false);
+  const [renameNotebook, setRenameNotebook] = useState(null);
+  const [renameNotebookTitle, setRenameNotebookTitle] = useState('');
+  const [renamingNotebook, setRenamingNotebook] = useState(false);
+  const [devToolsNotebook, setDevToolsNotebook] = useState(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalNotebookId, setTerminalNotebookId] = useState(null);
   const [terminalExplorerOpen, setTerminalExplorerOpen] = useState(true);
@@ -1196,6 +1205,43 @@ const NoteStudio = () => {
     setRenameTitle(note.title || '');
   };
 
+  const openNotebookContextMenu = (event, notebook) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setNotebookMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, notebook, anchorEl: event.currentTarget });
+  };
+
+  const startRenameNotebook = (notebook) => {
+    setNotebookMenu(null);
+    setRenameNotebook(notebook);
+    setRenameNotebookTitle(notebook.title || '');
+  };
+
+  const submitRenameNotebook = async () => {
+    const title = renameNotebookTitle.trim();
+    if (!renameNotebook || !title || renamingNotebook) return;
+    setRenamingNotebook(true);
+    try {
+      const { data } = await axios.patch(`/api/note-studio/notebooks/${encodeURIComponent(renameNotebook.id)}`, { expectedRevision: renameNotebook.revision, title }, { withCredentials: true });
+      setNotebooks((items) => items.map((item) => item.id === renameNotebook.id ? { ...item, ...data.notebook } : item));
+      setRenameNotebook(null);
+      setMessage({ severity: 'success', text: '노트북 이름을 변경했습니다. 실제 프로젝트 폴더 경로는 안전하게 유지됩니다.' });
+    } catch (error) { setMessage({ severity: 'error', text: errorMessage(error, '노트북 이름을 바꾸지 못했습니다.') }); }
+    finally { setRenamingNotebook(false); }
+  };
+
+  const createPageInNotebook = (target, anchorEl) => {
+    setNotebookMenu(null);
+    setActiveNotebookId(target.id);
+    setPendingParentId(null);
+    setCreateAnchor(anchorEl);
+  };
+
+  const openNotebookTools = (notebook) => {
+    setNotebookMenu(null);
+    setDevToolsNotebook(notebook);
+  };
+
   const submitRenameNote = async () => {
     const title = renameTitle.trim();
     if (!renameNote || !title || renamingNote) return;
@@ -1266,7 +1312,7 @@ const NoteStudio = () => {
         </Stack>
         <Divider />
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 && notebooks.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트북을 만들어 시작하세요.'}</Typography></Box> : <List role="tree" aria-label="노트북과 페이지 트리" dense disablePadding>{notesByNotebook.map(({ notebook, notes: notebookNotes, childCounts }) => <Box key={notebook.id} role="treeitem" aria-expanded={!collapsedNotebookIds.has(notebook.id)}><ListItemButton selected={activeNotebookId === notebook.id} onClick={() => setActiveNotebookId(notebook.id)} onDoubleClick={() => openNotebookTerminal(notebook.id)} sx={{ py: 0.75, bgcolor: alpha(theme.palette.text.primary, 0.025), '&:hover': { bgcolor: alpha(theme.palette.text.primary, 0.065) } }}><IconButton size="small" aria-label={collapsedNotebookIds.has(notebook.id) ? `${notebook.title} 펼치기` : `${notebook.title} 접기`} onClick={(event) => { event.stopPropagation(); toggleNotebookCollapsed(notebook.id); }} sx={{ mr: 0.25 }}><KeyboardArrowRightIcon fontSize="small" sx={{ transform: collapsedNotebookIds.has(notebook.id) ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform 120ms ease' }} /></IconButton><ListItemIcon sx={{ minWidth: 31 }}>{notebook.kind === 'project' ? <TerminalIcon fontSize="small" /> : <MenuBookOutlinedIcon fontSize="small" />}</ListItemIcon><ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : `${notebook.kind === 'project' ? '프로젝트' : '노트'} · ${notes.filter((note) => note.notebookId === notebook.id).length}개 페이지`} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} /></ListItemButton>{!collapsedNotebookIds.has(notebook.id) && <Box role="group">{notebookNotes.map((note) => renderNoteTreeRow(note, childCounts, notebook.id))}</Box>}</Box>)}{legacyTreeNotes.length > 0 && <Box role="group"><Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>기존 노트</Typography>{legacyTreeNotes.map((note) => renderNoteTreeRow(note, legacyChildCounts))}</Box>}</List>}
+          {loading ? <Box sx={{ py: 5, display: 'grid', placeItems: 'center' }}><CircularProgress size={24} /></Box> : notes.length === 0 && notebooks.length === 0 ? <Box sx={{ p: 3, textAlign: 'center' }}><Typography color="text.secondary" variant="body2">{query ? '검색 결과가 없습니다.' : trashMode ? '휴지통이 비어 있습니다.' : '새 노트북을 만들어 시작하세요.'}</Typography></Box> : <List role="tree" aria-label="노트북과 페이지 트리" dense disablePadding>{notesByNotebook.map(({ notebook, notes: notebookNotes, childCounts }) => <Box key={notebook.id} role="treeitem" aria-expanded={!collapsedNotebookIds.has(notebook.id)}><ListItemButton className="note-notebook-tree-row" selected={activeNotebookId === notebook.id} onClick={() => setActiveNotebookId(notebook.id)} onDoubleClick={() => openNotebookTerminal(notebook.id)} onContextMenu={(event) => openNotebookContextMenu(event, notebook)} onKeyDown={(event) => { if (event.key === 'F2' && !trashMode) { event.preventDefault(); startRenameNotebook(notebook); } }} sx={{ py: 0.75, position: 'relative', bgcolor: alpha(theme.palette.text.primary, 0.025), '&:hover': { bgcolor: alpha(theme.palette.text.primary, 0.065) }, '&:hover .note-tree-row-actions, &:focus-within .note-tree-row-actions': { opacity: 1 } }}><IconButton size="small" aria-label={collapsedNotebookIds.has(notebook.id) ? `${notebook.title} 펼치기` : `${notebook.title} 접기`} onClick={(event) => { event.stopPropagation(); toggleNotebookCollapsed(notebook.id); }} sx={{ mr: 0.25 }}><KeyboardArrowRightIcon fontSize="small" sx={{ transform: collapsedNotebookIds.has(notebook.id) ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform 120ms ease' }} /></IconButton><ListItemIcon sx={{ minWidth: 31 }}>{notebook.kind === 'project' ? <TerminalIcon fontSize="small" /> : <MenuBookOutlinedIcon fontSize="small" />}</ListItemIcon><ListItemText primary={notebook.title} secondary={notebook.available === false ? `${notebook.directoryName} · 경로 확인 필요` : `${notebook.kind === 'project' ? '프로젝트' : '노트'} · ${notes.filter((note) => note.notebookId === notebook.id).length}개 페이지`} primaryTypographyProps={{ fontWeight: 900, noWrap: true }} secondaryTypographyProps={{ fontSize: 10, noWrap: true, color: notebook.available === false ? 'error' : 'text.secondary' }} />{!trashMode && <Box className="note-tree-row-actions" sx={{ display: 'flex', opacity: 0, transition: 'opacity 100ms ease', bgcolor: 'inherit' }}><Tooltip title="새 페이지"><IconButton size="small" aria-label={`${notebook.title}에 페이지 만들기`} onClick={(event) => { event.stopPropagation(); createPageInNotebook(notebook, event.currentTarget); }}><AddIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip><Tooltip title="노트북 작업"><IconButton size="small" aria-label={`${notebook.title} 작업`} onClick={(event) => openNotebookContextMenu(event, notebook)}><MoreHorizIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip></Box>}</ListItemButton>{!collapsedNotebookIds.has(notebook.id) && <Box role="group">{notebookNotes.map((note) => renderNoteTreeRow(note, childCounts, notebook.id))}</Box>}</Box>)}{legacyTreeNotes.length > 0 && <Box role="group"><Typography variant="overline" color="text.secondary" sx={{ px: 1.5 }}>기존 노트</Typography>{legacyTreeNotes.map((note) => renderNoteTreeRow(note, legacyChildCounts))}</Box>}</List>}
         </Box>
         <Box sx={{ p: 0.75, borderTop: '1px solid', borderColor: 'divider' }}><Tooltip title="TXT·Markdown·코드 가져오기"><Button size="small" fullWidth startIcon={<UploadFileIcon />} onClick={() => importInputRef.current?.click()}>파일 가져오기</Button></Tooltip><input ref={importInputRef} hidden type="file" accept=".txt,.md,.markdown,.js,.jsx,.ts,.tsx,.py,.json,.html,.css,.sql,.sh,.yaml,.yml" onChange={importFile} /></Box>
       </Paper>
@@ -1285,6 +1331,7 @@ const NoteStudio = () => {
               {languageById[String(selected.language || '').toLowerCase()]?.mode === 'preview' && !selected.deletedAt && <Button size="small" variant="contained" onClick={() => setPreviewOpen(true)}>미리보기</Button>}
               {codeSession && !codePanelOpen && <Tooltip title="실행 콘솔 보기"><IconButton size="small" aria-label="실행 콘솔 보기" onClick={() => { setTerminalOpen(false); setCodePanelOpen(true); }}><TerminalIcon fontSize="small" /></IconButton></Tooltip>}
               {selected.language === 'python' && !selected.deletedAt && <Tooltip title="Python 기본 패키지 확인"><Button size="small" variant="text" onClick={openPythonRuntime}>패키지</Button></Tooltip>}
+              {activeNotebook?.kind === 'project' && !selected.deletedAt && <Tooltip title="Open VSX 검색과 VS Code 권장 확장 관리"><Button size="small" variant="text" startIcon={<ExtensionOutlinedIcon />} onClick={() => openNotebookTools(activeNotebook)}>개발 도구</Button></Tooltip>}
             </Box>}
             {selected.type === 'markdown' && !selected.deletedAt && <Button size="small" variant="contained" onClick={() => setPreviewOpen(true)}>미리보기</Button>}
             {!selected.deletedAt && <Divider flexItem orientation="vertical" sx={{ mx: 0.25 }} />}
@@ -1398,11 +1445,29 @@ const NoteStudio = () => {
         {!trashMode && <Divider />}
         {!trashMode && <MenuItem onClick={() => trashNoteFromTree(contextMenu.note)} sx={{ color: 'error.main' }}>휴지통으로 이동</MenuItem>}
       </Menu>
+      <Menu open={!!notebookMenu} onClose={() => setNotebookMenu(null)} anchorReference="anchorPosition" anchorPosition={notebookMenu ? { top: notebookMenu.mouseY, left: notebookMenu.mouseX } : undefined} MenuListProps={{ dense: true, 'aria-label': '노트북 트리 작업' }}>
+        <MenuItem onClick={() => { const target = notebookMenu.notebook; setNotebookMenu(null); setActiveNotebookId(target.id); }}>노트북 선택</MenuItem>
+        <MenuItem onClick={() => { toggleNotebookCollapsed(notebookMenu.notebook.id); setNotebookMenu(null); }}>{collapsedNotebookIds.has(notebookMenu?.notebook?.id) ? '페이지 펼치기' : '페이지 접기'}</MenuItem>
+        <Divider />
+        <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => createPageInNotebook(notebookMenu.notebook, notebookMenu.anchorEl)}><ListItemIcon><AddIcon fontSize="small" /></ListItemIcon><ListItemText primary="새 페이지" secondary="형식을 다음 메뉴에서 선택" /></MenuItem>
+        <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => { const target = notebookMenu.notebook; setNotebookMenu(null); openNotebookTerminal(target.id); }}><ListItemIcon><TerminalIcon fontSize="small" /></ListItemIcon><ListItemText primary="터미널 열기" secondary="이 노트북 폴더로 제한" /></MenuItem>
+        {notebookMenu?.notebook?.kind === 'project' && <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => openNotebookTools(notebookMenu.notebook)}><ListItemIcon><ExtensionOutlinedIcon fontSize="small" /></ListItemIcon><ListItemText primary="개발 도구" secondary="Open VSX·VS Code 권장 확장" /></MenuItem>}
+        <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={() => { const target = notebookMenu.notebook; setNotebookMenu(null); openFolderWindowByPath(target.path); }}>NAS 파일관리자에서 열기</MenuItem>
+        <Divider />
+        <MenuItem onClick={() => startRenameNotebook(notebookMenu.notebook)}><ListItemIcon><DriveFileRenameOutlineIcon fontSize="small" /></ListItemIcon><ListItemText primary="이름 바꾸기" secondary="F2 · 실제 폴더 경로 유지" /></MenuItem>
+        <MenuItem disabled={notebookMenu?.notebook?.available === false} onClick={async () => { await copyTextToClipboard(notebookMenu.notebook.path); setNotebookMenu(null); }}><ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon><ListItemText primary="NAS 경로 복사" /></MenuItem>
+      </Menu>
       <Dialog open={!!renameNote} onClose={() => !renamingNote && setRenameNote(null)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 900 }}>페이지 이름 바꾸기</DialogTitle>
         <DialogContent><TextField autoFocus fullWidth margin="dense" label="페이지 이름" value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitRenameNote(); }} /></DialogContent>
         <DialogActions><Button color="inherit" disabled={renamingNote} onClick={() => setRenameNote(null)}>취소</Button><Button variant="contained" disabled={renamingNote || !renameTitle.trim()} onClick={submitRenameNote}>{renamingNote ? '변경 중…' : '변경'}</Button></DialogActions>
       </Dialog>
+      <Dialog open={!!renameNotebook} onClose={() => !renamingNotebook && setRenameNotebook(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>노트북 이름 바꾸기</DialogTitle>
+        <DialogContent><TextField autoFocus fullWidth margin="dense" label="표시 이름" value={renameNotebookTitle} onChange={(event) => setRenameNotebookTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitRenameNotebook(); }} helperText="코드와 PC 동기화가 깨지지 않도록 실제 폴더 경로는 유지합니다." /></DialogContent>
+        <DialogActions><Button color="inherit" disabled={renamingNotebook} onClick={() => setRenameNotebook(null)}>취소</Button><Button variant="contained" disabled={renamingNotebook || !renameNotebookTitle.trim()} onClick={submitRenameNotebook}>{renamingNotebook ? '변경 중…' : '변경'}</Button></DialogActions>
+      </Dialog>
+      <DeveloperToolsDialog open={!!devToolsNotebook} notebook={devToolsNotebook} onClose={() => setDevToolsNotebook(null)} />
       <Menu
         open={commandOpen}
         onClose={() => { commandOpenRef.current = false; slashFromRef.current = null; setCommandOpen(false); editor?.commands.focus(); }}

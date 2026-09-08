@@ -69,6 +69,7 @@ const { createManagedNotebookTerminal, normalizeTerminalRelativePath, resolveTer
 const { createManagedCodeSessionManager } = require('./managedCodeSession');
 const { createExecutionQueueService } = require('./executionQueueService');
 const { LANGUAGE_CATALOG, languageInfo, detectLanguage } = require('./noteStudioLanguageCatalog');
+const { createOpenVsxCatalog, normalizeExtensionId } = require('./openVsxCatalog');
 const { classifyCodeExecutionError } = require('./codeExecutionErrors');
 const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore');
 const { createPdfOcrService } = require('./pdfOcrService');
@@ -90,6 +91,7 @@ const managedJavaScriptWorker = createManagedJavaScriptWorker();
 const managedNotebookTerminal = createManagedNotebookTerminal();
 const managedCodeSessions = createManagedCodeSessionManager();
 const executionQueue = createExecutionQueueService();
+const openVsxCatalog = createOpenVsxCatalog();
 const pdfOcrService = createPdfOcrService();
 
 // 🔥 [최종 방어선] 403 에러 강제 세탁 미들웨어 (프론트엔드 폭파 방지)
@@ -1207,6 +1209,45 @@ router.post('/note-studio/notebooks', verifyToken, express.json({ limit: '32kb' 
   try {
     const notebook = getNoteStudioStore(req.user).createNotebook(req.body || {});
     return res.status(201).json({ success: true, notebook });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.patch('/note-studio/notebooks/:notebookId', verifyToken, express.json({ limit: '32kb' }), (req, res) => {
+  try {
+    const notebook = getNoteStudioStore(req.user).updateNotebook(req.params.notebookId, req.body || {});
+    return res.json({ success: true, notebook });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.get('/note-studio/dev-tools/search', verifyToken, async (req, res) => {
+  try {
+    return res.json({ success: true, ...(await openVsxCatalog.search(req.query.q, req.query.size)) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.get('/note-studio/dev-tools/extensions/:extensionId', verifyToken, async (req, res) => {
+  try {
+    return res.json({ success: true, extension: await openVsxCatalog.detail(req.params.extensionId) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.get('/note-studio/notebooks/:notebookId/vscode-recommendations', verifyToken, (req, res) => {
+  try {
+    return res.json({ success: true, ...getNoteStudioStore(req.user).readVscodeRecommendations(req.params.notebookId) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.post('/note-studio/notebooks/:notebookId/vscode-recommendations', verifyToken, express.json({ limit: '8kb' }), (req, res) => {
+  try {
+    const extensionId = normalizeExtensionId(req.body?.extensionId);
+    return res.json({ success: true, ...getNoteStudioStore(req.user).addVscodeRecommendation(req.params.notebookId, extensionId) });
+  } catch (error) { return sendNoteStudioError(res, error); }
+});
+
+router.delete('/note-studio/notebooks/:notebookId/vscode-recommendations/:extensionId', verifyToken, (req, res) => {
+  try {
+    const extensionId = normalizeExtensionId(req.params.extensionId);
+    return res.json({ success: true, ...getNoteStudioStore(req.user).removeVscodeRecommendation(req.params.notebookId, extensionId) });
   } catch (error) { return sendNoteStudioError(res, error); }
 });
 

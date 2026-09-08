@@ -10,6 +10,7 @@ const MAX_NOTE_BYTES = 5 * 1024 * 1024;
 const MAX_VERSIONS_PER_NOTE = 100;
 const ALLOWED_TYPES = new Set(['block', 'markdown', 'text', 'code']);
 const ALLOWED_NOTEBOOK_KINDS = new Set(['notes', 'project']);
+const VSCODE_EXTENSION_ID = /^[a-z0-9][a-z0-9-]{0,99}\.[a-z0-9][a-z0-9-]{0,99}$/i;
 const ATTACHMENT_SCAN_SKIP = new Set(['.note_studio', '.agent_trash', '.agent_versions', '.ai_backups', '.agent_incoming', 'chat_tmp', 'backup']);
 
 const nowIso = () => new Date().toISOString();
@@ -217,7 +218,13 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   const listNotebooks = ({ deleted = false } = {}) => readNotebooks().notebooks
     .filter((item) => deleted ? !!item.deletedAt : !item.deletedAt)
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
-    .map((item) => ({ ...item, kind: normalizeNotebookKind(item.kind), ...notebookAvailability(item), path: `/${NOTE_MANAGER_ROOT}/${item.directoryName}` }));
+    .map((item) => ({
+      ...item,
+      kind: normalizeNotebookKind(item.kind),
+      revision: Number.isInteger(Number(item.revision)) ? Number(item.revision) : 1,
+      ...notebookAvailability(item),
+      path: `/${NOTE_MANAGER_ROOT}/${item.directoryName}`,
+    }));
 
   const getNotebookWorkspace = (id) => {
     const notebook = findNotebook(readNotebooks(), id);
@@ -247,6 +254,78 @@ const createNoteStudioStore = ({ personalRootPath }) => {
       try { fs.rmdirSync(targetPath); } catch {}
       throw error;
     }
+  };
+
+  const updateNotebook = (id, changes = {}) => {
+    const registry = readNotebooks();
+    const notebook = findNotebook(registry, id);
+    const currentRevision = Number.isInteger(Number(notebook.revision)) ? Number(notebook.revision) : 1;
+    const expectedRevision = Number(changes.expectedRevision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== currentRevision) {
+      throw Object.assign(new Error('다른 창이나 기기에서 노트북이 먼저 변경되었습니다.'), { status: 409, code: 'NOTEBOOK_REVISION_CONFLICT', latest: { ...notebook } });
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, 'title')) notebook.title = normalizeTitle(changes.title || '새 노트북');
+    if (Object.prototype.hasOwnProperty.call(changes, 'kind')) notebook.kind = normalizeNotebookKind(changes.kind);
+    notebook.revision = currentRevision + 1;
+    notebook.updatedAt = nowIso();
+    writeNotebooks(registry);
+    return { ...notebook, ...notebookAvailability(notebook), path: `/${NOTE_MANAGER_ROOT}/${notebook.directoryName}` };
+  };
+
+  const vscodeRecommendationsPath = (notebook) => path.join(notebookDirectory(notebook), '.vscode', 'extensions.json');
+  const loadVscodeRecommendationsManifest = (id) => {
+    const notebook = findNotebook(readNotebooks(), id);
+    if (normalizeNotebookKind(notebook.kind) !== 'project') {
+      throw Object.assign(new Error('VS Code 권장 확장은 프로젝트형 노트북에서만 사용할 수 있습니다.'), { status: 409, code: 'NOTEBOOK_NOT_PROJECT' });
+    }
+    assertPhysicalDirectory(notebookDirectory(notebook));
+    const manifestPath = vscodeRecommendationsPath(notebook);
+    if (fs.existsSync(path.dirname(manifestPath))) assertPhysicalDirectory(path.dirname(manifestPath));
+    if (fs.existsSync(manifestPath) && fs.lstatSync(manifestPath).isSymbolicLink()) {
+      throw Object.assign(new Error('.vscode/extensions.json 심볼릭 링크에는 기록하지 않습니다.'), { status: 409, code: 'VSCODE_RECOMMENDATIONS_SYMLINK' });
+    }
+    const manifest = readJson(manifestPath, { recommendations: [] });
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || !Array.isArray(manifest.recommendations)) {
+      throw Object.assign(new Error('.vscode/extensions.json 형식이 올바르지 않아 덮어쓰지 않았습니다.'), { status: 409, code: 'INVALID_VSCODE_RECOMMENDATIONS' });
+    }
+    return { notebook, manifest, manifestPath };
+  };
+
+  const readVscodeRecommendations = (id) => {
+    const { manifest } = loadVscodeRecommendationsManifest(id);
+    return {
+      recommendations: [...new Set(manifest.recommendations.map((value) => String(value).trim().toLowerCase()).filter((value) => VSCODE_EXTENSION_ID.test(value)))].sort(),
+      unwantedRecommendations: Array.isArray(manifest.unwantedRecommendations) ? manifest.unwantedRecommendations.map(String) : [],
+    };
+  };
+
+  const writeVscodeRecommendations = (id, recommendations) => {
+    const { manifest, manifestPath } = loadVscodeRecommendationsManifest(id);
+    const values = [...new Set((recommendations || []).map((value) => String(value).trim().toLowerCase()))];
+    if (values.some((value) => !VSCODE_EXTENSION_ID.test(value))) {
+      throw Object.assign(new Error('확장 ID 형식이 올바르지 않습니다.'), { status: 400, code: 'INVALID_EXTENSION_ID' });
+    }
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true, mode: 0o700 });
+    assertPhysicalDirectory(path.dirname(manifestPath));
+    atomicWriteJson(manifestPath, {
+      ...manifest,
+      recommendations: values.sort(),
+    });
+    return readVscodeRecommendations(id);
+  };
+
+  const addVscodeRecommendation = (id, extensionId) => {
+    const current = readVscodeRecommendations(id);
+    const normalized = String(extensionId || '').trim().toLowerCase();
+    if (!VSCODE_EXTENSION_ID.test(normalized)) throw Object.assign(new Error('확장 ID 형식이 올바르지 않습니다.'), { status: 400, code: 'INVALID_EXTENSION_ID' });
+    return writeVscodeRecommendations(id, [...current.recommendations, normalized]);
+  };
+
+  const removeVscodeRecommendation = (id, extensionId) => {
+    const current = readVscodeRecommendations(id);
+    const normalized = String(extensionId || '').trim().toLowerCase();
+    if (!VSCODE_EXTENSION_ID.test(normalized)) throw Object.assign(new Error('확장 ID 형식이 올바르지 않습니다.'), { status: 400, code: 'INVALID_EXTENSION_ID' });
+    return writeVscodeRecommendations(id, current.recommendations.filter((value) => value !== normalized));
   };
   const noteRoot = (id) => {
     if (!isUuid(id)) {
@@ -595,7 +674,7 @@ const createNoteStudioStore = ({ personalRootPath }) => {
   };
 
   ensureStore();
-  return { listNotebooks, getNotebookWorkspace, createNotebook, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment, rewriteAttachmentPaths, updateAttachmentLocation };
+  return { listNotebooks, getNotebookWorkspace, createNotebook, updateNotebook, readVscodeRecommendations, addVscodeRecommendation, removeVscodeRecommendation, list, get, create, update, moveToTrash, restore, removePermanently, versions, restoreVersion, addAttachment, removeAttachment, rewriteAttachmentPaths, updateAttachmentLocation };
 };
 
 module.exports = {
