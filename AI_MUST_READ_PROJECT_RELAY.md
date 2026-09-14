@@ -1656,3 +1656,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: notebook scope·compact layout·전역 UI contract·window manager verifier와 production build, react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. 마스터·Note Studio workbook은 artifact-tool로 갱신했고 재열기, 수식 오류 0건, 변경 행 렌더를 확인했다.
 - 운영 검증·배포: commit `cd0955b`를 GitHub와 NAS 활성 브랜치에 fast-forward했다. NAS에서 notebook scope·compact layout·전역 UI contract·window manager verifier가 통과했다. 검증된 로컬 production build의 `main.f780dd07.js`와 Note Studio lazy chunk `955.163c579b.chunk.js`를 운영 배포했고 두 파일의 로컬/운영 SHA-256이 각각 일치한다. 내부 3030·공개 HTTPS 200, 필수 6개 서비스 active, PM2 `msp-backend` online, NAS checkout clean이다.
 - 남은 확인: 자동 브라우저에는 인증된 NAS 사용자 세션이 없어 실제 여러 노트북 화면에서 chevron, 행 진입, BACK, 좁은 폭과 키보드 포커스를 누르는 시각 E2E는 수행하지 않았다. 정적 UI 계약·production compile·NAS verifier·운영 bundle 반영은 완료했다.
+
+### 2026-09-14 NAS Tailscale 장치 키 만료 진단
+
+- 사용자 증상: 터널 오류가 표시되고 Tailscale을 통한 NAS 접속이 되지 않는다.
+- 확인 결과: 현재 Windows 장치 `chan`의 Tailscale 서비스는 Running/Automatic이고 tailnet 접속도 정상이다. NAS `chanyoung`(`100.80.39.112`)은 offline, 마지막 접속은 `2026-09-11T02:54:28.1Z`이며 node key 만료 시각은 `2026-09-12T17:20:29Z`다. `tailscale ping`은 `peer's node key has expired`, SSH 22번 포트는 timeout이다.
+- 분리 진단: `https://filemanager-nas.com`은 cache-bypass 동적 요청에서 HTTP 200이므로 NAS의 공개 Cloudflare 경로와 웹 원본은 현재 응답한다. 이번 원격 관리 장애의 직접 원인은 Cloudflare 터널 전체 중단이 아니라 NAS Tailscale 장치 키 만료다.
+- 필요한 복구: NAS 로컬 콘솔에서 `sudo tailscale up --force-reauth`를 실행하고 표시되는 로그인 URL을 승인한 뒤, Tailscale 관리 콘솔의 해당 NAS 장치에서 key expiry 비활성화를 검토한다. 항상 켜진 서버의 만료 비활성화는 연결 중단을 막지만 장치 탈취 시 위험이 커지므로 신뢰된 NAS에만 적용하고 장치 분실·교체 시 즉시 revoke한다.
+- 현재 경계: Tailscale SSH 자체가 만료된 node key 때문에 차단되어 원격 명령으로 재인증을 시작할 수 없다. 재인증 후 `tailscale ping`, SSH, `tailscaled`, nginx, Docker, PM2, cloudflared를 다시 검증해야 한다.
