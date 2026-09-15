@@ -1672,3 +1672,4 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 공개 경로 정정: 2026-09-14 점검 당시 cache-bypass 요청에서 HTTP 200이었던 `https://filemanager-nas.com`은 2026-09-15 현재 HTTP 530, 본문 `error code: 1033`이다. 이는 Cloudflare가 정상 `cloudflared` connector를 찾지 못하는 상태다. 따라서 현재는 Tailscale 만료뿐 아니라 NAS 전원·OS 부팅·네트워크 또는 cloudflared 기동도 함께 실패한 상태이며, 전날의 공개 터널 정상 관측을 현재 상태로 재사용하면 안 된다.
 - 원격 경계: Tailscale SSH와 Cloudflare Tunnel이 동시에 끊겨 현재 확보된 원격 관리 경로가 없다. 로컬 콘솔이나 별도 대역외 관리 경로가 복구되기 전에는 내부 서비스 상태 확인·재시작·Tailscale 재인증을 원격 수행할 수 없다.
 - 복구 후 검증 순서: 전원/부팅 확인 → 호스트 네트워크 → `tailscaled` 재인증 및 key expiry 정책 → `cloudflared` active/log → nginx·Docker·PM2 → 내부 3030 → 공개 HTTPS 순서로 확인한다.
+- 2026-09-15 09:55 KST 전원 추적: 원격 전원 신호 후 공개 터널은 약 10초 사이 HTTP 530에서 200으로 복구했고 후속 cache-bypass 요청도 200이다. 이는 NAS 부팅·인터넷·`cloudflared`·웹 원본이 다시 동작한다는 관측이다. 그러나 NAS Tailscale은 계속 `offline, last seen 3d ago`, SSH 22는 timeout이므로 node key 만료는 전원 복구와 별개로 남아 있다.
