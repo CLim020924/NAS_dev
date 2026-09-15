@@ -1664,3 +1664,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 분리 진단: `https://filemanager-nas.com`은 cache-bypass 동적 요청에서 HTTP 200이므로 NAS의 공개 Cloudflare 경로와 웹 원본은 현재 응답한다. 이번 원격 관리 장애의 직접 원인은 Cloudflare 터널 전체 중단이 아니라 NAS Tailscale 장치 키 만료다.
 - 필요한 복구: NAS 로컬 콘솔에서 `sudo tailscale up --force-reauth`를 실행하고 표시되는 로그인 URL을 승인한 뒤, Tailscale 관리 콘솔의 해당 NAS 장치에서 key expiry 비활성화를 검토한다. 항상 켜진 서버의 만료 비활성화는 연결 중단을 막지만 장치 탈취 시 위험이 커지므로 신뢰된 NAS에만 적용하고 장치 분실·교체 시 즉시 revoke한다.
 - 현재 경계: Tailscale SSH 자체가 만료된 node key 때문에 차단되어 원격 명령으로 재인증을 시작할 수 없다. 재인증 후 `tailscale ping`, SSH, `tailscaled`, nginx, Docker, PM2, cloudflared를 다시 검증해야 한다.
+
+### 2026-09-15 NAS Tailscale·Cloudflare 동시 오프라인 재확인
+
+- 사용자 요청: NAS에서 동일한 연결 장애가 다시 보여 현재 상태를 재검사한다.
+- 측정 결과: Windows `chan`의 Tailscale 서비스는 Running/Automatic이지만 NAS `chanyoung`(`100.80.39.112`)은 offline, 마지막 접속 3일 전이며 `peer's node key has expired`가 계속 발생한다. Tailscale ping과 SSH 22번 포트는 timeout이다.
+- 공개 경로 정정: 2026-09-14 점검 당시 cache-bypass 요청에서 HTTP 200이었던 `https://filemanager-nas.com`은 2026-09-15 현재 HTTP 530, 본문 `error code: 1033`이다. 이는 Cloudflare가 정상 `cloudflared` connector를 찾지 못하는 상태다. 따라서 현재는 Tailscale 만료뿐 아니라 NAS 전원·OS 부팅·네트워크 또는 cloudflared 기동도 함께 실패한 상태이며, 전날의 공개 터널 정상 관측을 현재 상태로 재사용하면 안 된다.
+- 원격 경계: Tailscale SSH와 Cloudflare Tunnel이 동시에 끊겨 현재 확보된 원격 관리 경로가 없다. 로컬 콘솔이나 별도 대역외 관리 경로가 복구되기 전에는 내부 서비스 상태 확인·재시작·Tailscale 재인증을 원격 수행할 수 없다.
+- 복구 후 검증 순서: 전원/부팅 확인 → 호스트 네트워크 → `tailscaled` 재인증 및 key expiry 정책 → `cloudflared` active/log → nginx·Docker·PM2 → 내부 3030 → 공개 HTTPS 순서로 확인한다.
