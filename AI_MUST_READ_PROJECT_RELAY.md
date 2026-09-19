@@ -1673,3 +1673,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 원격 경계: Tailscale SSH와 Cloudflare Tunnel이 동시에 끊겨 현재 확보된 원격 관리 경로가 없다. 로컬 콘솔이나 별도 대역외 관리 경로가 복구되기 전에는 내부 서비스 상태 확인·재시작·Tailscale 재인증을 원격 수행할 수 없다.
 - 복구 후 검증 순서: 전원/부팅 확인 → 호스트 네트워크 → `tailscaled` 재인증 및 key expiry 정책 → `cloudflared` active/log → nginx·Docker·PM2 → 내부 3030 → 공개 HTTPS 순서로 확인한다.
 - 2026-09-15 09:55 KST 전원 추적: 원격 전원 신호 후 공개 터널은 약 10초 사이 HTTP 530에서 200으로 복구했고 후속 cache-bypass 요청도 200이다. 이는 NAS 부팅·인터넷·`cloudflared`·웹 원본이 다시 동작한다는 관측이다. 그러나 NAS Tailscale은 계속 `offline, last seen 3d ago`, SSH 22는 timeout이므로 node key 만료는 전원 복구와 별개로 남아 있다.
+
+### 2026-09-20 모바일 OS 공유 목록을 통한 NAS 백업 가능성 검토
+
+- 사용자 질문: iPhone 또는 Samsung 갤러리·파일·카카오톡 등에서 공유를 누를 때 NAS가 대상 목록에 나타나 사진과 여러 파일을 백업할 수 있는가.
+- 현재 코드 확인: 저장소에는 iOS/Android 네이티브 앱이나 OS 공유 수신 등록이 없다. `frontend/public/manifest.json`에도 PWA `share_target`이 없다. 웹에는 `TransferContext.startUpload`와 인증된 `/api/file`, `/api/file/chunk`의 다중·재개 가능한 업로드 기반이 있다. 따라서 현재 설치형 공유 대상 기능은 미구현이며 서버 업로드 경로를 재사용하는 설계는 가능하다.
+- 공식 플랫폼 경계: Android는 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`와 MIME intent filter로 Sharesheet 수신 앱을 등록한다. 설치형 Android PWA `share_target`도 선택지지만 iOS Share Sheet의 수신 대상은 iOS 앱 Share Extension이 필요하다. iOS 확장은 `NSItemProvider`로 전달받은 항목을 읽고 대용량·백그라운드 업로드에는 공유 컨테이너/URLSession 설계가 필요하다. KakaoTalk을 포함한 발신 앱이 실제 파일을 OS 공유 기능으로 제공한 경우에만 수신 가능하며 앱별 동작은 기기 실험으로 확인해야 한다.
+- 권장 흐름: 공유 → NAS 대상 → 로그인 계정·저장 폴더·파일 수/용량 확인 → 사용자 확정 → 계정 root/쿼터/중복명/파일형식 검증 → 재개 가능한 업로드 → 서버 수신 해시·완료 확인. 공유로 선택해 보내는 백업과 갤러리 전체 자동 백업은 별도 기능·권한 범위로 구분한다.
+- 미완료·다음 작업: 이번 요청은 가능성 확인이며 앱/서버 코드는 변경하지 않았다. 앞서 보고된 사용자 폴더가 `/users` 대신 상위 root에 생성되는 문제의 실제 경계 검증이 끝나기 전에는 모바일 수신 경로를 운영 배포하지 않는다. 이후 Android·iOS 앱/확장, 계정 인증, 대용량 전송 정책, 실제 Samsung Gallery/Files·iOS Photos/Files·KakaoTalk 기기별 테스트가 필요하다.
