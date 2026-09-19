@@ -1718,3 +1718,9 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 이전 확인과 코드 대조: 2026-09-06 실제 NAS 조사에서 과거 `/mnt/nas/<loginId>`, `/mnt/nas/USERS/<loginId>`, `/mnt/nas/users/<loginId>`가 혼재했고 최근 승인 계정은 `/users/<loginId>`였다. 현재 `backend/index.js`의 신규 승인 경로는 `/users/<loginId>`지만, 레거시 `rootPath`를 보존하는 `normalizeApprovedUser`와 `backend/storageQuota.js`의 `normalizeRelativeRoot` 때문에 기존 잘못된 root를 계속 사용할 수 있다. `backend/nasRoutes.js`의 장치/파일 기반 경로, `backend/chatRoutes.js`·`chatRetentionEngine.js`의 받은 파일 경로도 user.rootPath 또는 privileged NAS 전체 root를 사용한다. 마스터/관리자의 전체 루트 탐색은 의도된 권한이므로 개인 quota root와 구분해야 한다.
 - 미실행: NAS의 실제 루트 항목·계정 DB·파일 소유자/크기/참조 여부를 보지 못했으므로 마이그레이션, quota 변경, 삭제, 코드 배포는 하지 않았다. 기존 한국어가 깨진 workbook은 읽기만 하고 수정하지 않았다. 공개 사이트 로그인 정보를 다시 입력하거나 권한을 우회하지 않았다.
 - 다음 안전 조치: NAS의 Tailscale node key를 신뢰된 로컬 콘솔에서 재인증해 SSH를 복구한다. 그 뒤 DB의 각 account root와 `/mnt/nas` 전체 1단계 항목을 realpath·용량·소유자·시스템 참조로 분류하고 백업·해시 검증·서비스 일시정지 계획을 세운 다음에만 이동/삭제한다. 실제 항목 분류가 끝나기 전에는 `dntdlzz` quota 증가량이나 삭제 대상을 추정하지 않는다.
+
+### 2026-09-20 NAS 루트 읽기 재시도
+
+- 사용자 요청: NAS 루트와 계정 경로를 다시 읽어본다.
+- 재측정: 로컬 git 작업 트리는 clean, 공개 사이트는 HTTP 200이다. 그러나 Tailscale의 NAS `chanyoung`은 계속 `offline, last seen 8d ago`, `peer's node key has expired`이며 ping과 SSH TCP 22가 실패한다. 따라서 실제 `/mnt/nas`와 `members.json`은 읽지 못했다.
+- 미실행/다음 작업: 서버 파일 이동·삭제·quota 변경·코드 수정은 없다. Tailscale 관리 콘솔의 기존 NAS 장치 `Temporarily extend key` 또는 NAS 로컬 콘솔 재인증 후 SSH를 다시 확인하고 실제 인벤토리를 시작한다.
