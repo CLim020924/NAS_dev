@@ -1681,3 +1681,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 공식 플랫폼 경계: Android는 `ACTION_SEND`/`ACTION_SEND_MULTIPLE`와 MIME intent filter로 Sharesheet 수신 앱을 등록한다. 설치형 Android PWA `share_target`도 선택지지만 iOS Share Sheet의 수신 대상은 iOS 앱 Share Extension이 필요하다. iOS 확장은 `NSItemProvider`로 전달받은 항목을 읽고 대용량·백그라운드 업로드에는 공유 컨테이너/URLSession 설계가 필요하다. KakaoTalk을 포함한 발신 앱이 실제 파일을 OS 공유 기능으로 제공한 경우에만 수신 가능하며 앱별 동작은 기기 실험으로 확인해야 한다.
 - 권장 흐름: 공유 → NAS 대상 → 로그인 계정·저장 폴더·파일 수/용량 확인 → 사용자 확정 → 계정 root/쿼터/중복명/파일형식 검증 → 재개 가능한 업로드 → 서버 수신 해시·완료 확인. 공유로 선택해 보내는 백업과 갤러리 전체 자동 백업은 별도 기능·권한 범위로 구분한다.
 - 미완료·다음 작업: 이번 요청은 가능성 확인이며 앱/서버 코드는 변경하지 않았다. 앞서 보고된 사용자 폴더가 `/users` 대신 상위 root에 생성되는 문제의 실제 경계 검증이 끝나기 전에는 모바일 수신 경로를 운영 배포하지 않는다. 이후 Android·iOS 앱/확장, 계정 인증, 대용량 전송 정책, 실제 Samsung Gallery/Files·iOS Photos/Files·KakaoTalk 기기별 테스트가 필요하다.
+
+### 2026-09-20 모바일 공유 수신의 플랫폼 승인·권한 재확인
+
+- 사용자 질문: iPhone·Samsung에서 NAS가 공유 대상으로 확실히 동작하는지, 플랫폼/기기에서 어떤 허가가 필요한지 확인한다.
+- 공식 문서 검증: iOS는 설치된 iOS 앱의 Share Extension과 지원 항목 선언이 필요하다. Android는 앱의 `ACTION_SEND`/`ACTION_SEND_MULTIPLE` MIME intent filter가 필요하다. 두 OS 모두 사용자가 명시적으로 선택해 공유한 항목의 수신은 사진 보관함 전체 접근 권한과 구별된다. NAS 로그인·업로드 권한은 별도다.
+- 배포 조건: iPhone 본인 기기 개발 테스트는 Mac/Xcode와 무료 Apple Account로 가능하지만, 다른 사용자에게 TestFlight/App Store로 배포하려면 Apple Developer Program 가입이 필요하다(공식 안내 연 US$99 또는 현지 통화). TestFlight 외부 테스터용 첫 빌드는 Apple 검토 대상이다. Android는 별도 Samsung 공유 메뉴 승인 없이 APK를 배포할 수 있으나 스토어 외 설치는 사용자 설치 허용이 필요하고, Android 개발자 검증 제도는 2026-09-30 일부 국가부터, 2027년 전 세계로 확대 예정이다. Google Play/Galaxy Store 배포는 각 스토어 절차가 별도다.
+- 권한 경계: 수동 공유 대상 기능만 만들 때 iOS PhotoKit 보관함 전체 접근이나 Android 미디어 전체 읽기 권한을 기본 요구하지 않는다. 자동으로 갤러리 전체를 탐색·백업하는 기능은 별도 동의/권한 설계가 필요하다. 공유 발신 앱이 실제 파일 대신 링크·텍스트만 보내거나 지원하지 않는 유형이면 동일하게 파일 백업을 보장할 수 없으므로 KakaoTalk 포함 실제 기기·콘텐츠별 검증이 필요하다.
+- 검증·미완료: Apple/Android 공식 문서를 재확인했으며 앱 설치·기기별 공유·업로드 완료는 테스트하지 않았다. 워크북 읽기에서 기존 한국어 mojibake가 보여 이 질문의 범위를 넘어 수정하지 않았다. 다음 안전 작업은 수신 앱의 최소 프로토타입 후 iOS Photos/Files 및 Samsung Gallery/My Files/KakaoTalk 실기기 테스트와 NAS 계정 root·쿼터 검증이다.
