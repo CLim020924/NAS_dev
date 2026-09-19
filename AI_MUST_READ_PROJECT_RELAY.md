@@ -1710,3 +1710,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 무료 대안: iPhone 단축어(Shortcuts)는 `공유 시트에 표시` 설정으로 다른 앱의 공유 목록에서 실행될 수 있고, 입력 유형을 파일·이미지 등으로 제한할 수 있다. 단축어는 iCloud 링크로 다른 사용자에게 공유할 수 있으며 `Get Contents of URL`의 POST 요청 본문으로 파일을 보낼 수 있다. 여러 항목은 `Repeat with Each`로 순차 처리하는 설계가 가능하다. 이는 iOS 앱/Share Extension 배포가 아니므로 Apple Developer Program 가입비가 필요하지 않다.
 - 한계·보안: 단축어 링크에 NAS 비밀번호·장기 토큰을 내장하지 않는다. 사용자별 인증, 업로드 API 형식, 대용량/백그라운드 전송의 안정성, 사진·파일·KakaoTalk의 실제 입력 유형은 프로토타입/실기기로 검증해야 한다. 웹 업로드는 별도 무료 대안이나 iOS 공유 목록에 전용 앱 아이콘이 뜨는 것과는 다르다.
 - 이번 요청은 조사와 정정만 수행했으며 단축어/서버 코드는 구현하지 않았다.
+
+### 2026-09-20 NAS 루트 사용자 폴더·잡다한 파일 정리 착수 — 원격 접근 대기
+
+- 사용자 요청: `/mnt/nas` 루트에 사용자 이름으로 생성된 폴더의 원인과 관련 기능 전체를 조사하고 `/users` 경계를 정리한다. 실제 루트의 비시스템 잡다한 파일은 마스터 `dntdlzz` 개인 공간으로 옮기고, 필요하면 실제 사용량에 맞춰 해당 계정 quota를 조정한 뒤 확인된 잔여물만 삭제한다. 사용자는 NAS 전원을 켰다고 보고했다.
+- 현재 연결 측정: 로컬 Tailscale은 online이나 NAS `chanyoung`(`100.80.39.112`)은 `offline, last seen 8d ago`, `peer's node key has expired`다. Tailscale ping 실패, SSH TCP 22 실패가 재검사에서도 지속됐다. 공개 `https://filemanager-nas.com`은 HTTP 200으로 원본 웹은 살아 있으나 Tailscale/SSH 복구의 증거는 아니다. Chrome 새 탭의 NAS 웹은 로그인 화면이고 기존 세션이 없어 관리자 루트도 읽지 못했다.
+- 이전 확인과 코드 대조: 2026-09-06 실제 NAS 조사에서 과거 `/mnt/nas/<loginId>`, `/mnt/nas/USERS/<loginId>`, `/mnt/nas/users/<loginId>`가 혼재했고 최근 승인 계정은 `/users/<loginId>`였다. 현재 `backend/index.js`의 신규 승인 경로는 `/users/<loginId>`지만, 레거시 `rootPath`를 보존하는 `normalizeApprovedUser`와 `backend/storageQuota.js`의 `normalizeRelativeRoot` 때문에 기존 잘못된 root를 계속 사용할 수 있다. `backend/nasRoutes.js`의 장치/파일 기반 경로, `backend/chatRoutes.js`·`chatRetentionEngine.js`의 받은 파일 경로도 user.rootPath 또는 privileged NAS 전체 root를 사용한다. 마스터/관리자의 전체 루트 탐색은 의도된 권한이므로 개인 quota root와 구분해야 한다.
+- 미실행: NAS의 실제 루트 항목·계정 DB·파일 소유자/크기/참조 여부를 보지 못했으므로 마이그레이션, quota 변경, 삭제, 코드 배포는 하지 않았다. 기존 한국어가 깨진 workbook은 읽기만 하고 수정하지 않았다. 공개 사이트 로그인 정보를 다시 입력하거나 권한을 우회하지 않았다.
+- 다음 안전 조치: NAS의 Tailscale node key를 신뢰된 로컬 콘솔에서 재인증해 SSH를 복구한다. 그 뒤 DB의 각 account root와 `/mnt/nas` 전체 1단계 항목을 realpath·용량·소유자·시스템 참조로 분류하고 백업·해시 검증·서비스 일시정지 계획을 세운 다음에만 이동/삭제한다. 실제 항목 분류가 끝나기 전에는 `dntdlzz` quota 증가량이나 삭제 대상을 추정하지 않는다.
