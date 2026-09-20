@@ -149,7 +149,7 @@ const NAS = ({ showWorkspace = true }) => {
   const [dragOverTarget, setDragOverTarget] = useState(null);
   const [iconPositions, setIconPositions] = useState(() => JSON.parse(localStorage.getItem('msp_icon_positions') || '{}'));
   
-  const { openWindows, setOpenWindows, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles, fileManagerPath, setFileManagerPath } = useWindows();
+  const { openWindows, setOpenWindows, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles, fileManagerPath, setFileManagerPath, recordLastWork } = useWindows();
   const { startUpload } = useTransfer();
   const folderInlineMode = appOpenMode === 'inline';
   const currentFileManagerPath = folderInlineMode ? ensureSlash(fileManagerPath || '/') : '/';
@@ -533,6 +533,7 @@ const NAS = ({ showWorkspace = true }) => {
 
   const requestLinkedDeviceAgentOpen = async (item) => {
     const targetPath = ensureSlash(item.path || item.fullPath || '/');
+    recordLastWork({ type: 'folder', path: targetPath, label: item.name || '파일 관리자' });
     try {
       const startRes = await axios.post('/api/devices/pair/start', { path: targetPath }, { withCredentials: true });
       const { pairingToken, agentDownloadUrl, agentDownloadName } = startRes.data || {};
@@ -597,7 +598,9 @@ const NAS = ({ showWorkspace = true }) => {
     const isBinary = binaryExts.includes(ext);
     try { let content = ''; if (!isBinary) { const response = await axios.get(safeApiUrl, { responseType: 'text', withCredentials: true }); content = typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : response.data; }
       setOpenWindows(prev => [...prev, { id: fileId, name: fileItem.name, fullPath: safePath, winType: 'file', content: content, originalContent: content, mode: forceEditMode && !isBinary ? 'edit' : 'view', isBinary: isBinary, url: safeApiUrl, ext: ext, zIndex: 0, width: 800, height: 600, x: 150 + (prev.length * 30), y: 100 + (prev.length * 30), isMinimized: false, isMaximized: false }]);
-      focusWindow(fileId); } catch (err) { showError('파일 열기', err); } setSelectedItems([]);
+      focusWindow(fileId);
+      recordLastWork({ type: 'file', path: safePath, label: fileItem.name });
+    } catch (err) { showError('파일 열기', err); } setSelectedItems([]);
   };
 
   const handleSearchResultOpen = (item) => {
@@ -2197,6 +2200,7 @@ const NAS = ({ showWorkspace = true }) => {
 
   const navigateFileManagerPath = (path) => {
     const safePath = ensureSlash(path || '/');
+    recordLastWork({ type: 'folder', path: safePath, label: safePath.split('/').filter(Boolean).pop() || '파일 관리자' });
     setFileManagerPath(safePath);
     setFocusedContext('desktop');
     clearFileSelection();

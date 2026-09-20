@@ -9,6 +9,7 @@ import {
   readWorkspaceFileManagerPath,
 } from './windowWorkspaceIdentity';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../utils/workspaceViewState';
+import { RECOVERY_LOGIN_KEY, normalizeLastWork, recoveryOfferForAccount } from '../utils/lastWorkRecovery';
 
 const WindowContext = createContext();
 
@@ -50,6 +51,10 @@ export const WindowProvider = ({ children }) => {
     readWorkspaceFileManagerPath(localStorage, initialWorkspaceIdentity)
   ));
   const [fileManagerStateReady, setFileManagerStateReady] = useState(false);
+  const [recoveryOffer, setRecoveryOffer] = useState(null);
+  const recoveryLoadGenerationRef = useRef(0);
+  const lastWorkQueueRef = useRef(null);
+  if (!lastWorkQueueRef.current) lastWorkQueueRef.current = createWorkspaceViewStateQueue();
   const fileManagerStateQueueRef = useRef(null);
   if (!fileManagerStateQueueRef.current) fileManagerStateQueueRef.current = createWorkspaceViewStateQueue();
   
@@ -113,6 +118,57 @@ export const WindowProvider = ({ children }) => {
   }, [fileManagerPath, fileManagerStateReady, workspaceIdentity]);
 
   useEffect(() => () => fileManagerStateQueueRef.current.dispose(), []);
+
+  const dismissRecoveryOffer = useCallback(() => {
+    setRecoveryOffer(null);
+    try { sessionStorage.removeItem(RECOVERY_LOGIN_KEY); } catch {}
+  }, []);
+
+  const recordLastWork = useCallback((target) => {
+    const normalized = normalizeLastWork(target);
+    if (!normalized || !workspaceIdentityRef.current) return;
+    recoveryLoadGenerationRef.current += 1;
+    dismissRecoveryOffer();
+    lastWorkQueueRef.current.schedule({ kind: 'workspace-session' }, { target: normalized });
+    lastWorkQueueRef.current.flush();
+  }, [dismissRecoveryOffer]);
+
+  useEffect(() => {
+    let controller = null;
+    const loadOffer = () => {
+      controller?.abort();
+      controller = new AbortController();
+      const accountId = readStoredWorkspaceIdentity(localStorage);
+      const generation = ++recoveryLoadGenerationRef.current;
+      lastWorkQueueRef.current.discard();
+      setRecoveryOffer(null);
+      let pendingFor = '';
+      try { pendingFor = sessionStorage.getItem(RECOVERY_LOGIN_KEY) || ''; } catch {}
+      if (!accountId || pendingFor !== accountId) return;
+      const signal = controller.signal;
+      loadWorkspaceViewState({ kind: 'workspace-session' }, signal)
+        .then((record) => {
+          if (signal.aborted || recoveryLoadGenerationRef.current !== generation) return;
+          setRecoveryOffer(recoveryOfferForAccount(sessionStorage, accountId, record?.state));
+        })
+        .catch(() => {});
+    };
+    loadOffer();
+    window.addEventListener('nas:recovery-login', loadOffer);
+    return () => {
+      controller?.abort();
+      window.removeEventListener('nas:recovery-login', loadOffer);
+    };
+  }, [workspaceIdentity]);
+
+  useEffect(() => {
+    const flushOnDeparture = () => lastWorkQueueRef.current.flush({ keepalive: true });
+    window.addEventListener('pagehide', flushOnDeparture);
+    return () => {
+      window.removeEventListener('pagehide', flushOnDeparture);
+      lastWorkQueueRef.current.dispose();
+    };
+  }, []);
 
   useEffect(() => {
     const synchronizeWorkspaceIdentity = () => {
@@ -182,11 +238,15 @@ export const WindowProvider = ({ children }) => {
   // Every window type shares this single MRU authority. Never assign focus-layer z-index elsewhere.
   const focusWindow = useCallback((id) => {
     if (!id || id === 'desktop') return;
+    const target = openWindows.find((win) => win.id === id);
+    if (target?.winType === 'file') recordLastWork({ type: 'file', path: target.fullPath, label: target.name });
+    if (target?.winType === 'folder') recordLastWork({ type: 'folder', path: target.currentPath || target.fullPath, label: target.name });
+    if (target?.winType === 'app') recordLastWork({ type: 'app', appId: target.appId, label: target.name });
     const nextZIndex = allocateWindowZIndex();
     setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, zIndex: nextZIndex, isMinimized: false } : w));
     setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== id), id]);
     setFocusedContext(id);
-  }, [allocateWindowZIndex]);
+  }, [allocateWindowZIndex, openWindows, recordLastWork]);
 
   const showDesktop = useCallback(() => {
     setOpenWindows(prev => prev.map(win => (
@@ -325,6 +385,7 @@ export const WindowProvider = ({ children }) => {
   const openFolderWindowByPath = useCallback((requestedPath, explicitName = null) => {
     const targetPath = normalizeNasPath(requestedPath);
     const name = explicitName || getPathLeafName(targetPath);
+    recordLastWork({ type: 'folder', path: targetPath, label: name });
     const winId = targetPath === '/' ? 'system_root' : `chat_folder_${targetPath}`;
 
     const existing = openWindows.find((w) => w.id === winId);
@@ -358,13 +419,14 @@ export const WindowProvider = ({ children }) => {
     ]);
     setFocusedContext(winId);
     setTimeout(() => fetchFiles(winId, targetPath), 0);
-  }, [openWindows, focusWindow, allocateWindowZIndex, fetchFiles, normalizeNasPath, getPathLeafName]);
+  }, [openWindows, focusWindow, allocateWindowZIndex, fetchFiles, normalizeNasPath, getPathLeafName, recordLastWork]);
 
   const openFileWindowByPath = useCallback(async (requestedPath, preferredName = null, forceEditMode = false) => {
     const safePath = normalizeNasPath(requestedPath);
     const fileId = `file_${safePath}`;
 
     if (openWindows.find(w => w.id === fileId)) {
+      recordLastWork({ type: 'file', path: safePath, label: preferredName || getPathLeafName(safePath) });
       const nextZIndex = allocateWindowZIndex();
       setOpenWindows(prev => prev.map(w =>
         w.id === fileId
@@ -373,7 +435,7 @@ export const WindowProvider = ({ children }) => {
       ));
       setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== fileId), fileId]);
       setFocusedContext(fileId);
-      return;
+      return true;
     }
 
     const safeApiUrl = `/api/file/download?path=${encodeURIComponent(safePath)}`;
@@ -425,14 +487,18 @@ export const WindowProvider = ({ children }) => {
       ]);
       setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== fileId), fileId]);
       setFocusedContext(fileId);
+      recordLastWork({ type: 'file', path: safePath, label: fallbackName });
+      return true;
     } catch (err) {
       console.error('파일 열기 실패:', err);
       alert(err.response?.data?.error || '파일 열기에 실패했습니다.');
+      return false;
     }
-  }, [openWindows, allocateWindowZIndex, normalizeNasPath, getPathLeafName]);
+  }, [openWindows, allocateWindowZIndex, normalizeNasPath, getPathLeafName, recordLastWork]);
 
   const openAppWindow = useCallback((app) => {
     if (!app?.id) return;
+    recordLastWork({ type: 'app', appId: app.id, label: app.title || app.name });
     const winId = `app_${app.id}`;
     const nextZIndex = allocateWindowZIndex();
 
@@ -462,7 +528,7 @@ export const WindowProvider = ({ children }) => {
     });
     setTaskbarOrder(prev => [...prev.filter(itemId => itemId !== winId), winId]);
     setFocusedContext(winId);
-  }, [allocateWindowZIndex]);
+  }, [allocateWindowZIndex, recordLastWork]);
 
 
   return (
@@ -472,6 +538,7 @@ export const WindowProvider = ({ children }) => {
       fileManagerPath, setFileManagerPath,
       focusedContext, setFocusedContext, // 새로 추가된 포커스 상태 내보내기
       aiSelectedPaths, setAiSelectedPaths,
+      recoveryOffer, dismissRecoveryOffer, recordLastWork,
       focusWindow, showDesktop, closeWindow, toggleMinimize, toggleMaximize, toggleFullscreen, fetchFiles,
       openFolderWindowByPath, openFileWindowByPath, openAppWindow
     }}>

@@ -113,6 +113,9 @@ function ServicePlatform() {
   const {
     openAppWindow,
     showDesktop,
+    fileManagerPath,
+    recordLastWork,
+    dismissRecoveryOffer,
   } = useWindows();
   const user = JSON.parse(localStorage.getItem('user')) || {};
   const accountKey = String(user.userUid || user.loginId || user.id || user.username || 'unknown');
@@ -365,6 +368,10 @@ function ServicePlatform() {
   }, [pcConnectionState, refreshPcDevices]);
 
   const openApp = useCallback((app) => {
+    if (app.id === 'files') recordLastWork({ type: 'folder', path: fileManagerPath || '/', label: '파일 관리자' });
+    else if (['note-studio', 'document-workspace', 'document-studio', 'meeting'].includes(app.id)) {
+      recordLastWork({ type: 'app', appId: app.id, label: app.title });
+    } else dismissRecoveryOffer();
     if (app.id === 'pc-sync') {
       if (pcPairingActive) setPcSyncOpen(true);
       else if (pcLinkedHere) openLinkedDrive();
@@ -390,7 +397,7 @@ function ServicePlatform() {
       return;
     }
     openAppWindow(app);
-  }, [navigate, openAppWindow, openLinkedDrive, pcLinkedHere, pcPairingActive, startPcSyncFlow]);
+  }, [navigate, openAppWindow, openLinkedDrive, pcLinkedHere, pcPairingActive, startPcSyncFlow, fileManagerPath, recordLastWork, dismissRecoveryOffer]);
 
   const apps = useMemo(() => {
     const pcStatus = getDeviceStatusUi(pcLiveState);

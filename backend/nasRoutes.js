@@ -1144,6 +1144,17 @@ const getNoteStudioStore = (user) => createNoteStudioStore({
 });
 
 const getViewStateAccountKey = (user) => String(user?.userUid || user?.loginId || user?.id || user?.username || '').trim();
+const isRestorableLastWork = (user, target) => {
+  if (!target || typeof target !== 'object') return false;
+  if (target.type === 'app') return ['note-studio', 'document-workspace', 'document-studio', 'meeting'].includes(target.appId);
+  if (!['file', 'folder'].includes(target.type) || typeof target.path !== 'string') return false;
+  try {
+    const { basePath, targetPath } = getValidatedPath(user, target.path);
+    assertRealPathInside(basePath, targetPath);
+    const stat = fs.statSync(targetPath);
+    return target.type === 'file' ? stat.isFile() : stat.isDirectory();
+  } catch { return false; }
+};
 const resolveViewStateResource = (user, input = {}) => {
   const kind = normalizeViewStateKind(input.kind);
   const accountKey = getViewStateAccountKey(user);
@@ -1166,6 +1177,7 @@ router.get('/workspace/view-state', verifyToken, (req, res) => {
     const resource = resolveViewStateResource(req.user, req.query || {});
     const deviceId = normalizeDeviceId(req.query.deviceId);
     let viewState = loadWorkspaceViewState({ ...resource, deviceId });
+    if (resource.kind === 'workspace-session' && viewState && !isRestorableLastWork(req.user, viewState.state?.target)) viewState = null;
     if (resource.kind === 'file-manager' && viewState?.state?.currentPath) {
       try {
         const { targetPath } = getValidatedPath(req.user, viewState.state.currentPath);
@@ -1180,6 +1192,9 @@ router.put('/workspace/view-state', verifyToken, express.json({ limit: '32kb' })
   try {
     const resource = resolveViewStateResource(req.user, req.body || {});
     const deviceId = normalizeDeviceId(req.body?.deviceId);
+    if (resource.kind === 'workspace-session' && !isRestorableLastWork(req.user, req.body?.state?.target)) {
+      throw Object.assign(new Error('복구할 마지막 작업을 확인하지 못했습니다.'), { status: 400 });
+    }
     if (['workspace', 'file-manager'].includes(resource.kind) && req.body?.state?.currentPath) {
       const { targetPath } = getValidatedPath(req.user, req.body.state.currentPath);
       if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) throw Object.assign(new Error('마지막 폴더 위치를 찾을 수 없습니다.'), { status: 404 });

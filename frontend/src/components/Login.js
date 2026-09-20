@@ -28,6 +28,7 @@ const Login = () => {
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [conflictOpen, setConflictOpen] = useState(false);
+  const [conflictState, setConflictState] = useState({ online: 0, offline: 0 });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
   const [meetingName, setMeetingName] = useState('');
@@ -40,8 +41,13 @@ const Login = () => {
 
   const finishLogin = (response) => {
     localStorage.setItem('user', JSON.stringify(response.data.user));
+    const accountId = String(response.data.user?.userUid || response.data.user?.loginId || response.data.user?.id || '');
+    if (accountId) {
+      try { sessionStorage.setItem('nas_resume_pending_for', accountId); } catch {}
+    }
     localStorage.removeItem('nas_session_left_at');
     window.dispatchEvent(new Event('nas:user-updated'));
+    window.dispatchEvent(new Event('nas:recovery-login'));
     const requestedNext = searchParams.get('next');
     const next = requestedNext?.startsWith('/') && !requestedNext.startsWith('//')
       ? requestedNext
@@ -60,6 +66,10 @@ const Login = () => {
       .then(finishLogin)
       .catch(err => {
         if (err.response?.status === 409 && err.response?.data?.code === 'ACTIVE_SESSION_EXISTS') {
+          setConflictState({
+            online: Number(err.response.data.onlineSessionCount) || 0,
+            offline: Number(err.response.data.offlineSessionCount) || 0
+          });
           setConflictOpen(true);
           return;
         }
@@ -237,18 +247,21 @@ const Login = () => {
         </motion.div>
       </Container>
       <Dialog open={conflictOpen} onClose={() => setConflictOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>이미 로그인되어 있는 계정입니다</DialogTitle>
+        <DialogTitle>{conflictState.online ? '다른 기기에서 사용 중입니다' : '이전 로그인 기록이 남아 있습니다'}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            기존 접속을 유지한 채 이 기기에서도 로그인하거나, 기존 접속을 로그아웃하고 이 기기에서만 로그인할 수 있습니다.
+            {conflictState.online
+              ? `현재 연결 중인 접속 ${conflictState.online}개${conflictState.offline ? `와 오프라인 로그인 기록 ${conflictState.offline}개` : ''}가 있습니다. 기존 접속을 유지하거나 종료할 수 있습니다.`
+              : `현재 연결 중인 기기는 확인되지 않았지만 오프라인 로그인 기록 ${conflictState.offline}개가 남아 있습니다. 이전 PC를 다시 켜면 로그인 상태가 복원될 수 있습니다.`}
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setConflictOpen(false)} color="inherit">취소</Button>
           <Button onClick={handleReplacePreviousLogin} color="inherit">
-            기존 접속 로그아웃
+            기존 기록 종료
           </Button>
           <Button onClick={handleAllowConcurrentLogin} variant="contained">
-            동시 로그인
+            기존 로그인 유지
           </Button>
         </DialogActions>
       </Dialog>

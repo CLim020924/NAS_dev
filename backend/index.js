@@ -243,6 +243,7 @@ const CLEAR_AUTH_COOKIE_OPTIONS = {
 
 const PERSISTENT_AUTH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSION_DISCONNECT_LOGOUT_MS = config.SESSION_DISCONNECT_LOGOUT_MS;
+const { DAY_MS, classifySessions } = require('./authSessionPolicy');
 const SHARED_COOKIE_DOMAIN = config.COOKIE_DOMAIN;
 
 const isHttpsRequest = (req) =>
@@ -290,7 +291,8 @@ const normalizeActiveSession = (session = {}) => ({
   deviceId: String(session.deviceId || '').trim(),
   issuedAt: session.issuedAt || nowIso(),
   lastSeenAt: session.lastSeenAt || session.issuedAt || nowIso(),
-  persistent: !!session.persistent
+  persistent: !!session.persistent,
+  expiresAt: session.expiresAt || ''
 });
 
 const getUserActiveSessions = (user = {}) => {
@@ -347,7 +349,7 @@ const findUserActiveSession = (user, sessionId) =>
 const updateUserSessionPersistence = (user, sessionId, persistent) => {
   const sessions = getUserActiveSessions(user).map((session) =>
     session.sessionId === sessionId
-      ? { ...session, persistent: !!persistent, lastSeenAt: nowIso() }
+      ? { ...session, persistent: !!persistent, lastSeenAt: nowIso(), expiresAt: new Date(Date.now() + (persistent ? 30 : 1) * DAY_MS).toISOString() }
       : session
   );
   return setUserActiveSessions(user, sessions);
@@ -638,6 +640,7 @@ app.get('/api/auth/desktop-handoff', (req, res) => {
       issuedAt: nowIso(),
       lastSeenAt: nowIso(),
       persistent: true,
+      expiresAt: new Date(Date.now() + 30 * DAY_MS).toISOString(),
       source: 'nas-drive'
     });
     saveMembers();
@@ -712,6 +715,11 @@ app.post('/api/logout', (req, res) => {
       if (user) {
         removeUserActiveSession(user, decoded.sessionId || '');
         saveMembers();
+        [...io.sockets.sockets.values()].forEach((connectedSocket) => {
+          if ((connectedSocket.userUid === user.userUid || connectedSocket.userId === getUserLoginId(user)) && connectedSocket.authSessionId === decoded.sessionId) {
+            connectedSocket.disconnect(true);
+          }
+        });
       }
     } catch (err) {
       // An invalid or expired token still needs its browser cookie cleared.
@@ -859,14 +867,26 @@ app.post('/api/login', (req, res) => {
   const sessionId = generateSessionId();
   const deviceId = String(req.body.deviceId || req.headers['x-device-id'] || '').trim();
   const sessionConflictAction = String(req.body.sessionConflictAction || '').trim();
-  const existingSessions = getUserActiveSessions(user);
+  const sessionState = classifySessions(
+    getUserActiveSessions(user),
+    [...io.sockets.sockets.values()]
+      .filter((socket) => socket.userUid === user.userUid || socket.userId === loginIdForToken)
+      .map((socket) => socket.authSessionId)
+  );
+  if (sessionState.removedCount) {
+    setUserActiveSessions(user, sessionState.valid);
+    saveMembers();
+  }
+  const existingSessions = sessionState.valid;
 
   if (existingSessions.length > 0 && !['allow', 'replace'].includes(sessionConflictAction)) {
     return res.status(409).json({
       code: 'ACTIVE_SESSION_EXISTS',
       error: '이미 로그인되어 있는 계정입니다.',
       message: '이미 로그인되어 있는 계정입니다. 이 기기에서도 로그인할지 선택해주세요.',
-      activeSessionCount: existingSessions.length
+      activeSessionCount: existingSessions.length,
+      onlineSessionCount: sessionState.onlineCount,
+      offlineSessionCount: sessionState.offlineCount
     });
   }
 
@@ -892,7 +912,8 @@ app.post('/api/login', (req, res) => {
     deviceId,
     issuedAt: nowIso(),
     lastSeenAt: nowIso(),
-    persistent
+    persistent,
+    expiresAt: new Date(Date.now() + (persistent ? 30 : 1) * DAY_MS).toISOString()
   });
   saveMembers();
 

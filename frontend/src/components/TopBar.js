@@ -44,6 +44,12 @@ const TopBar = ({
     toggleMinimize,
     focusedContext,
     openAppWindow,
+    openFileWindowByPath,
+    openFolderWindowByPath,
+    fileManagerPath,
+    recoveryOffer,
+    dismissRecoveryOffer,
+    recordLastWork,
   } = useWindows();
 
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')) || { username: 'USER', role: 'USER' });
@@ -262,7 +268,33 @@ const TopBar = ({
 
   const handleNavigationSelect = (item) => {
     setNavigationMenuAnchorEl(null);
+    if (item.id === 'files') recordLastWork({ type: 'folder', path: fileManagerPath || '/', label: '파일 관리자' });
+    else if (item.id !== 'desktop') dismissRecoveryOffer();
     item.action();
+  };
+
+  const handleResumeLastWork = async () => {
+    if (!recoveryOffer) return;
+    if (recoveryOffer.type === 'file') {
+      navigate('/nas');
+      await openFileWindowByPath(recoveryOffer.path, recoveryOffer.label);
+      return;
+    }
+    if (recoveryOffer.type === 'folder') {
+      navigate('/nas');
+      openFolderWindowByPath(recoveryOffer.path, recoveryOffer.label);
+      return;
+    }
+    const appSettings = {
+      'note-studio': { width: 1180, height: 780 },
+      'document-workspace': { width: 1100, height: 760 },
+      'document-studio': { width: 1120, height: 760 },
+      meeting: { width: 920, height: 640 },
+    }[recoveryOffer.appId];
+    if (appSettings) {
+      navigate('/platform');
+      openAppWindow({ id: recoveryOffer.appId, title: recoveryOffer.label, ...appSettings });
+    }
   };
 
   const goDesktop = () => {
@@ -630,7 +662,7 @@ const TopBar = ({
             <Chip
               size="small"
               clickable
-              onClick={onChatPreviewClick}
+              onClick={() => { dismissRecoveryOffer(); onChatPreviewClick(); }}
               icon={<ChatBubbleOutlineIcon sx={{ fontSize: 16, color: '#fff !important' }} />}
               label={chatPreview.text}
               sx={{
@@ -651,11 +683,11 @@ const TopBar = ({
           )}
 
           <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
-            <IconButton aria-label="AI 에이전트 열기" onClick={onOpenAi} size="small" sx={{ color: 'primary.main', bgcolor: 'action.hover' }} title="AI 에이전트">
+            <IconButton aria-label="AI 에이전트 열기" onClick={() => { dismissRecoveryOffer(); onOpenAi(); }} size="small" sx={{ color: 'primary.main', bgcolor: 'action.hover' }} title="AI 에이전트">
               <SmartToyIcon fontSize="small" />
             </IconButton>
 
-            <IconButton aria-label="알림 열기" title="알림" onClick={onOpenNotifications} size="small" sx={{ color: 'text.primary', bgcolor: 'action.hover' }}>
+            <IconButton aria-label="알림 열기" title="알림" onClick={() => { dismissRecoveryOffer(); onOpenNotifications(); }} size="small" sx={{ color: 'text.primary', bgcolor: 'action.hover' }}>
               <Badge
                 color="error"
                 badgeContent={unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
@@ -668,7 +700,7 @@ const TopBar = ({
             <IconButton
               aria-label="채팅방 열기"
               title="채팅방"
-              onClick={onOpenRooms}
+              onClick={() => { dismissRecoveryOffer(); onOpenRooms(); }}
               size="small"
               sx={{
                 color: 'text.primary',
@@ -683,7 +715,7 @@ const TopBar = ({
             <IconButton
               aria-label="친구 관리 열기"
               title="친구 관리"
-              onClick={onOpenFriends}
+              onClick={() => { dismissRecoveryOffer(); onOpenFriends(); }}
               size="small"
               sx={{
                 color: 'text.primary',
@@ -724,6 +756,14 @@ const TopBar = ({
           </Menu>
         </Toolbar>
       </AppBar>
+
+      {recoveryOffer && (
+        <Box sx={{ position: 'fixed', top: 56, right: 16, zIndex: (theme) => theme.zIndex.drawer + 2, width: 'min(320px, calc(100vw - 32px))', p: 1.25, border: (theme) => `1px solid ${theme.palette.divider}`, borderRadius: 1, bgcolor: 'background.paper', boxShadow: 4 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>로그인 전 마지막 작업</Typography>
+          <Typography variant="body2" title={recoveryOffer.label} sx={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', mb: 1 }}>{recoveryOffer.label}</Typography>
+          <Button fullWidth size="small" variant="contained" startIcon={<HistoryIcon />} onClick={handleResumeLastWork}>이전 작업 복구</Button>
+        </Box>
+      )}
 
       <Dialog open={profileOpen} onClose={() => setProfileOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>내 정보 수정</DialogTitle>
