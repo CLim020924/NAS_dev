@@ -33,6 +33,7 @@ import axios from 'axios';
 import { useWindows } from '../contexts/WindowContext';
 import { useChat } from '../contexts/ChatContext';
 import FriendManagePanel from './FriendManagePanel';
+import socket from '../socket';
 
 const SIDEBAR_WIDTH = 360;
 
@@ -41,6 +42,7 @@ const MessageSidebar = ({ open, onClose, navigationRequest = null, onStartRoomDr
   const sidebarSignatureRef = useRef('');
   const navigationHandledRef = useRef('');
   const chatRequestSeqRef = useRef(0);
+  const sidebarRequestSeqRef = useRef(0);
   const { openWindows, setOpenWindows, topZIndex, setTopZIndex, focusWindow } = useWindows();
   const { ensureDirectConversation, findDirectConversationWithUser, loadMessages, markConversationRead } = useChat();
 
@@ -83,10 +85,11 @@ const MessageSidebar = ({ open, onClose, navigationRequest = null, onStartRoomDr
   }, []);
 
   const loadSidebar = useCallback(async ({ silent = false } = {}) => {
+    const requestSeq = ++sidebarRequestSeqRef.current;
     try {
       if (!silent) setLoading(true);
       const res = await axios.get('/api/friends/sidebar', { withCredentials: true });
-      applySidebarData(res.data || {});
+      if (requestSeq === sidebarRequestSeqRef.current) applySidebarData(res.data || {});
     } catch (err) {
       console.error('친구 목록 로드 실패', err);
     } finally {
@@ -123,8 +126,21 @@ const MessageSidebar = ({ open, onClose, navigationRequest = null, onStartRoomDr
     }
 
     loadSidebar();
-    const interval = setInterval(() => loadSidebar({ silent: true }), 5000);
-    return () => clearInterval(interval);
+    let eventTimer;
+    const onPresenceChanged = () => {
+      clearTimeout(eventTimer);
+      eventTimer = setTimeout(() => loadSidebar({ silent: true }), 120);
+    };
+    socket.on('membersChanged', onPresenceChanged);
+    socket.on('connect', onPresenceChanged);
+    const interval = setInterval(onPresenceChanged, 30000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(eventTimer);
+      socket.off('membersChanged', onPresenceChanged);
+      socket.off('connect', onPresenceChanged);
+      sidebarRequestSeqRef.current += 1;
+    };
   }, [open, loadSidebar]);
 
   useEffect(() => {

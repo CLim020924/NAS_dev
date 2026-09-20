@@ -45,7 +45,7 @@ const classifyPlatformRoute = (routePath, method = 'GET') => {
   if (route.startsWith('/shares')) return 'ai-integrated-shares';
   if (route.startsWith('/devices')) return 'ai-integrated-devices';
   if (route.startsWith('/meetings/')) return 'ai-integrated-meetings';
-  if (route.startsWith('/system/') || ['/users/data', '/users/update', '/users/approve', '/users/reject'].includes(route)) return 'ai-integrated-administration';
+  if (route.startsWith('/system/') || ['/users/data', '/users/presence', '/users/update', '/users/approve', '/users/reject'].includes(route)) return 'ai-integrated-administration';
   if (route.startsWith('/user/preferences') || route === '/users/profile') return 'ai-integrated-account';
   return null;
 };

@@ -82,13 +82,8 @@ const buildRelation = (aUid, bUid, requestedByUid = null, status = 'NONE') => {
   });
 };
 
-const getConnectedSets = (io) => {
-  const socketValues = Array.from(io.sockets.sockets.values());
-  return {
-    loginIds: new Set(socketValues.map(s => s.userId).filter(Boolean)),
-    userUids: new Set(socketValues.map(s => s.userUid).filter(Boolean)),
-  };
-};
+const { connectedIdentitySets, isUserOnline } = require('./presence');
+const getConnectedSets = (io) => connectedIdentitySets(io.sockets.sockets);
 
 const getRelationStatusForViewer = (rel, viewerUid) => {
   if (!rel) return 'NONE';
@@ -114,7 +109,7 @@ const serializeUserForViewer = (member, viewerUid, relations, connectedSets) => 
     nickname: member.nickname || '',
     role: getRole(member),
     globalAccess: !!member.globalAccess,
-    isOnline: connectedSets.loginIds.has(loginId) || connectedSets.userUids.has(member.userUid),
+    isOnline: isUserOnline(connectedSets, loginId, member.userUid),
     relationId: relation?.relationId || null,
     relationStatus: viewerUid ? getRelationStatusForViewer(relation, viewerUid) : 'NONE',
     isFavorite: favoriteByUids.includes(viewerUid),

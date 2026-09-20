@@ -7,6 +7,7 @@ import { useCustomTheme } from '../contexts/ThemeContext';
 import { useWindows } from '../contexts/WindowContext';
 import ServerSettingsPanel from './ServerSettingsPanel';
 import StorageCapacityOverview from './StorageCapacityOverview';
+import socket from '../socket';
 
 const Settings = () => {
   const { themeName, setThemeName } = useCustomTheme();
@@ -56,29 +57,52 @@ const Settings = () => {
   }, [activeTab, isManager]);
 
   useEffect(() => {
-    let interval;
-    if (activeTab === 2 && isManager) {
-      axios.get('/api/users/data', { withCredentials: true })
-        .then(res => {
-          if (res.data) {
-            setUsers(res.data.users || []);
-            setPendingUsers(res.data.pendingUsers || []);
-            setStorageCapacity(res.data.storageCapacity || null);
-          }
-        })
-        .catch(err => setUserManagementError(err.response?.data?.error || '사용자 정보를 불러오지 못했습니다.'));
-
-      interval = setInterval(() => {
-        axios.get('/api/users/data', { withCredentials: true })
-          .then(res => {
-            if (res.data) {
-              setPendingUsers(res.data.pendingUsers || []);
-              setStorageCapacity(res.data.storageCapacity || null);
-            }
+    if (activeTab !== 2 || !isManager) return undefined;
+    let cancelled = false;
+    let presenceTimer;
+    const loadPresence = async () => {
+      try {
+        const res = await axios.get('/api/users/presence', { withCredentials: true });
+        if (cancelled) return;
+        const states = new Map((res.data?.users || []).map(user => [user.userUid, !!user.isOnline]));
+        setUsers(previous => {
+          let changed = false;
+          const next = previous.map(user => {
+            if (!states.has(user.userUid) || !!user.isOnline === states.get(user.userUid)) return user;
+            changed = true;
+            return { ...user, isOnline: states.get(user.userUid) };
           });
-      }, 5000);
-    }
-    return () => clearInterval(interval);
+          return changed ? next : previous;
+        });
+      } catch (error) { /* The periodic full refresh remains the fallback. */ }
+    };
+    const loadFull = async () => {
+      try {
+        const res = await axios.get('/api/users/data', { withCredentials: true });
+        if (cancelled || !res.data) return;
+        setUsers(res.data.users || []);
+        setPendingUsers(res.data.pendingUsers || []);
+        setStorageCapacity(res.data.storageCapacity || null);
+        loadPresence();
+      } catch (err) {
+        if (!cancelled) setUserManagementError(err.response?.data?.error || '사용자 정보를 불러오지 못했습니다.');
+      }
+    };
+    const onPresenceChanged = () => {
+      clearTimeout(presenceTimer);
+      presenceTimer = setTimeout(loadPresence, 120);
+    };
+    loadFull();
+    socket.on('membersChanged', onPresenceChanged);
+    socket.on('connect', onPresenceChanged);
+    const interval = setInterval(loadFull, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      clearTimeout(presenceTimer);
+      socket.off('membersChanged', onPresenceChanged);
+      socket.off('connect', onPresenceChanged);
+    };
   }, [activeTab, isManager]);
 
   const refreshUserManagement = async () => {

@@ -38,11 +38,14 @@ const { hashPassword, verifyPassword } = require('./passwordSecurity');
 const { consumeDesktopWebSession } = require('./desktopWebSession');
 const { collectServerMetrics } = require('./serverMetrics');
 const { createResourceControlService } = require('./resourceControlService');
+const { connectedIdentitySets, isUserOnline } = require('./presence');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: true, credentials: true }
+  cors: { origin: true, credentials: true },
+  pingInterval: 10000,
+  pingTimeout: 8000
 });
 app.set('io', io);
 
@@ -1026,8 +1029,7 @@ app.get('/api/users/check-identity', (req, res) => {
 
 // [유저 데이터 조회]
 app.get('/api/users/data', requireManager, (req, res) => {
-  const connectedIds = Array.from(io.sockets.sockets.values()).map(s => s.userId).filter(Boolean);
-  const connectedUserUids = Array.from(io.sockets.sockets.values()).map(s => s.userUid).filter(Boolean);
+  const connected = connectedIdentitySets(io.sockets.sockets);
 
   const users = approvedUsers.map(u => {
     const loginId = getUserLoginId(u);
@@ -1043,7 +1045,7 @@ app.get('/api/users/data', requireManager, (req, res) => {
       nickname: u.nickname || '',
       role: getUserRole(u),
       globalAccess: u.globalAccess,
-      isOnline: connectedIds.includes(loginId) || connectedUserUids.includes(u.userUid),
+      isOnline: isUserOnline(connected, loginId, u.userUid),
       rootPath: u.rootPath || '',
       personalRootPath: normalizedUser.personalRootPath,
       canBrowseNasRoot: normalizedUser.role === 'MASTER' || normalizedUser.role === 'MANAGER' || !!normalizedUser.globalAccess,
@@ -1075,6 +1077,15 @@ app.get('/api/users/data', requireManager, (req, res) => {
     pendingUsers,
     storageCapacity: getStorageCapacitySummary(approvedUsers, signupRequests)
   });
+});
+
+app.get('/api/users/presence', requireManager, (req, res) => {
+  const connected = connectedIdentitySets(io.sockets.sockets);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ users: approvedUsers.map(user => ({
+    userUid: user.userUid,
+    isOnline: isUserOnline(connected, getUserLoginId(user), user.userUid)
+  })) });
 });
 
 // 관리자/마스터 전용 서버 자원 현황. 센서 원본 경로나 장치 일련번호는 반환하지 않는다.
@@ -2274,6 +2285,9 @@ io.on('connection', (socket) => {
         saveMembers();
       }
       socket.join(`user:${socket.userUid}`);
+      const alreadyOnline = [...io.sockets.sockets.values()].some((other) =>
+        other.id !== socket.id && (other.userUid === socket.userUid || other.userId === socket.userId));
+      if (!alreadyOnline) io.emit('membersChanged');
 
       // 📦 [공간 동기화] 아이콘 이동 시 절대 경로로 변환하여 저장
       socket.on('move_icons', (data) => {
@@ -2306,7 +2320,7 @@ io.on('connection', (socket) => {
           y: data.y 
         });
       });
-      io.emit('membersChanged'); 
+      // Presence is broadcast only on an offline-to-online transition.
     } catch(e){}
   }
 
@@ -2801,8 +2815,9 @@ io.on('connection', (socket) => {
         activeUsers.delete(socket.userId);
         io.emit('cursor_remove', socket.id); // 👻 퇴장한 유저의 커서 지우기
       }
-      const membersChangedTimer = setTimeout(()=>io.emit('membersChanged'), 1000);
-      membersChangedTimer.unref?.();
+      const stillOnline = [...io.sockets.sockets.values()].some((other) =>
+        other.id !== socket.id && (other.userUid === socket.userUid || other.userId === socket.userId));
+      if (!stillOnline) io.emit('membersChanged');
     }
 
     if (disconnectedUserId && disconnectedSessionId) {
