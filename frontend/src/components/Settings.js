@@ -264,7 +264,7 @@ const Settings = () => {
             <Paper key={u.userUid || u.id} elevation={0} sx={{ p: 2, mb: 2, borderRadius: 1, border: themeName === 'dark' ? '1px solid rgba(255,255,255,0.12)' : '1px solid #e2e8f0' }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                  {u.displayName || u.username} {currentUser.username === u.username && <Chip label="나" size="small" color="primary" sx={{ ml: 1, height: 20 }}/>}
+                  {u.displayName || u.username} {currentUser.username === u.username && <Chip label="나" size="small" color="primary" sx={{ ml: 1, height: 20 }}/>} <Chip label={u.isOnline ? '온라인' : '오프라인'} size="small" color={u.isOnline ? 'success' : 'default'} variant="outlined" sx={{ ml: 0.5, height: 20 }}/>
                 </Typography>
                 <IconButton color="error" size="small" disabled={u.username === 'admin' || currentUser.username === u.username} onClick={() => handleOpenDelete(u)}><DeleteIcon /></IconButton>
               </Box>
@@ -323,7 +323,7 @@ const Settings = () => {
               userList.map((u) => (
                 <TableRow key={u.userUid || u.id} sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
                   <TableCell sx={{ fontWeight: 'bold' }}>
-                    {u.displayName || u.username} {currentUser.username === u.username && <Chip label="나" size="small" color="primary" sx={{ ml: 1, height: 20 }}/>}
+                    {u.displayName || u.username} {currentUser.username === u.username && <Chip label="나" size="small" color="primary" sx={{ ml: 1, height: 20 }}/>} <Chip label={u.isOnline ? '온라인' : '오프라인'} size="small" color={u.isOnline ? 'success' : 'default'} variant="outlined" sx={{ ml: 0.5, height: 20 }}/>
                   </TableCell>
                   <TableCell>
                     <Select size="small" value={u.role} disabled={!isMaster || u.username === 'admin'} onChange={(e) => updateUserRole(u, e.target.value)} sx={{ width: 120 }}>
