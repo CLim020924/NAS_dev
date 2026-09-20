@@ -51,6 +51,17 @@ const ShareManagerDialog = ({ open, onClose }) => {
   const [advancedShareId, setAdvancedShareId] = useState('');
   const [logs, setLogs] = useState([]);
   const [logsShareId, setLogsShareId] = useState('');
+  const [expandedDownloader, setExpandedDownloader] = useState('');
+  const downloadGroups = useMemo(() => {
+    const groups = new Map();
+    logs.filter((log) => String(log.event || '').startsWith('download')).forEach((log) => {
+      // Anonymous requests cannot be reliably linked to the same person.
+      const key = log.downloader?.userUid || `anonymous:${log.id}`;
+      if (!groups.has(key)) groups.set(key, { key, label: log.downloader?.loginId || '익명', entries: [] });
+      groups.get(key).entries.push(log);
+    });
+    return [...groups.values()];
+  }, [logs]);
 
   const expireOptions = useMemo(() => [
     { value: 1, label: '1일' },
@@ -205,6 +216,7 @@ const ShareManagerDialog = ({ open, onClose }) => {
       const res = await axios.get(`/api/shares/${share.shareId}/logs`, { withCredentials: true });
       setLogs(Array.isArray(res.data?.logs) ? res.data.logs : []);
       setLogsShareId(share.shareId);
+      setExpandedDownloader('');
     } catch (err) {
       setError(err.response?.data?.error || err.message || '공유 로그를 불러오지 못했습니다.');
     } finally {
@@ -256,6 +268,7 @@ const ShareManagerDialog = ({ open, onClose }) => {
                       )}
                     </Box>
                     <Chip size="small" color={share.revoked || share.expired || share.paused ? 'default' : 'success'} label={share.revoked ? '삭제됨' : (share.expired ? '만료됨' : (share.paused ? '일시 중지' : '활성'))} />
+                    <Chip size="small" variant="outlined" label={share.downloadRequiresLogin ? '다운로드: 로그인 필요' : '다운로드: 공개'} />
                     {share.url ? (
                       <>
                         <IconButton disabled={disabled} onClick={() => copyShareUrl(share)} title="링크 복사"><ContentCopyIcon /></IconButton>
@@ -335,16 +348,26 @@ const ShareManagerDialog = ({ open, onClose }) => {
                   )}
                   {logsShareId === share.shareId && (
                     <Paper variant="outlined" sx={{ p: 1.25, bgcolor: 'action.hover' }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 1 }}>최근 공유 로그</Typography>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 1 }}>다운로드 기록</Typography>
                       {logs.length === 0 ? (
                         <Typography variant="body2" color="text.secondary">아직 기록이 없습니다.</Typography>
                       ) : (
-                        <Box sx={{ display: 'grid', gap: 0.75, maxHeight: 220, overflow: 'auto' }}>
-                          {logs.map((log) => (
-                            <Box key={log.id} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '150px 120px 1fr' }, gap: 0.75 }}>
-                              <Typography variant="caption" color="text.secondary">{new Date(log.createdAt).toLocaleString()}</Typography>
-                              <Typography variant="caption" sx={{ fontWeight: 800 }}>{log.event}</Typography>
-                              <Typography variant="caption" color="text.secondary">{log.ip || ''} {log.detail?.name || log.detail?.path || ''}</Typography>
+                        <Box sx={{ display: 'grid', gap: 0.75, maxHeight: 320, overflow: 'auto' }}>
+                          {downloadGroups.length === 0 && <Typography variant="body2" color="text.secondary">다운로드 기록이 없습니다.</Typography>}
+                          {downloadGroups.map((group) => (
+                            <Box key={group.key}>
+                              <Button size="small" onClick={() => setExpandedDownloader((current) => current === group.key ? '' : group.key)}>
+                                {group.label} · {group.entries.length}회 {expandedDownloader === group.key ? '접기' : '상세 보기'}
+                              </Button>
+                              {expandedDownloader === group.key && group.entries.map((log) => (
+                                <Box key={log.id} sx={{ pl: 1.5, py: 0.5, borderLeft: '2px solid', borderColor: 'divider' }}>
+                                  <Typography variant="caption" sx={{ fontWeight: 700 }}>{new Date(log.createdAt).toLocaleString()} · {log.detail?.name || '다운로드'}</Typography>
+                                  {(log.detail?.files || log.detail?.paths || [log.detail?.path || log.detail?.name].filter(Boolean)).map((file, index) => (
+                                    <Typography key={`${log.id}-${index}`} variant="caption" display="block" sx={{ overflowWrap: 'anywhere' }}>{file}</Typography>
+                                  ))}
+                                  {log.detail?.filesTruncated && <Typography variant="caption" color="warning.main">파일 {log.detail.fileCount}개 중 앞의 {log.detail.files.length}개만 기록되었습니다.</Typography>}
+                                </Box>
+                              ))}
                             </Box>
                           ))}
                         </Box>

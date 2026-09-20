@@ -5,9 +5,13 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const archiver = require('archiver');
 const { whenSuccessfulResponseFinishes } = require('./shareDownloadCompletion');
+const { getDownloader, requireDownloadLogin } = require('./shareDownloadPolicy');
+const { ownerForPath, assertRealOwnerPath, appendOwnerAccess } = require('./ownerAccessHistory');
 const config = require('./config/env');
 const {
   normalizeQuotaFields,
+  NAS_ROOT,
+  readMembers,
   findMemberByAnyId,
   getLoginId,
   getAccessBasePath,
@@ -145,7 +149,7 @@ const maskIp = (ip = '') => {
 
 const getClientIp = (req) => String(req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || '').split(',')[0].trim();
 
-const addShareLog = (req, share, event, detail = {}) => {
+const addShareLog = (req, share, event, detail = {}, downloader = null) => {
   if (!share?.shareId) return;
   const logs = readShareLogs();
   logs.push({
@@ -153,6 +157,7 @@ const addShareLog = (req, share, event, detail = {}) => {
     shareId: share.shareId,
     event,
     detail,
+    downloader: downloader || { userUid: '', loginId: '', displayName: '익명' },
     ip: maskIp(getClientIp(req)),
     userAgent: String(req.headers['user-agent'] || '').slice(0, 240),
     createdAt: new Date().toISOString()
@@ -160,14 +165,41 @@ const addShareLog = (req, share, event, detail = {}) => {
   writeShareLogs(logs);
 };
 
-const recordCompletedShareDownload = (req, res, share, event, detail) => {
+const recordOwnerShareDownload = (share, detail, downloader) => {
+  const members = readMembers();
+  const targets = getShareTargets(share);
+  targets.forEach((target, index) => {
+    const owned = ownerForPath(NAS_ROOT, target.path, members);
+    if (!owned || !assertRealOwnerPath(owned.ownerRoot, target.path)) return;
+    if (downloader?.userUid && downloader.userUid === String(owned.owner.userUid)) return;
+    const prefix = isBundleShare(share) ? getSafeBundleName(target, index) : '';
+    const files = (detail.files || []).filter((name) => !prefix || name === prefix || name.startsWith(`${prefix}/`));
+    appendOwnerAccess(owned.ownerRoot, {
+      type: 'share-downloaded',
+      ownerUid: String(owned.owner.userUid),
+      actorUid: downloader?.userUid || '',
+      actorName: downloader?.displayName || '익명',
+      shareId: share.shareId,
+      path: owned.relativePath,
+      at: new Date().toISOString(),
+      files,
+      fileCount: files.length,
+      filesTruncated: !!detail.filesTruncated,
+      restorable: false
+    });
+  });
+};
+
+const recordCompletedShareDownload = (req, res, share, event, detail, downloader) => {
   whenSuccessfulResponseFinishes(res, () => {
     try {
+      detail.partialResponse = res.statusCode === 206;
       const shares = readShares().map((item) => item.shareId === share.shareId
         ? { ...item, downloadCount: Number(item.downloadCount || 0) + 1, lastDownloadedAt: new Date().toISOString() }
         : item);
       writeShares(shares);
-      addShareLog(req, share, event, detail);
+      addShareLog(req, share, event, detail, downloader);
+      recordOwnerShareDownload(share, detail, downloader);
     } catch (error) {
       console.error('[share-download] completion log failed:', error.message);
     }
@@ -232,7 +264,15 @@ const assertPublicShareAccess = (req, share, action = 'view') => {
     err.requiresPassword = true;
     throw err;
   }
+  if (action === 'download' && requireDownloadLogin(share, getShareDownloader(req))) {
+    const err = new Error('다운로드하려면 NAS 계정으로 로그인해야 합니다.');
+    err.status = 401;
+    err.requiresLogin = true;
+    throw err;
+  }
 };
+
+const getShareDownloader = (req) => getDownloader(req.cookies?.token, JWT_SECRET, findMemberByAnyId);
 
 const getUserFromRequest = (req) => {
   const token = req.cookies?.token;
@@ -389,6 +429,7 @@ const getPublicSharePayload = (share, req) => {
     allowFolderDownload: share.allowFolderDownload === true,
     includeSubfolders: share.includeSubfolders !== false,
     requiresPassword: !!share.passwordHash?.hash,
+    downloadRequiresLogin: share.downloadRequiresLogin === true,
     note: share.note || '',
     maxViews: Number(share.maxViews || 0),
     viewCount: Number(share.viewCount || 0),
@@ -489,6 +530,7 @@ router.post('/shares', (req, res) => {
       maxDownloads: Math.max(0, Math.floor(Number(req.body?.maxDownloads || 0))),
       allowPreview: req.body?.allowPreview !== false,
       allowDownload: req.body?.allowDownload !== false,
+      downloadRequiresLogin: true,
       includeSubfolders: (targetType === 'folder' || targetType === 'bundle') ? req.body?.includeSubfolders !== false : false,
       allowFolderDownload: (targetType === 'folder' || targetType === 'bundle') ? req.body?.allowFolderDownload === true : false,
       downloadCount: 0,
@@ -543,6 +585,7 @@ router.get('/shares', (req, res) => {
         maxDownloads: Number(share.maxDownloads || 0),
         allowPreview: share.allowPreview !== false,
         allowDownload: share.allowDownload !== false,
+        downloadRequiresLogin: share.downloadRequiresLogin === true,
         allowFolderDownload: share.allowFolderDownload === true,
         includeSubfolders: share.includeSubfolders !== false,
         downloadCount: Number(share.downloadCount || 0)
@@ -856,7 +899,7 @@ const sendSharedFile = (req, res, disposition) => {
   }
 
   if (disposition === 'attachment') {
-    recordCompletedShareDownload(req, res, share, 'download', { path: req.query.path || '', name: path.basename(targetPath) });
+    recordCompletedShareDownload(req, res, share, 'download', { path: req.query.path || '', name: path.basename(targetPath), files: [String(req.query.path || path.basename(targetPath))] }, getShareDownloader(req));
     res.download(targetPath, path.basename(targetPath), { dotfiles: 'allow' });
     return;
   }
@@ -877,7 +920,7 @@ router.get('/public-shares/:token/download', (req, res) => {
   try {
     return sendSharedFile(req, res, 'attachment');
   } catch (err) {
-    return res.status(err.status || 500).json({ error: err.message || '다운로드할 수 없습니다.' });
+    return res.status(err.status || 500).json({ error: err.message || '다운로드할 수 없습니다.', requiresLogin: !!err.requiresLogin });
   }
 });
 
@@ -897,11 +940,18 @@ router.get('/public-shares/:token/download-folder', (req, res) => {
     }
 
     const folderName = targetPath ? (path.basename(targetPath) || share.displayName || 'shared-folder') : (share.displayName || 'shared-bundle');
-    recordCompletedShareDownload(req, res, share, 'download-folder', { path: requestedRelative || '', name: folderName });
+    const downloadDetail = { path: requestedRelative || '', name: folderName, files: [], fileCount: 0, filesTruncated: false };
+    recordCompletedShareDownload(req, res, share, 'download-folder', downloadDetail, getShareDownloader(req));
 
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(folderName)}.zip"`);
     const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('entry', (entry) => {
+      if (entry.type === 'directory') return;
+      downloadDetail.fileCount += 1;
+      if (downloadDetail.files.length < 200) downloadDetail.files.push(entry.name);
+      else downloadDetail.filesTruncated = true;
+    });
     archive.on('error', (err) => {
       if (!res.headersSent) res.status(500).json({ error: err.message });
       else res.destroy(err);
@@ -919,7 +969,7 @@ router.get('/public-shares/:token/download-folder', (req, res) => {
     }
     archive.finalize();
   } catch (err) {
-    if (!res.headersSent) res.status(err.status || 500).json({ error: err.message || '폴더를 다운로드할 수 없습니다.' });
+    if (!res.headersSent) res.status(err.status || 500).json({ error: err.message || '폴더를 다운로드할 수 없습니다.', requiresLogin: !!err.requiresLogin });
   }
 });
 
@@ -959,20 +1009,28 @@ router.post('/public-shares/:token/download-selected', express.json(), (req, res
     const hasFolder = resolvedItems.some((item) => item.type === 'folder');
     if (!hasFolder && resolvedItems.length === 1) {
       const target = resolvedItems[0];
-      recordCompletedShareDownload(req, res, share, 'download-selected-file', { path: target.relativePath, name: target.name });
+      recordCompletedShareDownload(req, res, share, 'download-selected-file', { path: target.relativePath, name: target.name, files: [target.relativePath || target.name] }, getShareDownloader(req));
       return res.download(target.fullPath, target.name, { dotfiles: 'allow' });
     }
 
     const archiveName = getSafeArchiveEntryName(share.displayName || 'selected-items');
-    recordCompletedShareDownload(req, res, share, 'download-selected-zip', {
+    const downloadDetail = {
       count: resolvedItems.length,
       hasFolder,
-      paths: resolvedItems.map((item) => item.relativePath).slice(0, 50)
-    });
+      paths: resolvedItems.map((item) => item.relativePath),
+      files: [], fileCount: 0, filesTruncated: false
+    };
+    recordCompletedShareDownload(req, res, share, 'download-selected-zip', downloadDetail, getShareDownloader(req));
 
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(archiveName)}-selected.zip"`);
     const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('entry', (entry) => {
+      if (entry.type === 'directory') return;
+      downloadDetail.fileCount += 1;
+      if (downloadDetail.files.length < 200) downloadDetail.files.push(entry.name);
+      else downloadDetail.filesTruncated = true;
+    });
     archive.on('error', (err) => {
       if (!res.headersSent) res.status(500).json({ error: err.message });
       else res.destroy(err);
@@ -997,7 +1055,7 @@ router.post('/public-shares/:token/download-selected', express.json(), (req, res
     });
     archive.finalize();
   } catch (err) {
-    if (!res.headersSent) res.status(err.status || 500).json({ error: err.message || '선택 항목을 다운로드할 수 없습니다.' });
+    if (!res.headersSent) res.status(err.status || 500).json({ error: err.message || '선택 항목을 다운로드할 수 없습니다.', requiresLogin: !!err.requiresLogin });
   }
 });
 

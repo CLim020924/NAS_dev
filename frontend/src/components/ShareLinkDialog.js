@@ -202,7 +202,7 @@ const ShareLinkDialog = ({ open, initialTarget, initialTargets, initialPath = '/
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           {result?.url && (
             <Alert severity="success" sx={{ mb: 2 }}>
-              공유 링크가 생성되었습니다. 기본 유효기간은 선택한 기간까지입니다.
+              공유 링크가 생성되었습니다. 다운로드에는 NAS 계정 로그인이 필요합니다. 기본 유효기간은 선택한 기간까지입니다.
             </Alert>
           )}
 

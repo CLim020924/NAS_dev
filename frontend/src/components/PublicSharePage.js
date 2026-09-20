@@ -69,6 +69,7 @@ const PublicSharePage = () => {
   const [requiresPassword, setRequiresPassword] = useState(false);
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [downloadSignedIn, setDownloadSignedIn] = useState(false);
 
   const baseApi = `/api/public-shares/${encodeURIComponent(token || '')}`;
   const isFolderLikeShare = share?.type === 'folder' || share?.type === 'bundle';
@@ -86,6 +87,10 @@ const PublicSharePage = () => {
         }
         if (!res.ok) throw new Error(data.error || '공유 링크를 열 수 없습니다.');
         setShare(data.share);
+        if (data.share?.downloadRequiresLogin) {
+          const session = await fetch('/api/auth/session', { credentials: 'include' }).catch(() => null);
+          setDownloadSignedIn(Boolean(session?.ok));
+        } else setDownloadSignedIn(true);
         setRequiresPassword(false);
         if (data.share?.type === 'file') {
           setPreviewItem({ name: data.share.name, relativePath: '', type: 'file', size: data.share.size });
@@ -130,6 +135,7 @@ const PublicSharePage = () => {
   const downloadUrlFor = (item) => transferUrl(`${baseApi}/download?path=${encodePath(item?.relativePath || '')}`);
   const folderDownloadUrl = transferUrl(`${baseApi}/download-folder?path=${encodePath(currentPath)}`);
   const canSelectFolder = share?.allowDownload !== false;
+  const canDownload = !share?.downloadRequiresLogin || downloadSignedIn;
 
   const toggleSelected = (item) => {
     if (item.type === 'folder' && !canSelectFolder) return;
@@ -163,6 +169,7 @@ const PublicSharePage = () => {
 
   const downloadSelected = async () => {
     if (selectedItems.length === 0) return;
+    if (!canDownload) return;
     setError('');
     try {
       if (selectedHasFolder || selectedItems.length > 1) {
@@ -270,6 +277,7 @@ const PublicSharePage = () => {
                   <Chip size="small" label={share?.type === 'bundle' ? '묶음 공유' : (share?.type === 'folder' ? '폴더 공유' : '파일 공유')} />
                   <Chip size="small" color="primary" variant="outlined" label={`만료 ${new Date(share?.expiresAt).toLocaleDateString()}`} />
                   {share?.requiresPassword && <Chip size="small" variant="outlined" label="비밀번호 보호" />}
+                  {share?.downloadRequiresLogin && <Chip size="small" variant="outlined" label="다운로드 시 NAS 로그인 필요" />}
                   {Number(share?.maxViews || 0) > 0 && <Chip size="small" variant="outlined" label={`열람 ${share.viewCount || 0}/${share.maxViews}`} />}
                   {Number(share?.maxDownloads || 0) > 0 && <Chip size="small" variant="outlined" label={`다운로드 ${share.downloadCount || 0}/${share.maxDownloads}`} />}
                   {share?.ownerDisplayName && <Chip size="small" variant="outlined" label={`공유자 ${share.ownerDisplayName}`} />}
@@ -280,7 +288,7 @@ const PublicSharePage = () => {
                   </Alert>
                 )}
               </Box>
-              {share?.type === 'file' && share?.allowDownload && (
+              {share?.type === 'file' && share?.allowDownload && canDownload && (
                 <Button href={downloadUrlFor({ relativePath: '', name: share.name })} variant="contained" startIcon={<DownloadIcon />}>
                   다운로드
                 </Button>
@@ -289,11 +297,16 @@ const PublicSharePage = () => {
           </Box>
 
           {error && <Alert severity="error" sx={{ m: 2 }}>{error}</Alert>}
+          {share?.downloadRequiresLogin && !canDownload && (
+            <Alert severity="info" sx={{ m: 2 }} action={<Button href={`/login?next=${encodeURIComponent(`/share/${token}`)}`} size="small">로그인</Button>}>
+              미리보기는 가능하지만 다운로드하려면 NAS 계정으로 로그인해야 합니다.
+            </Alert>
+          )}
 
           {share?.type === 'file' ? (
             <Box sx={{ height: { xs: 'calc(100dvh - 132px)', md: '76vh' }, minHeight: { xs: 420, md: '76vh' }, bgcolor: 'background.paper', overflow: 'hidden' }}>
               {share.allowPreview ? (
-                <FilePreviewSurface name={share.name} previewUrl={previewUrlFor({ relativePath: '', name: share.name })} downloadUrl={downloadUrlFor({ relativePath: '', name: share.name })} />
+                <FilePreviewSurface name={share.name} previewUrl={previewUrlFor({ relativePath: '', name: share.name })} downloadUrl={canDownload ? downloadUrlFor({ relativePath: '', name: share.name }) : ''} />
               ) : (
                 <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3, textAlign: 'center' }}>
                   <Box>
@@ -323,7 +336,7 @@ const PublicSharePage = () => {
                       </React.Fragment>
                     ))}
                   </Stack>
-                  {share?.allowFolderDownload && (
+                  {share?.allowFolderDownload && canDownload && (
                     <Button size="small" href={folderDownloadUrl} startIcon={<DownloadIcon />}>ZIP</Button>
                   )}
                   <Button
@@ -334,7 +347,7 @@ const PublicSharePage = () => {
                   >
                     선택한 항목 {selectedItems.length}개
                   </Button>
-                  <Button size="small" disabled={selectedItems.length === 0} onClick={downloadSelected}>
+                  <Button size="small" disabled={selectedItems.length === 0 || !canDownload} onClick={downloadSelected}>
                     {selectedHasFolder || selectedItems.length > 1 ? 'ZIP으로 다운로드' : '다운로드'}
                   </Button>
                 </Box>
@@ -349,7 +362,7 @@ const PublicSharePage = () => {
                         <ListItemButton
                           key={item.relativePath || item.name}
                           onClick={() => isFolder ? (item.canEnter ? loadList(item.relativePath) : null) : setPreviewItem(item)}
-                          onDoubleClick={() => !isFolder && share?.allowDownload && window.open(downloadUrlFor(item), '_blank')}
+                          onDoubleClick={() => !isFolder && share?.allowDownload && canDownload && window.open(downloadUrlFor(item), '_blank')}
                           disabled={isFolder && !item.canEnter}
                         >
                           <Checkbox
@@ -366,7 +379,7 @@ const PublicSharePage = () => {
                             secondary={isFolder ? (item.canEnter ? '폴더' : '하위 폴더 제외됨') : formatBytes(item.size)}
                             primaryTypographyProps={{ noWrap: true, fontWeight: previewItem?.relativePath === item.relativePath ? 900 : 500 }}
                           />
-                          {!isFolder && (
+                          {!isFolder && canDownload && (
                             <IconButton size="small" href={downloadUrlFor(item)} onClick={(e) => e.stopPropagation()}>
                               <DownloadIcon fontSize="small" />
                             </IconButton>
@@ -439,7 +452,7 @@ const PublicSharePage = () => {
                       <ArrowBackIcon fontSize="small" />
                     </IconButton>
                     <Typography noWrap sx={{ flex: 1, fontWeight: 900 }}>{previewItem.name}</Typography>
-                    <Button size="small" href={downloadUrlFor(previewItem)} target="_blank" startIcon={<DownloadIcon />}>다운로드</Button>
+                    {canDownload && <Button size="small" href={downloadUrlFor(previewItem)} target="_blank" startIcon={<DownloadIcon />}>다운로드</Button>}
                     <IconButton size="small" href={previewUrlFor(previewItem)} target="_blank">
                       <OpenInNewIcon fontSize="small" />
                     </IconButton>
@@ -447,7 +460,7 @@ const PublicSharePage = () => {
                   <Divider />
                   <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                     {share?.allowPreview ? (
-                      <FilePreviewSurface name={previewItem.name} previewUrl={previewUrlFor(previewItem)} downloadUrl={downloadUrlFor(previewItem)} />
+                      <FilePreviewSurface name={previewItem.name} previewUrl={previewUrlFor(previewItem)} downloadUrl={canDownload ? downloadUrlFor(previewItem) : ''} />
                     ) : (
                       <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3, textAlign: 'center' }}>
                         <Typography color="text.secondary">미리보기가 허용되지 않은 공유 링크입니다.</Typography>

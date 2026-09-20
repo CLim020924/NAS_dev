@@ -797,7 +797,14 @@ const TopBar = ({
           {accessHistory.map((entry) => (
             <Box key={entry.activityId} sx={{ py: 1, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
               <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{entry.actorName || '다른 사용자'} · {entry.path || '/'}</Typography>
-              <Typography variant="caption" color="text.secondary">{new Date(entry.at).toLocaleString()} · {entry.type === 'folder-opened' ? '폴더 열람' : entry.type}</Typography>
+              <Typography variant="caption" color="text.secondary">{new Date(entry.at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} KST · {entry.type === 'folder-opened' ? '폴더 열람' : entry.type === 'share-downloaded' ? '공유 링크 다운로드' : entry.type}</Typography>
+              {entry.type === 'share-downloaded' && (
+                <Box component="details" sx={{ mt: 0.5 }}>
+                  <Box component="summary" sx={{ cursor: 'pointer', fontSize: 12 }}>받은 파일 {entry.fileCount || entry.files?.length || 0}개 보기</Box>
+                  {(entry.files || []).map((file, index) => <Typography key={`${entry.activityId}-${index}`} variant="caption" display="block" sx={{ pl: 1, overflowWrap: 'anywhere' }}>{file}</Typography>)}
+                  {entry.filesTruncated && <Typography variant="caption" color="warning.main">파일이 많아 일부만 기록되었습니다.</Typography>}
+                </Box>
+              )}
             </Box>
           ))}
         </DialogContent>
