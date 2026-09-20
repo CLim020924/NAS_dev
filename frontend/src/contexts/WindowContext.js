@@ -358,7 +358,7 @@ export const WindowProvider = ({ children }) => {
   }, [normalizeNasPath]);
 
 
-  const fetchFiles = useCallback(async (arg1, arg2) => {
+  const fetchFiles = useCallback(async (arg1, arg2, options = {}) => {
     // 💡 [핵심] NAS.js가 경로 1개만 던졌는지, 창번호와 경로 2개를 다 던졌는지 찰떡같이 구분합니다!
     const isSingleArg = arg2 === undefined;
     let targetPath = isSingleArg ? arg1 : arg2;
@@ -368,7 +368,10 @@ export const WindowProvider = ({ children }) => {
     if (!targetPath || targetPath === 'undefined') targetPath = '/';
 
     try {
-      const response = await axios.get(`/api/files?path=${encodeURIComponent(targetPath)}`, { withCredentials: true });
+      const response = await axios.get(`/api/files?path=${encodeURIComponent(targetPath)}`, {
+        withCredentials: true,
+        headers: options.navigation ? { 'X-NAS-Navigation': '1' } : undefined
+      });
       
       setOpenWindows(prev => prev.map(w => {
         // 명시된 창이거나, 현재 복사된 폴더를 열고 있는 "모든 창"의 화면을 즉시 새로고침합니다!
@@ -418,7 +421,7 @@ export const WindowProvider = ({ children }) => {
       }
     ]);
     setFocusedContext(winId);
-    setTimeout(() => fetchFiles(winId, targetPath), 0);
+    setTimeout(() => fetchFiles(winId, targetPath, { navigation: true }), 0);
   }, [openWindows, focusWindow, allocateWindowZIndex, fetchFiles, normalizeNasPath, getPathLeafName, recordLastWork]);
 
   const openFileWindowByPath = useCallback(async (requestedPath, preferredName = null, forceEditMode = false) => {

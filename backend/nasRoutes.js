@@ -29,6 +29,7 @@ const {
   NAS_ROOT,
   getLoginId,
   normalizeQuotaFields,
+  readMembers,
   findMemberByAnyId,
   getAccessBasePath,
   getQuotaBasePath,
@@ -47,12 +48,14 @@ const {
   createDriveRestorePoint,
   listDriveRestorePoints,
   restoreDriveFromPoint,
-  appendActivity,
+  appendActivity: appendBaseActivity,
   listActivity,
   listFavorites,
   setFavorite,
   listRecentFiles
 } = require('./fileVersioning');
+const { MUTATION_TYPES, ownerForPath, externalEvent, assertRealOwnerPath, appendOwnerAccess, listOwnerAccess } = require('./ownerAccessHistory');
+const { createNotification } = require('./notificationStore');
 const { verifyPassword } = require('./passwordSecurity');
 const { createDesktopWebSession } = require('./desktopWebSession');
 const {
@@ -159,6 +162,89 @@ const agentLoginAttempts = new Map();
 const AGENT_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const AGENT_LOGIN_MAX_FAILURES = 5;
 const getActivityActor = (user = {}) => String(user.userUid || user.loginId || user.id || user.username || 'web-user');
+const recentExternalVisits = new Map();
+const recentOwnerAlerts = new Map();
+let accessMembersCache = { stamp: '', rows: [] };
+const getAccessMembers = () => {
+  const file = path.join(__dirname, 'data', 'members.json');
+  const stat = fs.statSync(file);
+  const stamp = `${stat.mtimeMs}:${stat.size}`;
+  if (accessMembersCache.stamp !== stamp) accessMembersCache = { stamp, rows: readMembers() };
+  return accessMembersCache.rows;
+};
+const appendActivity = (basePath, activity) => {
+  const row = appendBaseActivity(basePath, activity);
+  if (!MUTATION_TYPES.has(activity.type) || typeof activity.path !== 'string') return row;
+  try {
+    const target = resolveInside(basePath, activity.path);
+    const members = getAccessMembers();
+    const actorKey = String(activity.actor || '');
+    const actor = members.find((member) => [member.userUid, member.loginId, member.id].some((value) => String(value || '') === actorKey));
+    if (!actor) return row;
+    const owned = ownerForPath(NAS_ROOT, target, members);
+    if (owned) {
+      const event = externalEvent({ nasRoot: NAS_ROOT, targetPath: target, members, actor, type: activity.type,
+        extra: { source: String(activity.source || 'web').slice(0, 80), originalActivityId: row.activityId } });
+      if (event) appendOwnerAccess(owned.ownerRoot, event);
+    }
+    if (activity.type === 'item-moved' && typeof activity.previousPath === 'string') {
+      const previous = resolveInside(basePath, activity.previousPath);
+      const previousOwner = ownerForPath(NAS_ROOT, previous, members);
+      if (previousOwner && previousOwner.owner.userUid !== owned?.owner.userUid) {
+        const removed = externalEvent({ nasRoot: NAS_ROOT, targetPath: previous, members, actor,
+          type: 'item-moved-out', extra: { source: String(activity.source || 'web').slice(0, 80), originalActivityId: row.activityId } });
+        if (removed) appendOwnerAccess(previousOwner.ownerRoot, removed);
+      }
+    }
+  } catch (error) {
+    console.error('[access-history] external mutation audit failed:', error.message);
+  }
+  return row;
+};
+const rememberBounded = (cache, key, now, max = 4096) => {
+  cache.delete(key);
+  cache.set(key, now);
+  if (cache.size > max) cache.delete(cache.keys().next().value);
+};
+
+const recordExternalVisit = (req, targetPath) => {
+  const relative = path.relative(NAS_ROOT, targetPath);
+  if (!relative.startsWith(`users${path.sep}`)) return null;
+  if (relative.split(path.sep)[1] === getLoginId(req.user)) return null;
+  const members = getAccessMembers();
+  const owned = ownerForPath(NAS_ROOT, targetPath, members);
+  if (!owned) return null;
+  if (!assertRealOwnerPath(owned.ownerRoot, targetPath)) {
+    throw Object.assign(new Error('계정 경계를 벗어나는 폴더는 열 수 없습니다.'), { status: 403 });
+  }
+  const event = externalEvent({ nasRoot: NAS_ROOT, targetPath, members, actor: req.user, type: 'folder-opened' });
+  if (!event) return null;
+  const now = Date.now();
+  const key = `${event.actorUid}:${event.ownerUid}:${event.path}`;
+  const explicitNavigation = req.headers['x-nas-navigation'] === '1';
+  // Legacy clients can poll the same folder every few seconds; retain the first
+  // read as evidence, while explicit user navigation always creates a new row.
+  if (!explicitNavigation && now - (recentExternalVisits.get(key) || 0) < 60_000) return null;
+  const row = appendOwnerAccess(owned.ownerRoot, event);
+  rememberBounded(recentExternalVisits, key, now);
+  const alertKey = `${event.actorUid}:${event.ownerUid}`;
+  if (now - (recentOwnerAlerts.get(alertKey) || 0) >= 15 * 60_000) {
+    try {
+      const notice = createNotification({
+        userUid: event.ownerUid,
+        type: 'account_access',
+        title: '내 저장공간 접근',
+        message: `${event.actorName}님이 내 저장공간에 접근했습니다.`,
+        meta: { actorUserUid: event.actorUid, path: event.path }
+      });
+      req.app.get('io')?.to(`user:${event.ownerUid}`).emit('notification:new', notice);
+      rememberBounded(recentOwnerAlerts, alertKey, now);
+    } catch (error) {
+      console.error('[access-history] owner notification failed:', error.message);
+    }
+  }
+  return row;
+};
 
 const assertAgentMutationAllowed = (device, operation) => {
   if (device.syncPaused) {
@@ -2242,6 +2328,16 @@ const upload = multer({ storage: multer.diskStorage({
 })});
 
 // [1] 파일 목록 조회
+router.get('/access-history', verifyToken, (req, res) => {
+  try {
+    const ownerRoot = getQuotaBasePath(req.user);
+    if (!fs.existsSync(ownerRoot)) return res.json({ success: true, events: [] });
+    return res.json({ success: true, events: listOwnerAccess(ownerRoot, req.query.limit) });
+  } catch (error) {
+    return res.status(500).json({ error: '접근 기록을 불러오지 못했습니다.' });
+  }
+});
+
 router.get('/files', verifyToken, (req, res) => {
   try {
     ensureFixedSystemFolders(req.user);
@@ -2282,8 +2378,9 @@ router.get('/files', verifyToken, (req, res) => {
         return null;
       }
     }).filter(Boolean);
+    recordExternalVisit(req, targetPath);
     res.json(items);
-  } catch (e) { res.status(403).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // [2] 파일 업로드 / 폴더 생성

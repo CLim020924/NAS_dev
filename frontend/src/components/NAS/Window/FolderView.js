@@ -45,7 +45,7 @@ const FolderView = ({
             }}
           >
             <List sx={{ pt: 1 }}>
-              <ListItem button onClick={() => fetchFiles(win.id, win.basePath)}>
+              <ListItem button onClick={() => fetchFiles(win.id, win.basePath, { navigation: true })}>
                 <ListItemIcon sx={{ minWidth: 40 }}>
                   <StorageIcon color="primary" />
                 </ListItemIcon>
@@ -84,7 +84,7 @@ const FolderView = ({
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     if (!isEditing && !isMobile) {
-                      if (file.type === 'folder') fetchFiles(win.id, ensureSlash(file.fullPath));
+                      if (file.type === 'folder') fetchFiles(win.id, ensureSlash(file.fullPath), { navigation: true });
                       else openFileWindow(file, false);
                     }
                   }}

@@ -15,6 +15,7 @@ import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
 import HistoryIcon from '@mui/icons-material/History';
 import ViewCarouselOutlinedIcon from '@mui/icons-material/ViewCarouselOutlined';
 import axios from 'axios';
+import socket from '../socket';
 import { useWindows } from '../contexts/WindowContext';
 import { alpha } from '@mui/material/styles';
 import {
@@ -67,10 +68,31 @@ const TopBar = ({
   const taskSwitcherFlashTimerRef = useRef(null);
 
   const [profileOpen, setProfileOpen] = useState(false);
+  const [accessHistoryOpen, setAccessHistoryOpen] = useState(false);
+  const [accessHistory, setAccessHistory] = useState([]);
+  const [accessHistoryError, setAccessHistoryError] = useState('');
   const [profileNickname, setProfileNickname] = useState(user.nickname || user.displayName || user.username || '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  const loadAccessHistory = useCallback(async () => {
+    try {
+      const response = await axios.get('/api/access-history?limit=100', { withCredentials: true });
+      setAccessHistory(response.data?.events || []);
+      setAccessHistoryError('');
+    } catch (error) {
+      setAccessHistoryError('접근 기록을 불러오지 못했습니다.');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!accessHistoryOpen) return undefined;
+    loadAccessHistory();
+    const onNotice = (notice) => { if (notice?.type === 'account_access') loadAccessHistory(); };
+    socket.on('notification:new', onNotice);
+    return () => socket.off('notification:new', onNotice);
+  }, [accessHistoryOpen, loadAccessHistory]);
 
   useEffect(() => {
     const handleStorageChange = () => setUser(JSON.parse(localStorage.getItem('user')) || { username: 'USER', role: 'USER' });
@@ -333,11 +355,13 @@ const TopBar = ({
             <ViewCarouselOutlinedIcon sx={{ fontSize: 15 }} />
           </IconButton>
           {taskSwitcherOpen && <Chip size="small" color="error" variant="outlined" label="웹 창 전환 · Tab / Shift+Tab" title="웹 창 전환 · Tab / Shift+Tab" sx={{ height: 26, flex: '0 1 auto', maxWidth: { xs: 120, sm: 220 } }} />}
-          <Box onClick={goDesktop} sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer', minWidth: 0 }}>
-            <Box sx={{ width: 28, height: 28, borderRadius: 1, display: 'grid', placeItems: 'center', color: 'primary.main', border: (theme) => `1px solid ${theme.palette.divider}` }}>
-              <FolderIcon sx={{ fontSize: 18 }} />
-            </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+            <IconButton size="small" aria-label="접근 기록 열기" title="접근 기록" onClick={() => setAccessHistoryOpen(true)} sx={{ width: 28, height: 28, color: 'primary.main', border: (theme) => `1px solid ${theme.palette.divider}` }}>
+              <HistoryIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+            <Box onClick={goDesktop} sx={{ cursor: 'pointer' }}>
             <Typography variant="h6" sx={{ fontWeight: 900, fontSize: '0.98rem', whiteSpace: 'nowrap' }}>NAS</Typography>
+            </Box>
           </Box>
           <Box
             onClick={(e) => setNavigationMenuAnchorEl(e.currentTarget)}
@@ -764,6 +788,24 @@ const TopBar = ({
           <Button fullWidth size="small" variant="contained" startIcon={<HistoryIcon />} onClick={handleResumeLastWork}>이전 작업 복구</Button>
         </Box>
       )}
+
+      <Dialog open={accessHistoryOpen} onClose={() => setAccessHistoryOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>내 저장공간 접근 기록</DialogTitle>
+        <DialogContent dividers sx={{ maxHeight: '60vh' }}>
+          {accessHistoryError && <Typography color="error" variant="body2">{accessHistoryError}</Typography>}
+          {!accessHistoryError && accessHistory.length === 0 && <Typography color="text.secondary" variant="body2">기록된 다른 사용자 접근이 없습니다.</Typography>}
+          {accessHistory.map((entry) => (
+            <Box key={entry.activityId} sx={{ py: 1, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
+              <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{entry.actorName || '다른 사용자'} · {entry.path || '/'}</Typography>
+              <Typography variant="caption" color="text.secondary">{new Date(entry.at).toLocaleString()} · {entry.type === 'folder-opened' ? '폴더 열람' : entry.type}</Typography>
+            </Box>
+          ))}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={loadAccessHistory}>새로고침</Button>
+          <Button onClick={() => setAccessHistoryOpen(false)}>닫기</Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={profileOpen} onClose={() => setProfileOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>내 정보 수정</DialogTitle>

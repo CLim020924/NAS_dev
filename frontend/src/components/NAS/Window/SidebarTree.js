@@ -119,7 +119,7 @@ const TreeNode = ({
     if (handleItemClick) handleItemClick(e, itemPath, item);
     if (isFolder) {
       setExpanded(!expanded);
-      fetchFiles(win.id, itemPath);
+      fetchFiles(win.id, itemPath, { navigation: true });
     }
   };
 
@@ -130,7 +130,7 @@ const TreeNode = ({
       openFileWindow(item, false);
     } else if (isFolder) {
       setExpanded(true);
-      fetchFiles(win.id, itemPath);
+      fetchFiles(win.id, itemPath, { navigation: true });
     }
   };
 

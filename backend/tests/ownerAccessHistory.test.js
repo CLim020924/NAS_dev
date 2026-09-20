@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { ownerForPath, externalEvent, assertRealOwnerPath } = require('../ownerAccessHistory');
+const { ownerForPath, externalEvent, assertRealOwnerPath, appendOwnerAccess, listOwnerAccess } = require('../ownerAccessHistory');
 
 test('identifies canonical account ownership and excludes the owner', () => {
   const root = path.resolve(os.tmpdir(), 'nas-owner-test');
@@ -19,6 +19,20 @@ test('identifies canonical account ownership and excludes the owner', () => {
   assert.equal(event.restorable, false, 'history alone must not promise a recoverable pre-image');
   assert.equal(ownerForPath(root, path.join(root, 'users', 'alice-other'), members), null);
   assert.equal(ownerForPath(root, path.resolve(root, '..', 'outside'), members), null);
+});
+
+test('owner-only access ledger appends and returns only a bounded newest window', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-owner-log-'));
+  try {
+    for (let index = 0; index < 1500; index += 1) {
+      appendOwnerAccess(root, { ownerUid: 'owner', actorUid: 'other', type: 'folder-opened', path: `/folder-${index}`, at: new Date().toISOString() });
+    }
+    const latest = listOwnerAccess(root, 4);
+    assert.deepEqual(latest.map((event) => event.path), ['/folder-1499', '/folder-1498', '/folder-1497', '/folder-1496']);
+    assert.equal(new Set(latest.map((event) => event.activityId)).size, 4);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('rejects a symlink that looks like an owner path but escapes the personal root', () => {
