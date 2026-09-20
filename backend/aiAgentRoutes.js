@@ -47,12 +47,15 @@ const {
 } = require('./aiAgentRuntime');
 const {
   normalizeQuotaFields,
+  readMembers,
   findMemberByAnyId,
   getAccessBasePath,
   resolveInside,
   isSameOrChild,
   invalidateUsageCache,
 } = require('./storageQuota');
+const { ownerForPath, externalEvent, assertRealOwnerPath, appendOwnerAccess } = require('./ownerAccessHistory');
+const { createNotification } = require('./notificationStore');
 const {
   startProgress,
   updateProgress,
@@ -71,6 +74,29 @@ const parseAiFiles = (req, res, next) => receiveAiFiles(req, res, (err) => {
   if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: '첨부 파일 개수 또는 크기 제한을 초과했습니다.' });
   return next();
 });
+
+const readBoundedAiNasFile = (user, full, expectedSize) => {
+  const fd = fs.openSync(full, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const stat = fs.fstatSync(fd);
+    const real = process.platform === 'linux' ? fs.realpathSync(`/proc/self/fd/${fd}`) : fs.realpathSync(full);
+    if (!stat.isFile() || stat.size !== expectedSize || expectedSize <= 0 || expectedSize > MAX_TOTAL_BYTES || !isSameOrChild(fs.realpathSync(getAccessBasePath(user)), real)) {
+      throw Object.assign(new Error('NAS 첨부 파일이 변경되었거나 계정 범위를 벗어났습니다.'), { status: 409 });
+    }
+    const buffer = Buffer.alloc(expectedSize);
+    let offset = 0;
+    while (offset < expectedSize) {
+      const read = fs.readSync(fd, buffer, offset, expectedSize - offset, offset);
+      if (read === 0) throw Object.assign(new Error('NAS 첨부 파일을 끝까지 읽지 못했습니다.'), { status: 409 });
+      offset += read;
+    }
+    const finalStat = fs.fstatSync(fd);
+    if (finalStat.size !== stat.size || Math.trunc(finalStat.mtimeMs) !== Math.trunc(stat.mtimeMs)) {
+      throw Object.assign(new Error('읽는 동안 NAS 첨부 파일이 변경되었습니다.'), { status: 409 });
+    }
+    return buffer;
+  } finally { fs.closeSync(fd); }
+};
 
 const TEXT_EXTS = new Set([
   '.txt', '.md', '.json', '.csv', '.tsv', '.log', '.js', '.jsx', '.ts', '.tsx',
@@ -605,7 +631,46 @@ const getReadyBundle = (req) => {
   if (!action || action.actionType !== 'create_zip_bundle' || action.status !== 'completed') {
     throw Object.assign(new Error('다운로드할 ZIP 작업을 찾지 못했습니다.'), { status: 404 });
   }
-  return { user, action, files: resolveBundleManifest(user, action.bundleManifest) };
+  return { user, action, files: resolveBundleManifest(user, action.approvedManifest || action.bundleManifest) };
+};
+
+const recordCompletedAiBundleDownload = (req, user, files) => {
+  const members = readMembers();
+  const groups = new Map();
+  for (const file of files) {
+    const owned = ownerForPath(config.NAS_ROOT, file.full, members);
+    if (!owned || String(owned.owner.userUid) === String(user.userUid) || !assertRealOwnerPath(owned.ownerRoot, file.full)) continue;
+    const key = String(owned.owner.userUid);
+    if (!groups.has(key)) groups.set(key, { owned, files: [] });
+    groups.get(key).files.push(owned.relativePath);
+  }
+  for (const group of groups.values()) {
+    const event = externalEvent({ nasRoot: config.NAS_ROOT, targetPath: group.owned.ownerRoot, members, actor: user,
+      type: 'ai-zip-downloaded', extra: { source: 'ai-agent', files: group.files, fileCount: group.files.length } });
+    if (!event) continue;
+    appendOwnerAccess(group.owned.ownerRoot, event);
+    const notice = createNotification({ userUid: event.ownerUid, type: 'account_access', title: '내 저장공간 파일 다운로드',
+      message: `${event.actorName}님이 AI ZIP으로 파일 ${group.files.length}개를 다운로드했습니다.`, meta: { actorUserUid: event.actorUid, path: event.path } });
+    req.app.get('io')?.to(`user:${event.ownerUid}`).emit('notification:new', notice);
+  }
+};
+
+const recordAiExternalAttachmentRead = (req, user, full) => {
+  const members = readMembers();
+  const owned = ownerForPath(config.NAS_ROOT, full, members);
+  if (!owned || String(owned.owner.userUid) === String(user.userUid)) return;
+  if (!assertRealOwnerPath(owned.ownerRoot, full)) {
+    throw Object.assign(new Error('다른 계정의 첨부 경로가 안전하지 않습니다.'), { status: 403 });
+  }
+  const event = externalEvent({ nasRoot: config.NAS_ROOT, targetPath: full, members, actor: user,
+    type: 'ai-file-attached', extra: { source: 'ai-agent' } });
+  if (!event) return;
+  appendOwnerAccess(owned.ownerRoot, event);
+  try {
+    const notice = createNotification({ userUid: event.ownerUid, type: 'account_access', title: '내 저장공간 파일 접근',
+      message: `${event.actorName}님이 AI에 내 파일을 첨부했습니다.`, meta: { actorUserUid: event.actorUid, path: event.path } });
+    req.app.get('io')?.to(`user:${event.ownerUid}`).emit('notification:new', notice);
+  } catch (err) { console.error('[ai] attachment owner notification failed:', err.message); }
 };
 
 router.get('/ai/actions/:actionId/download/check', (req, res) => {
@@ -619,6 +684,7 @@ router.get('/ai/actions/:actionId/download/check', (req, res) => {
 
 router.get('/ai/actions/:actionId/download', (req, res) => {
   let downloadKey = null;
+  const opened = [];
   try {
     const { user, action, files } = getReadyBundle(req);
     downloadKey = String(user.userUid || user.loginId || user.id);
@@ -626,17 +692,41 @@ router.get('/ai/actions/:actionId/download', (req, res) => {
       return res.status(429).json({ error: 'ZIP 다운로드가 진행 중입니다. 완료 후 다시 시도해 주세요.' });
     }
     activeBundleDownloads.add(downloadKey);
+    const baseReal = fs.realpathSync(getAccessBasePath(user));
+    for (const item of files) {
+      const fd = fs.openSync(item.full, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      const entry = { fd, name: item.name, stream: null };
+      opened.push(entry);
+      const stat = fs.fstatSync(fd);
+      const real = process.platform === 'linux' ? fs.realpathSync(`/proc/self/fd/${fd}`) : fs.realpathSync(item.full);
+      if (!stat.isFile() || stat.size !== item.size || Math.trunc(stat.mtimeMs) !== item.modifiedAtMs || !isSameOrChild(baseReal, real)) {
+        throw Object.assign(new Error('ZIP 원본이 승인 후 변경되었거나 계정 범위를 벗어났습니다.'), { status: 409 });
+      }
+    }
     const baseName = String(action.bundleName || 'NAS-files').replace(/\.zip$/i, '');
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="NAS-files.zip"; filename*=UTF-8''${encodeURIComponent(`${baseName}.zip`)}`);
     res.setHeader('Cache-Control', 'no-store');
     const archive = archiver('zip', { zlib: { level: 1 } });
     archive.on('error', (err) => res.destroy(err));
-    res.on('close', () => { archive.abort(); activeBundleDownloads.delete(downloadKey); });
+    res.on('close', () => {
+      archive.abort();
+      opened.forEach((entry) => { if (entry.stream) entry.stream.destroy(); else { try { fs.closeSync(entry.fd); } catch (err) {} } });
+      activeBundleDownloads.delete(downloadKey);
+    });
+    res.on('finish', () => {
+      if (req.method !== 'GET' || res.statusCode < 200 || res.statusCode >= 300) return;
+      try { recordCompletedAiBundleDownload(req, user, files); }
+      catch (err) { console.error('[ai] completed ZIP owner audit failed:', err.message); }
+    });
     archive.pipe(res);
-    files.forEach((item) => archive.file(item.full, { name: item.name }));
-    archive.finalize();
+    opened.forEach((entry, index) => {
+      entry.stream = fs.createReadStream(files[index].full, { fd: entry.fd, autoClose: true });
+      archive.append(entry.stream, { name: entry.name });
+    });
+    Promise.resolve(archive.finalize()).catch((err) => res.destroy(err));
   } catch (err) {
+    opened.forEach((entry) => { if (entry.stream) entry.stream.destroy(); else { try { fs.closeSync(entry.fd); } catch (closeErr) {} } });
     if (downloadKey) activeBundleDownloads.delete(downloadKey);
     if (!res.headersSent) res.status(err.status || 500).json({ error: err.message });
   }
@@ -805,7 +895,12 @@ router.post('/ai/chat', (req, res, next) => {
     const authorization = deriveAuthorizedMutationToolsFromConversation(message, history, pendingTask);
     if (authorization.cancelled && pendingTask) clearPendingTask(user, 'cancelled-by-user');
 
-    const context = typeof req.body?.context === 'string' ? JSON.parse(req.body.context) : (req.body?.context || {});
+    let context;
+    try { context = typeof req.body?.context === 'string' ? JSON.parse(req.body.context) : (req.body?.context || {}); }
+    catch (err) { throw Object.assign(new Error('AI 화면 문맥 형식이 올바르지 않습니다.'), { status: 400 }); }
+    if (!context || typeof context !== 'object' || Array.isArray(context)) {
+      throw Object.assign(new Error('AI 화면 문맥 형식이 올바르지 않습니다.'), { status: 400 });
+    }
     const contextLines = [];
     const preferences = normalizePreferences(getPreferences(user));
     const today = new Date().toISOString().slice(0, 10);
@@ -842,7 +937,8 @@ router.post('/ai/chat', (req, res, next) => {
           if (imageMimes[extension] || supported.has(extension)) {
             const usedBytes = [...(req.files || []), ...nasFiles].reduce((sum, file) => sum + Number(file.size || 0), 0);
             if (nasFiles.length + (req.files || []).length < MAX_FILES && usedBytes + stat.size <= MAX_TOTAL_BYTES && stat.size > 0) {
-              nasFiles.push({ originalname: path.basename(full), mimetype: imageMimes[extension] || 'application/octet-stream', size: stat.size, buffer: fs.readFileSync(full) });
+              nasFiles.push({ full, originalname: path.basename(full), mimetype: imageMimes[extension] || 'application/octet-stream', size: stat.size, buffer: readBoundedAiNasFile(user, full, stat.size) });
+              recordAiExternalAttachmentRead(req, user, full);
             } else nasAttachmentNotes.push(`${requested}: 크기 또는 첨부 개수 제한 때문에 본문을 읽지 못함`);
           } else nasAttachmentNotes.push(`${requested}: AI 직접 분석 미지원 형식`);
         }

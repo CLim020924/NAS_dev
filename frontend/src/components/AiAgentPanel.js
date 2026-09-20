@@ -52,7 +52,13 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
   const [copiedMessageKey, setCopiedMessageKey] = useState('');
   const [nasPickerOpen, setNasPickerOpen] = useState(false);
   const [attachedNasPaths, setAttachedNasPaths] = useState([]);
-  const [localFiles, setLocalFiles] = useState([]);
+  const [localFiles, setLocalFilesState] = useState([]);
+  const localFilesRef = useRef([]);
+  const setLocalFiles = (update) => {
+    const next = typeof update === 'function' ? update(localFilesRef.current) : update;
+    localFilesRef.current = next;
+    setLocalFilesState(next);
+  };
   const [dragActive, setDragActive] = useState(false);
   const localInputRef = useRef(null);
   const dragDepthRef = useRef(0);
@@ -153,10 +159,17 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
   };
 
   const addNasPaths = (paths) => {
-    setAttachedNasPaths((current) => [...new Set([...current, ...paths.filter((value) => typeof value === 'string' && value.startsWith('/'))])].slice(0, 10));
+    const merged = [...new Set([...attachedNasPaths, ...paths.filter((value) => typeof value === 'string' && value.startsWith('/'))])];
+    if (merged.length > 10) { setError('NAS 항목은 한 번에 10개까지 첨부할 수 있습니다.'); return; }
+    setError('');
+    setAttachedNasPaths(merged);
   };
 
   const addLocalFiles = async (incoming) => {
+    if (Array.from(incoming || []).length > 3) {
+      setError('PC 파일은 한 번에 최대 3개까지 첨부할 수 있습니다.');
+      return;
+    }
     const prepared = [];
     for (const file of Array.from(incoming || []).slice(0, 3)) {
       let next = file;
@@ -177,7 +190,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
       }
       prepared.push(next);
     }
-    const merged = [...localFiles, ...prepared];
+    const merged = [...localFilesRef.current, ...prepared];
     if (merged.length > 3 || merged.reduce((sum, file) => sum + file.size, 0) > 320 * 1024) {
       setError('PC 첨부는 최대 3개, 합계 320KB입니다. 큰 PDF·이미지는 크기를 줄인 뒤 다시 첨부해 주세요.');
       return;
@@ -616,7 +629,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
             <Button variant="contained" disabled={loading || (!message.trim() && attachedNasPaths.length === 0 && localFiles.length === 0)} onClick={sendMessage} sx={{ minHeight: 40 }}>전송</Button>
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Enter 전송 · Shift+Enter 줄바꿈 · PC 파일 붙여넣기/드래그 · NAS 파일 드래그 · 첨부 내용은 AI 모델로 전송됩니다
+            Enter 전송 · Shift+Enter 줄바꿈 · PC 붙여넣기/드래그 · NAS 드래그 · 지원되는 작은 파일의 내용은 AI 모델로 전송되고, 폴더·제한 초과 항목은 경로만 전달됩니다
           </Typography>
         </Box>
       </Box>

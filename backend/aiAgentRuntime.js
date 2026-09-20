@@ -445,10 +445,17 @@ const itemFor = (user, full) => {
 const listFiles = (user, requested = '/') => {
   const full = assertExistingPathSafe(user, requested);
   if (!fs.statSync(full).isDirectory()) throw new Error('폴더만 조회할 수 있습니다.');
+  const baseReal = fs.realpathSync(getAccessBasePath(user));
   return fs.readdirSync(full, { withFileTypes: true })
-    .filter((entry) => !entry.name.startsWith('.') && !['backup', 'chat_tmp'].includes(entry.name))
+    .filter((entry) => !entry.name.startsWith('.') && !INTERNAL_PATH_PARTS.has(entry.name) && !SENSITIVE_NAMES.test(entry.name) && !entry.isSymbolicLink())
     .slice(0, 200)
-    .map((entry) => itemFor(user, path.join(full, entry.name)));
+    .flatMap((entry) => {
+      try {
+        const child = path.join(full, entry.name);
+        const real = fs.realpathSync(child);
+        return isSameOrChild(baseReal, real) ? [itemFor(user, child)] : [];
+      } catch (err) { return []; }
+    });
 };
 
 const searchFiles = (user, query, requested = '/') => {
@@ -456,14 +463,15 @@ const searchFiles = (user, query, requested = '/') => {
   if (!needle) return [];
   const root = assertExistingPathSafe(user, requested);
   const results = [];
+  const baseReal = fs.realpathSync(getAccessBasePath(user));
   const visit = (dir, depth) => {
     if (depth > 8 || results.length >= 80) return;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith('.') || ['backup', 'chat_tmp'].includes(entry.name)) continue;
+      if (entry.name.startsWith('.') || INTERNAL_PATH_PARTS.has(entry.name) || SENSITIVE_NAMES.test(entry.name) || entry.isSymbolicLink()) continue;
       const full = path.join(dir, entry.name);
       try {
         const safe = fs.realpathSync(full);
-        if (!isSameOrChild(fs.realpathSync(getAccessBasePath(user)), safe)) continue;
+        if (!isSameOrChild(baseReal, safe)) continue;
         if (entry.name.toLocaleLowerCase('ko-KR').includes(needle)) results.push(itemFor(user, full));
         if (entry.isDirectory()) visit(full, depth + 1);
       } catch (err) {}
@@ -642,6 +650,7 @@ const buildBundleManifest = (user, requestedPaths) => {
     throw Object.assign(new Error('ZIP 원본은 1개 이상 50개 이하의 NAS 경로로 지정해 주세요.'), { status: 400 });
   }
   const manifest = [];
+  const base = getAccessBasePath(user);
   const seen = new Set();
   let totalBytes = 0;
   let scanned = 0;
@@ -651,7 +660,11 @@ const buildBundleManifest = (user, requestedPaths) => {
     if (depth > 16) throw new Error('ZIP 폴더 깊이가 16단계를 초과합니다.');
     const stat = fs.lstatSync(full);
     if (stat.isSymbolicLink()) throw new Error('ZIP에는 심볼릭 링크를 포함하지 않습니다.');
-    const relative = toRelative(user, full).slice(1);
+    const parts = path.relative(base, full).split(path.sep);
+    if (!(parts.length === 1 && parts[0] === '') && parts.some((part) => !part || part === '.' || part === '..' || /[<>:"\\|?*\x00-\x1f]/.test(part) || /[. ]$/.test(part) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {
+      throw Object.assign(new Error('ZIP에 안전하게 담을 수 없는 파일/폴더 이름이 있습니다. 이름을 변경한 후 다시 요청해 주세요.'), { status: 400 });
+    }
+    const relative = parts.join('/');
     if (stat.isDirectory()) {
       for (const entry of fs.readdirSync(full, { withFileTypes: true })) {
         if (entry.name.startsWith('.') || INTERNAL_PATH_PARTS.has(entry.name) || SENSITIVE_NAMES.test(entry.name)) continue;
@@ -669,18 +682,23 @@ const buildBundleManifest = (user, requestedPaths) => {
   };
   for (const requested of [...new Set(requestedPaths)]) visit(assertExistingPathSafe(user, requested), 0);
   if (manifest.length === 0) throw new Error('ZIP에 넣을 일반 파일을 찾지 못했습니다.');
+  manifest.sort((a, b) => a.path.localeCompare(b.path));
   return { files: manifest, totalBytes };
 };
 
 const resolveBundleManifest = (user, manifest) => {
   if (!Array.isArray(manifest) || manifest.length === 0 || manifest.length > MAX_BUNDLE_FILES) throw new Error('승인된 ZIP 파일 목록이 올바르지 않습니다.');
   return manifest.map((item) => {
+    if (typeof item?.path !== 'string' || typeof item.name !== 'string' || item.path !== `/${item.name}` ||
+      item.name.split('/').some((part) => !part || part === '.' || part === '..' || /[<>:"\\|?*\x00-\x1f]/.test(part) || /[. ]$/.test(part))) {
+      throw Object.assign(new Error('승인된 ZIP 파일 이름이 안전하지 않습니다.'), { status: 400 });
+    }
     const full = assertExistingPathSafe(user, item.path);
     const stat = fs.lstatSync(full);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== item.size || Math.trunc(stat.mtimeMs) !== item.modifiedAtMs) {
       throw Object.assign(new Error('ZIP 승인 후 원본 파일이 바뀌었습니다. 다시 검색하고 ZIP을 준비해 주세요.'), { status: 409 });
     }
-    return { full, name: item.name };
+    return { full, name: item.name, size: item.size, modifiedAtMs: item.modifiedAtMs };
   });
 };
 
@@ -809,7 +827,9 @@ const executeAction = async (user, actionId, { platformCall }) => {
       result = { movedCount: moved.length, destinationFolder: action.destinationFolder, granularity: action.granularity };
     } else if (action.actionType === 'create_zip_bundle') {
       const manifest = buildBundleManifest(user, action.paths);
-      updateAction(user, actionId, { bundleManifest: manifest.files });
+      if (JSON.stringify(manifest.files) !== JSON.stringify(action.approvedManifest)) {
+        throw Object.assign(new Error('승인 이후 ZIP 대상이 바뀌었습니다. 다시 목록을 확인하고 승인해 주세요.'), { status: 409 });
+      }
       result = { fileCount: manifest.files.length, totalBytes: manifest.totalBytes, downloadUrl: `/api/ai/actions/${encodeURIComponent(actionId)}/download` };
     } else if (action.actionType === 'create_note') {
       result = await platformCall('POST', '/note-studio/notes', action.notePayload);
@@ -1047,6 +1067,7 @@ const runTool = async (user, name, args, context) => {
     if (!/^[^<>:"/\\|?*\x00-\x1f]{1,100}(?:\.zip)?$/i.test(String(args.file_name || ''))) throw new Error('ZIP 파일 이름이 올바르지 않습니다.');
     for (const source of args.paths) assertExistingPathSafe(user, source);
     const preview = buildBundleManifest(user, args.paths);
+    spec.approvedManifest = preview.files;
     spec.preview = { itemCount: preview.files.length, totalBytes: preview.totalBytes, items: preview.files.map((item) => item.path) };
   }
   if (name === 'move_item' && String(args.source_path || '').trim() === '/') throw new Error('계정 루트 자체는 이동할 수 없습니다.');
