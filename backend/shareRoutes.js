@@ -183,7 +183,7 @@ const recordOwnerShareDownload = (share, detail, downloader) => {
       path: owned.relativePath,
       at: new Date().toISOString(),
       files,
-      fileCount: files.length,
+      fileCount: targets.length === 1 ? (detail.fileCount || files.length) : files.length,
       filesTruncated: !!detail.filesTruncated,
       restorable: false
     });
