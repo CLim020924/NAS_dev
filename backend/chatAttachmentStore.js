@@ -22,35 +22,42 @@ const ensureDir = (dirPath) => {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 };
 
-const ensureStore = () => {
-  ensureDir(path.dirname(DATA_FILE));
-  ensureDir(TEMP_ROOT);
-  ensureDir(INCOMING_ROOT);
-  if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, '[]\n');
+const ensureStore = (filePath = DATA_FILE) => {
+  ensureDir(path.dirname(filePath));
+  if (filePath === DATA_FILE) {
+    ensureDir(TEMP_ROOT);
+    ensureDir(INCOMING_ROOT);
+  }
+  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, '[]\n');
 };
 
-const readAll = () => {
-  ensureStore();
+const readAll = (filePath = DATA_FILE) => {
+  ensureStore(filePath);
   try {
-    const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     return Array.isArray(raw) ? raw : [];
   } catch (e) {
     return [];
   }
 };
 
-const writeAll = (items) => {
-  ensureStore();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(items, null, 2));
+const writeAll = (items, filePath = DATA_FILE) => {
+  ensureStore(filePath);
+  fs.writeFileSync(filePath, JSON.stringify(items, null, 2));
 };
 
 const safeRm = (targetPath) => {
   try {
     if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { recursive: true, force: true });
-  } catch (e) {}
+    return !fs.existsSync(targetPath);
+  } catch (e) { return false; }
 };
 
-const getBundleDir = (bundleId) => path.join(TEMP_ROOT, bundleId);
+const isSafeBundleId = (bundleId) => /^cab_[a-zA-Z0-9_-]+$/.test(String(bundleId || ''));
+const getBundleDir = (bundleId) => {
+  if (!isSafeBundleId(bundleId)) throw new Error('INVALID_CHAT_BUNDLE_ID');
+  return path.join(TEMP_ROOT, bundleId);
+};
 
 const ensureUniqueName = (dirPath, wantedName) => {
   const ext = path.extname(wantedName);
@@ -65,24 +72,25 @@ const ensureUniqueName = (dirPath, wantedName) => {
   return candidate;
 };
 
-const cleanupExpiredPendingBundles = () => {
-  const all = readAll();
+const isExpiredPendingBundle = (bundle, atMs) => {
+  const createdAtMs = new Date(bundle.createdAt || 0).getTime();
+  return (bundle.status === 'pending' || bundle.status === 'canceled') &&
+    (!createdAtMs || atMs - createdAtMs >= PENDING_TTL_MS);
+};
+
+const cleanupExpiredPendingBundles = ({ atMs = nowMs(), dataFile = DATA_FILE, tempRoot = TEMP_ROOT } = {}) => {
+  const all = readAll(dataFile);
   const keep = [];
-  const now = nowMs();
 
   all.forEach((bundle) => {
-    const createdAtMs = new Date(bundle.createdAt || 0).getTime();
-    const expired = !createdAtMs || (now - createdAtMs > PENDING_TTL_MS);
-    const removable = bundle.status === 'pending' || bundle.status === 'canceled';
-
-    if (expired && removable) {
-      safeRm(getBundleDir(bundle.bundleId));
-      return;
+    if (isExpiredPendingBundle(bundle, atMs) && isSafeBundleId(bundle.bundleId)) {
+      if (safeRm(path.join(tempRoot, bundle.bundleId))) return;
     }
     keep.push(bundle);
   });
 
-  if (keep.length !== all.length) writeAll(keep);
+  if (keep.length !== all.length) writeAll(keep, dataFile);
+  return { removedCount: all.length - keep.length, remainingCount: keep.length };
 };
 
 const createBundleRecord = ({ ownerUid, ownerLoginId, sourceType, items }) => {
@@ -146,8 +154,11 @@ module.exports = {
   INCOMING_ROOT,
   ensureStore,
   getBundleDir,
+  isSafeBundleId,
   ensureUniqueName,
   cleanupExpiredPendingBundles,
+  isExpiredPendingBundle,
+  PENDING_TTL_MS,
   createBundleRecord,
   getBundle,
   updateBundle,

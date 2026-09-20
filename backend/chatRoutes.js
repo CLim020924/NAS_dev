@@ -27,7 +27,7 @@ const {
 const router = express.Router();
 const { getChatReceivedPaths } = require('./chatReceivedPaths');
 const { assertQuotaAvailable, getCachedPathUsage, invalidateUsageCache } = require('./storageQuota');
-const { CHAT_TEMP_ROOT, CHATDATA_ROOT, NAS_ROOT } = require('./config/env');
+const { CHATDATA_ROOT, NAS_ROOT } = require('./config/env');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'my-service-platform-secure-key-2026';
 const membersFilePath = path.join(__dirname, 'data', 'members.json');
@@ -678,22 +678,17 @@ router.post('/chat/messages/:messageId/save', verifyToken, (req, res) => {
   try {
     const { receivedFolderPath } = ensureFixedSystemFolders(me);
     const { requestRoot } = getChatReceivedPaths(me);
-    invalidateUsageCache(receivedFolderPath);
-    const incomingBytes = (message.attachments || []).reduce((total, bundle) => {
-      const bundleId = String(bundle.bundleId || '');
-      if (!/^cab_[a-zA-Z0-9_-]+$/.test(bundleId)) {
-        const error = new Error('첨부 묶음 식별자가 올바르지 않습니다.');
-        error.status = 400;
-        throw error;
-      }
-      return total + getCachedPathUsage(path.join(CHAT_TEMP_ROOT, bundleId)).sizeBytes;
-    }, 0);
-    assertQuotaAvailable(me, incomingBytes, receivedFolderPath);
     const result = saveReceivedAttachmentsForUser({
       messageId,
       userUid: me.userUid,
       receivedDir: receivedFolderPath,
       receivedRequestRoot: requestRoot,
+      beforeCopy: (missingSources) => {
+        invalidateUsageCache(receivedFolderPath);
+        const incomingBytes = missingSources.reduce((total, item) =>
+          total + getCachedPathUsage(item.source).sizeBytes, 0);
+        assertQuotaAvailable(me, incomingBytes, receivedFolderPath);
+      },
     });
     invalidateUsageCache(receivedFolderPath);
 

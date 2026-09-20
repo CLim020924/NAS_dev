@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config/env');
 const { getQuotaBasePath, normalizeQuotaFields } = require('./storageQuota');
+const { cleanupExpiredPendingBundles, isSafeBundleId } = require('./chatAttachmentStore');
 
 const NAS_ROOT = config.NAS_ROOT;
 const CHATDATA_ROOT = config.CHATDATA_ROOT;
@@ -46,7 +47,8 @@ const safeRm = (targetPath) => {
     if (fs.existsSync(targetPath)) {
       fs.rmSync(targetPath, { recursive: true, force: true });
     }
-  } catch (e) {}
+    return !fs.existsSync(targetPath);
+  } catch (e) { return false; }
 };
 
 const getUserBasePath = (user = {}) => {
@@ -73,8 +75,8 @@ const safeName = (value, fallback = 'unknown') => {
   return text.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, ' ').trim() || fallback;
 };
 
-const buildLoginIdMap = () => {
-  const members = readArray(MEMBERS_FILE);
+const buildLoginIdMap = (membersFile = MEMBERS_FILE) => {
+  const members = readArray(membersFile);
   const map = new Map();
   members.forEach((user) => {
     const uid = user.userUid;
@@ -131,7 +133,7 @@ const resolveArchiveBucket = ({ conversation, message, loginIdByUid }) => {
   };
 };
 
-const appendArchivedMessage = ({ archiveRoot, conversation, message, loginIdByUid }) => {
+const appendArchivedMessage = ({ archiveRoot, conversation, message, loginIdByUid, archivedKeysByFile }) => {
   const bucket = resolveArchiveBucket({ conversation, message, loginIdByUid });
   const created = new Date(message.createdAt || 0);
   const yyyyMm = Number.isNaN(created.getTime()) ? 'unknown-month' : created.toISOString().slice(0, 7);
@@ -164,7 +166,21 @@ const appendArchivedMessage = ({ archiveRoot, conversation, message, loginIdByUi
     savedByUids: Array.isArray(message.savedByUids) ? message.savedByUids : [],
   };
 
+  let knownKeys = archivedKeysByFile.get(archiveFile);
+  if (!knownKeys) {
+    knownKeys = new Set();
+    if (fs.existsSync(archiveFile)) {
+      for (const line of fs.readFileSync(archiveFile, 'utf8').split('\n').filter(Boolean)) {
+        const prior = JSON.parse(line);
+        knownKeys.add(`${prior.conversationId}:${prior.messageId}`);
+      }
+    }
+    archivedKeysByFile.set(archiveFile, knownKeys);
+  }
+  const archiveKey = `${record.conversationId}:${record.messageId}`;
+  if (knownKeys.has(archiveKey)) return;
   fs.appendFileSync(archiveFile, `${JSON.stringify(record)}\n`, 'utf8');
+  knownKeys.add(archiveKey);
 };
 
 const recomputeConversations = (conversations, messages) => {
@@ -184,8 +200,8 @@ const recomputeConversations = (conversations, messages) => {
   });
 };
 
-const cleanupExpiredSentAttachmentBundles = ({ nowMs = Date.now() } = {}) => {
-  const bundles = readArray(CHAT_ATTACHMENTS_FILE);
+const cleanupExpiredSentAttachmentBundles = ({ nowMs = Date.now(), dataFile = CHAT_ATTACHMENTS_FILE, tempRoot = CHAT_TEMP_ROOT } = {}) => {
+  const bundles = readArray(dataFile);
   const keep = [];
   let removedCount = 0;
 
@@ -194,24 +210,24 @@ const cleanupExpiredSentAttachmentBundles = ({ nowMs = Date.now() } = {}) => {
     const ts = baseTime ? new Date(baseTime).getTime() : 0;
     const expired = ts > 0 && (nowMs - ts >= ATTACHMENT_RETENTION_MS);
 
-    if (bundle.status === 'sent' && expired) {
-      safeRm(path.join(CHAT_TEMP_ROOT, bundle.bundleId));
-      removedCount += 1;
-      return;
+    if (bundle.status === 'sent' && expired && isSafeBundleId(bundle.bundleId)) {
+      if (safeRm(path.join(tempRoot, bundle.bundleId))) {
+        removedCount += 1;
+        return;
+      }
     }
 
     keep.push(bundle);
   });
 
   if (keep.length !== bundles.length) {
-    writeArray(CHAT_ATTACHMENTS_FILE, keep);
+    writeArray(dataFile, keep);
   }
 
   return { removedCount, remainingCount: keep.length };
 };
 
-const cleanupExpiredReceivedFiles = ({ nowMs = Date.now() } = {}) => {
-  const receivedRoots = getReceivedFolderPaths();
+const cleanupExpiredReceivedFiles = ({ nowMs = Date.now(), receivedRoots = getReceivedFolderPaths() } = {}) => {
   let removedCount = 0;
 
   receivedRoots.forEach((receivedRoot) => {
@@ -237,8 +253,7 @@ const cleanupExpiredReceivedFiles = ({ nowMs = Date.now() } = {}) => {
       const expired = baseTime > 0 && (nowMs - baseTime >= RECEIVED_FILE_RETENTION_MS);
       if (!expired) return;
 
-      safeRm(targetPath);
-      removedCount += 1;
+      if (safeRm(targetPath)) removedCount += 1;
     });
   });
 
@@ -246,12 +261,21 @@ const cleanupExpiredReceivedFiles = ({ nowMs = Date.now() } = {}) => {
 };
 
 
-const runMessageRetentionCleanup = ({ nowMs = Date.now() } = {}) => {
-  ensureDir(CHATDATA_ROOT);
+const runMessageRetentionCleanup = ({
+  nowMs = Date.now(),
+  membersFile = MEMBERS_FILE,
+  conversationsFile = CONVERSATIONS_FILE,
+  messagesFile = MESSAGES_FILE,
+  chatAttachmentsFile = CHAT_ATTACHMENTS_FILE,
+  chatTempRoot = CHAT_TEMP_ROOT,
+  archiveRoot = CHATDATA_ROOT,
+  receivedRoots,
+} = {}) => {
+  ensureDir(archiveRoot);
 
-  const loginIdByUid = buildLoginIdMap();
-  const conversations = readArray(CONVERSATIONS_FILE);
-  const messages = readArray(MESSAGES_FILE);
+  const loginIdByUid = buildLoginIdMap(membersFile);
+  const conversations = readArray(conversationsFile);
+  const messages = readArray(messagesFile);
 
   const conversationMap = new Map(
     conversations.map((conversation) => [conversation.conversationId, conversation])
@@ -272,30 +296,34 @@ const runMessageRetentionCleanup = ({ nowMs = Date.now() } = {}) => {
     expiredMessages.push(message);
   });
 
+  const archivedKeysByFile = new Map();
   expiredMessages.forEach((message) => {
     const conversation = conversationMap.get(message.conversationId) || null;
     appendArchivedMessage({
-      archiveRoot: CHATDATA_ROOT,
+      archiveRoot,
       conversation,
       message,
       loginIdByUid,
+      archivedKeysByFile,
     });
   });
 
   if (expiredMessages.length > 0) {
-    writeArray(MESSAGES_FILE, keepMessages);
+    writeArray(messagesFile, keepMessages);
     const nextConversations = recomputeConversations(conversations, keepMessages);
-    writeArray(CONVERSATIONS_FILE, nextConversations);
+    writeArray(conversationsFile, nextConversations);
   }
 
-  const attachmentCleanup = cleanupExpiredSentAttachmentBundles({ nowMs });
-  const receivedCleanup = cleanupExpiredReceivedFiles({ nowMs });
+  const pendingCleanup = cleanupExpiredPendingBundles({ atMs: nowMs, dataFile: chatAttachmentsFile, tempRoot: chatTempRoot });
+  const attachmentCleanup = cleanupExpiredSentAttachmentBundles({ nowMs, dataFile: chatAttachmentsFile, tempRoot: chatTempRoot });
+  const receivedCleanup = cleanupExpiredReceivedFiles({ nowMs, receivedRoots });
 
   return {
     archivedCount: expiredMessages.length,
     remainingCount: keepMessages.length,
     attachmentBundleRemovedCount: attachmentCleanup.removedCount,
     attachmentBundleRemainingCount: attachmentCleanup.remainingCount,
+    pendingBundleRemovedCount: pendingCleanup.removedCount,
     receivedFileRemovedCount: receivedCleanup.removedCount,
     receivedRootCount: receivedCleanup.scannedRoots,
     ranAt: nowIso(),

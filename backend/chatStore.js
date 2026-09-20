@@ -2,8 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const config = require('./config/env');
+const { copyReceivedBundleEntries } = require('./chatReceivedFileCopy');
 const {
   getBundle,
+  isSafeBundleId,
   updateBundle,
   cleanupExpiredPendingBundles,
 } = require('./chatAttachmentStore');
@@ -527,31 +529,6 @@ const buildConversationPreview = ({ text, attachments }) => {
   return summarizeAttachments(attachments).slice(0, 120);
 };
 
-const ensureUniqueName = (dirPath, wantedName) => {
-  const ext = path.extname(wantedName);
-  const base = path.basename(wantedName, ext);
-  let candidate = wantedName;
-  let counter = 1;
-
-  while (fs.existsSync(path.join(dirPath, candidate))) {
-    candidate = ext
-      ? `${base} (${counter})${ext}`
-      : `${base} (${counter})`;
-    counter += 1;
-  }
-
-  return candidate;
-};
-
-const copyPathRecursive = (srcPath, destPath) => {
-  const stat = fs.statSync(srcPath);
-  if (stat.isDirectory()) {
-    fs.cpSync(srcPath, destPath, { recursive: true });
-  } else {
-    fs.copyFileSync(srcPath, destPath);
-  }
-};
-
 const createMessage = ({ conversationId, senderUid, text, attachmentBundleIds = [], allowExternalSender = false }) => {
   const trimmed = String(text || '').trim();
   const bundleIds = Array.from(new Set((Array.isArray(attachmentBundleIds) ? attachmentBundleIds : []).filter(Boolean)));
@@ -636,7 +613,7 @@ const createTextMessage = ({ conversationId, senderUid, text }) => {
   return createMessage({ conversationId, senderUid, text, attachmentBundleIds: [] });
 };
 
-const saveReceivedAttachmentsForUser = ({ messageId, userUid, receivedDir, receivedRequestRoot = '/받은 파일' }) => {
+const saveReceivedAttachmentsForUser = ({ messageId, userUid, receivedDir, receivedRequestRoot = '/받은 파일', beforeCopy }) => {
   const messages = getAllMessages();
   const targetMessage = messages.find((message) => message.messageId === messageId);
 
@@ -648,33 +625,23 @@ const saveReceivedAttachmentsForUser = ({ messageId, userUid, receivedDir, recei
     throw new Error('NO_ATTACHMENTS');
   }
 
-  fs.mkdirSync(receivedDir, { recursive: true });
-
-  const savedEntries = [];
-
-  targetMessage.attachments.forEach((bundle) => {
-    const bundleDir = path.join(CHAT_TEMP_ROOT, bundle.bundleId);
-    if (!fs.existsSync(bundleDir)) {
-      throw new Error('ATTACHMENT_SOURCE_MISSING');
-    }
-
-    const topLevelEntries = fs.readdirSync(bundleDir);
-    topLevelEntries.forEach((entryName) => {
-      const srcPath = path.join(bundleDir, entryName);
-      const srcStat = fs.statSync(srcPath);
-      const finalName = ensureUniqueName(receivedDir, entryName);
-      const destPath = path.join(receivedDir, finalName);
-      copyPathRecursive(srcPath, destPath);
-
-      const requestRootRaw = String(receivedRequestRoot || '/받은 파일').split('\\').join('/');
-      const requestRoot = requestRootRaw.endsWith('/') ? requestRootRaw.slice(0, -1) : requestRootRaw;
-      savedEntries.push({
-        name: finalName,
-        type: srcStat.isDirectory() ? 'folder' : 'file',
-        relativePath: `${requestRoot}/${finalName}`.replace(/\/+/g, '/'),
-      });
-    });
+  const bundleDirs = targetMessage.attachments.map((bundle) => {
+    const bundleId = String(bundle.bundleId || '');
+    if (!isSafeBundleId(bundleId)) throw new Error('ATTACHMENT_SOURCE_MISSING');
+    return path.join(CHAT_TEMP_ROOT, bundleId);
   });
+  const requestRootRaw = String(receivedRequestRoot || '/받은 파일').split('\\').join('/');
+  const requestRoot = requestRootRaw.replace(/\/+$/, '') || '/받은 파일';
+  const previousEntries = targetMessage.savedAttachmentPathsByUid?.[userUid] || [];
+  const materialized = copyReceivedBundleEntries({
+    bundleDirs,
+    receivedDir,
+    requestRoot,
+    existingEntries: Array.isArray(previousEntries) ? previousEntries : [],
+    beforeCopy,
+  });
+  const { savedEntries, createdPaths, alreadySaved } = materialized;
+  if (alreadySaved) return { message: targetMessage, savedEntries, alreadySaved: true };
 
   const nextMessages = messages.map((message) => {
     if (message.messageId !== messageId) return message;
@@ -694,7 +661,14 @@ const saveReceivedAttachmentsForUser = ({ messageId, userUid, receivedDir, recei
     });
   });
 
-  saveMessages(nextMessages);
+  try {
+    saveMessages(nextMessages);
+  } catch (error) {
+    for (const createdPath of createdPaths.reverse()) {
+      try { fs.rmSync(createdPath, { recursive: true, force: true }); } catch {}
+    }
+    throw error;
+  }
 
   const updatedMessage = nextMessages.find((message) => message.messageId === messageId);
   return { message: updatedMessage, savedEntries, alreadySaved: false };
