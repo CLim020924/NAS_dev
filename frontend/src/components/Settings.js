@@ -60,10 +60,12 @@ const Settings = () => {
     if (activeTab !== 2 || !isManager) return undefined;
     let cancelled = false;
     let presenceTimer;
+    let presenceRequest = 0;
     const loadPresence = async () => {
+      const request = ++presenceRequest;
       try {
         const res = await axios.get('/api/users/presence', { withCredentials: true });
-        if (cancelled) return;
+        if (cancelled || request !== presenceRequest) return;
         const states = new Map((res.data?.users || []).map(user => [user.userUid, !!user.isOnline]));
         setUsers(previous => {
           let changed = false;
@@ -74,13 +76,14 @@ const Settings = () => {
           });
           return changed ? next : previous;
         });
-      } catch (error) { /* The periodic full refresh remains the fallback. */ }
+      } catch (error) { /* The next event or periodic refresh retries. */ }
     };
-    const loadFull = async () => {
+    const loadFull = async (initial = false) => {
       try {
         const res = await axios.get('/api/users/data', { withCredentials: true });
         if (cancelled || !res.data) return;
-        setUsers(res.data.users || []);
+        // Do not overwrite unsaved role/quota edits during the background refresh.
+        if (initial) setUsers(res.data.users || []);
         setPendingUsers(res.data.pendingUsers || []);
         setStorageCapacity(res.data.storageCapacity || null);
         loadPresence();
@@ -92,10 +95,10 @@ const Settings = () => {
       clearTimeout(presenceTimer);
       presenceTimer = setTimeout(loadPresence, 120);
     };
-    loadFull();
+    loadFull(true);
     socket.on('membersChanged', onPresenceChanged);
     socket.on('connect', onPresenceChanged);
-    const interval = setInterval(loadFull, 30000);
+    const interval = setInterval(() => loadFull(false), 30000);
     return () => {
       cancelled = true;
       clearInterval(interval);

@@ -11,6 +11,7 @@ const {
   createDriveRestorePoint,
   listDriveRestorePoints,
   restoreDriveFromPoint,
+  appendActivity,
   listActivity,
   listFavorites,
   setFavorite,
@@ -64,6 +65,13 @@ try {
   assert.strictEqual(fs.existsSync(documentPath), false);
   assert.strictEqual(fs.readFileSync(path.join(root, '복구후사라질파일.txt'), 'utf8'), '새 파일');
   assert(listActivity(root, 20).some((entry) => entry.type === 'drive-restored'));
+
+  for (let index = 0; index < 2500; index += 1) {
+    appendActivity(root, { type: 'audit-tail-test', index, label: '가나다' });
+  }
+  const newest = listActivity(root, 3);
+  assert.deepStrictEqual(newest.map((entry) => entry.index), [2499, 2498, 2497]);
+  assert(newest.every((entry) => entry.label === '가나다'));
 
   console.log('file versioning tests passed');
 } finally {

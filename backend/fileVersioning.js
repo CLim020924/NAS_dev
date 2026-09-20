@@ -106,7 +106,30 @@ const listActivity = (basePath, limit = 100) => {
   const activityPath = getActivityPath(basePath);
   if (!fs.existsSync(activityPath)) return [];
   const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100));
-  return fs.readFileSync(activityPath, 'utf8')
+  // Read backwards so a long-lived account never loads its entire audit trail.
+  const fd = fs.openSync(activityPath, 'r');
+  const chunks = [];
+  let bytes = 0;
+  let newlines = 0;
+  try {
+    let position = fs.fstatSync(fd).size;
+    while (position > 0 && newlines <= safeLimit && bytes < 4 * 1024 * 1024) {
+      const size = Math.min(64 * 1024, position, 4 * 1024 * 1024 - bytes);
+      const chunk = Buffer.allocUnsafe(size);
+      position -= size;
+      fs.readSync(fd, chunk, 0, size, position);
+      chunks.unshift(chunk);
+      bytes += size;
+      for (const byte of chunk) if (byte === 10) newlines += 1;
+    }
+    if (position > 0 && chunks.length) {
+      const firstNewline = chunks[0].indexOf(10);
+      if (firstNewline >= 0) chunks[0] = chunks[0].subarray(firstNewline + 1);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return Buffer.concat(chunks).toString('utf8')
     .split(/\r?\n/)
     .filter(Boolean)
     .slice(-safeLimit)
