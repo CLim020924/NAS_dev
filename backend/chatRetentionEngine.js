@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config/env');
+const { getQuotaBasePath, normalizeQuotaFields } = require('./storageQuota');
 
 const NAS_ROOT = config.NAS_ROOT;
 const CHATDATA_ROOT = config.CHATDATA_ROOT;
@@ -49,13 +50,7 @@ const safeRm = (targetPath) => {
 };
 
 const getUserBasePath = (user = {}) => {
-  const isPrivileged = user.Masters || user.globalAccess;
-  const loginId = user.loginId || user.id || user.username || '';
-  const relativeRoot = user.rootPath
-    ? String(user.rootPath).replace(/^(\/|\\)+/, '')
-    : path.join('users', loginId);
-
-  return isPrivileged ? NAS_ROOT : path.resolve(NAS_ROOT, relativeRoot);
+  return getQuotaBasePath(normalizeQuotaFields(user));
 };
 
 const getReceivedFolderPaths = () => {

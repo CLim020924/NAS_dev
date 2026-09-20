@@ -1723,4 +1723,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 
 - 사용자 요청: NAS 루트와 계정 경로를 다시 읽어본다.
 - 재측정: 로컬 git 작업 트리는 clean, 공개 사이트는 HTTP 200이다. 그러나 Tailscale의 NAS `chanyoung`은 계속 `offline, last seen 8d ago`, `peer's node key has expired`이며 ping과 SSH TCP 22가 실패한다. 따라서 실제 `/mnt/nas`와 `members.json`은 읽지 못했다.
+
+### 2026-09-20 LAN 경유 NAS 실측과 루트 정리 사전 검증
+
+- Tailscale 노드 키는 여전히 만료되어 있으나, 같은 LAN의 `192.168.45.30`에 기존 NAS SSH 호스트 키를 대조한 뒤 접속했다. 원격 `whoami=limchanyoung`, `hostname=chanyoung`; 공개 사이트 HTTP 200도 별도로 확인했다. 따라서 전원 꺼짐이 아니라 Tailscale 인증 경로 문제였다.
+- `/mnt/nas`는 약 1.968TB, 사용 약 88.48GB, 가용 약 1.779TB. 승인 계정 24개 중 `123`은 `/USERS/123`, `cksdud`·`rnrnrn`·`korea101`·`dltjddyd`는 루트 직하위 개인 경로이며 최근 계정은 `/users/<id>`이다. `admin`과 `dntdlzz`의 개인 영역은 `/users/<id>`이고 마스터의 전체 NAS 탐색 권한은 별도이다.
+- 루트 항목을 정확히 분류했다. `.agent_incoming`, `.agent_versions`, `.nas_trash`, `.upload_tmp`, `backup`, `backups`, `chatdata`, `chat_tmp`, `tools`, `users`는 서비스/복구 경로라 이동하지 않는다. 대문자 `USERS` 안에는 `123`과 `dntdlzz` 자료만 있다. 루트의 나머지 개인 문서·폴더 26개는 `dntdlzz` 개인 영역의 날짜별 보존 폴더로 이동할 대상이다. `/사진`을 가리키는 활성 공유 링크 2개는 경로 동시 수정이 필요하다.
+- 유실 방지를 위해 원본을 영구 삭제하지 않고 동일 파일시스템 rename으로 보존하며, 기존 계정명 루트 폴더 7개와 `USERS` 하위 2개는 각 계정의 `이전 루트 데이터`로 분리한다. `dntdlzz`의 계획 이동량은 약 50.56GB, 계획 quota는 64GiB이다. `members.json`, `shares.json`, 사용량 캐시를 백업한 후 서비스 정지 상태에서 이동·경로 정규화·공유 링크 갱신을 실행한다. 검사 스크립트의 `--plan`은 24계정·35이동·공유 2개로 통과했으며, 아직 `--apply`는 실행하지 않았다.
+- 코드 수정 준비: 모든 개인/용량 경로를 `/users/<loginId>`로 정규화하고 신규 ID에 경로 구분자·상위 경로를 거부하며, 채팅의 `받은 파일`도 특권 계정에서 NAS 루트가 아닌 개인 영역으로 향하게 했다. Windows backend 전체 테스트 128개 중 120 통과·8 환경상 건너뜀, 실패 0. 운영 적용과 Linux 검증은 아직 남았다.
 - 미실행/다음 작업: 서버 파일 이동·삭제·quota 변경·코드 수정은 없다. Tailscale 관리 콘솔의 기존 NAS 장치 `Temporarily extend key` 또는 NAS 로컬 콘솔 재인증 후 SSH를 다시 확인하고 실제 인벤토리를 시작한다.

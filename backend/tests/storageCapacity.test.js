@@ -6,6 +6,7 @@ const {
   NAS_ROOT,
   DEFAULT_USER_QUOTA_BYTES,
   USER_QUOTA_POLICY_VERSION,
+  isSafeLoginId,
   normalizeQuotaFields,
   migrateDefaultQuotaPolicy,
   getAccessBasePath,
@@ -76,4 +77,19 @@ test('master account has a finite personal quota while retaining NAS-root access
   assert.equal(path.resolve(getAccessBasePath(master)), path.resolve(NAS_ROOT));
   assert.notEqual(path.resolve(getQuotaBasePath(master)), path.resolve(NAS_ROOT));
   assert.equal(path.resolve(getQuotaBasePath(master)), path.resolve(NAS_ROOT, 'users', 'admin'));
+});
+
+test('legacy account paths cannot place account storage at the NAS root', () => {
+  for (const rootPath of ['/cksdud', '/USERS/cksdud', '../outside', '/']) {
+    const user = normalizeQuotaFields({
+      loginId: 'cksdud', rootPath, personalRootPath: rootPath,
+      role: 'USER', storageQuotaBytes: 20 * GIB
+    });
+    assert.equal(user.personalRootPath, '/users/cksdud');
+    assert.equal(path.resolve(getAccessBasePath(user)), path.resolve(NAS_ROOT, 'users', 'cksdud'));
+    assert.equal(path.resolve(getQuotaBasePath(user)), path.resolve(NAS_ROOT, 'users', 'cksdud'));
+  }
+  assert.equal(isSafeLoginId('찬영이형엉덩이'), true);
+  assert.equal(isSafeLoginId('../outside'), false);
+  assert.equal(isSafeLoginId('a/b'), false);
 });

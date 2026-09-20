@@ -26,6 +26,7 @@ const {
 const {
   DEFAULT_USER_QUOTA_BYTES,
   USER_QUOTA_POLICY_VERSION,
+  isSafeLoginId,
   normalizeQuotaFields,
   migrateDefaultQuotaPolicy,
   getUserStorageSummary,
@@ -373,6 +374,10 @@ const normalizeApprovedUser = (user = {}) => {
   normalized.loginId = loginId;
   normalized.id = loginId;
   normalized.username = user.username || loginId;
+  // All account-owned data lives below /users. Elevated NAS-root browsing is
+  // controlled by role, never by a legacy account storage path.
+  normalized.rootPath = `/users/${loginId}`;
+  normalized.personalRootPath = normalized.rootPath;
   normalized.nickname = normalizeNickname(user.nickname || user.displayName || loginId);
   normalized.displayName = normalized.nickname;
   normalized.profile = (user.profile && typeof user.profile === 'object') ? user.profile : {};
@@ -939,6 +944,7 @@ app.post('/api/signup-request', (req, res) => {
   const safeNickname = normalizeNickname(nickname);
 
   if (!loginId) return res.status(400).json({ error: '아이디가 필요합니다.' });
+  if (!isSafeLoginId(loginId)) return res.status(400).json({ error: '아이디는 2~64자의 문자, 숫자, _, -만 사용할 수 있습니다.' });
   if (!password) return res.status(400).json({ error: '비밀번호가 필요합니다.' });
   if (password.length < 10) return res.status(400).json({ error: '비밀번호는 최소 10자 이상이어야 합니다.' });
   if (passwordConfirm !== undefined && password !== passwordConfirm) return res.status(400).json({ error: '비밀번호 확인이 일치하지 않습니다.' });

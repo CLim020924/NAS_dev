@@ -1716,7 +1716,7 @@ router.get(['/onlyoffice/file', '/onlyoffice/file/:fileName'], (req, res) => {
 
 const ensureFixedSystemFolders = (user) => {
   const basePath = getUserBasePath(user);
-  const receivedFolderPath = path.join(basePath, '받은 파일');
+  const receivedFolderPath = path.join(getQuotaBasePath(normalizeQuotaFields(user)), '받은 파일');
   if (!fs.existsSync(receivedFolderPath)) {
     fs.mkdirSync(receivedFolderPath, { recursive: true });
   }

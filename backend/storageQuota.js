@@ -33,6 +33,12 @@ const writeJson = (filePath, value) => {
 };
 
 const getLoginId = (user = {}) => String(user.loginId || user.id || user.username || '').trim();
+const isSafeLoginId = (value) => /^[\p{L}\p{N}_-]{2,64}$/u.test(String(value || ''));
+const getCanonicalUserRoot = (user = {}) => {
+  const loginId = getLoginId(user);
+  if (!isSafeLoginId(loginId)) throw new Error('유효하지 않은 계정 아이디입니다.');
+  return `users/${loginId}`;
+};
 
 const getRole = (user = {}) => user.role || (user.Masters ? 'MASTER' : (user.Managers ? 'MANAGER' : 'USER'));
 
@@ -42,20 +48,11 @@ const isStorageAdmin = (user = {}) => {
 };
 
 const normalizeRelativeRoot = (user = {}) => {
-  const loginId = getLoginId(user);
-  return String(user.rootPath || path.join('users', loginId || 'default')).replace(/^(\/|\\)+/, '');
+  return getCanonicalUserRoot(user);
 };
 
 const normalizePersonalRelativeRoot = (user = {}) => {
-  const loginId = getLoginId(user) || 'default';
-  const explicitPersonalRoot = String(user.personalRootPath || '').trim();
-  const legacyRoot = String(user.rootPath || '').trim();
-  const candidate = explicitPersonalRoot
-    || (legacyRoot && legacyRoot !== '/' && legacyRoot !== '\\' ? legacyRoot : path.join('users', loginId));
-  const relative = candidate.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
-  const resolved = path.resolve(NAS_ROOT, relative || path.join('users', loginId));
-  if (!isSameOrChild(NAS_ROOT, resolved)) return path.join('users', loginId);
-  return path.relative(NAS_ROOT, resolved).replace(/\\/g, '/') || path.join('users', loginId);
+  return getCanonicalUserRoot(user);
 };
 
 const isSameOrChild = (parent, child) => {
@@ -409,6 +406,7 @@ module.exports = {
   USER_QUOTA_POLICY_VERSION,
   MIN_SYSTEM_RESERVE_BYTES,
   getLoginId,
+  isSafeLoginId,
   getRole,
   isStorageAdmin,
   normalizeQuotaFields,

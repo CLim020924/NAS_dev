@@ -25,6 +25,7 @@ const {
 } = require('./chatStore');
 
 const router = express.Router();
+const { getQuotaBasePath, normalizeQuotaFields } = require('./storageQuota');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'my-service-platform-secure-key-2026';
 const membersFilePath = path.join(__dirname, 'data', 'members.json');
@@ -217,13 +218,7 @@ const buildNotificationPreview = (message = {}) => {
 };
 
 const getUserBasePath = (user) => {
-  const isPrivileged = user.Masters || user.globalAccess;
-  const currentLoginId = getLoginId(user);
-  const relativeRoot = user.rootPath
-    ? user.rootPath.replace(/^(\/|\\)+/, '')
-    : path.join('users', currentLoginId);
-
-  return isPrivileged ? nasPath : path.resolve(nasPath, relativeRoot);
+  return getQuotaBasePath(normalizeQuotaFields(user));
 };
 
 const ensureFixedSystemFolders = (user) => {
