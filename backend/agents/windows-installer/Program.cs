@@ -18,20 +18,31 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Windows installer for NAS Drive")]
 [assembly: AssemblyCompany("NAS Drive")]
 [assembly: AssemblyProduct("NAS Drive")]
-[assembly: AssemblyVersion("1.11.4.0")]
-[assembly: AssemblyFileVersion("1.11.4.0")]
+[assembly: AssemblyVersion("1.11.5.0")]
+[assembly: AssemblyFileVersion("1.11.5.0")]
 
 namespace NasDriveSetup
 {
     internal static class Program
     {
-        internal const string ProductVersion = "1.11.4";
+        internal const string ProductVersion = "1.11.5";
         private const string ShutdownMutexName = "Local\\NAS-Drive-Background-Shutdown";
         private const string NativeTrayRefreshEventName = "Local\\NAS-Drive-Native-Tray-Refresh";
         private static readonly string NativeUiPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "native-ui.pid");
         private static readonly string WebPickerPidFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NAS-Sync-Agent", "web-picker.pid");
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int command);
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern void SHChangeNotify(uint eventId, uint flags, string item1, string item2);
+        internal static void SignalExplorerRootRemoved(string root)
+        {
+            try
+            {
+                SHChangeNotify(0x00001000, 0x0005, Path.GetDirectoryName(root), null);
+                SHChangeNotify(0x08000000, 0, null, null);
+            }
+            catch { }
+        }
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
         [DllImport("user32.dll")]
@@ -3107,8 +3118,8 @@ namespace NasDriveSetup
             {
                 int exitCode = 1;
                 try { exitCode = await Task.Run(() => RunLogout(selectedAccount.AccountKey)); } catch { }
-                if ((exitCode != 0 || HasAccountKey(selectedAccount.AccountKey)) && !EmergencyLocalLogout(selectedAccount.AccountKey))
-                    throw new InvalidOperationException("로컬 연결을 해제하지 못했습니다. NAS Drive를 다시 열어 재시도해 주세요.");
+                if ((exitCode != 0 || HasAccountKey(selectedAccount.AccountKey)) && !EmergencyLocalLogout(selectedAccount.AccountKey, selectedAccount.DrivePath))
+                    throw new InvalidOperationException("로컬 계정 또는 탐색기 항목 정리를 완료하지 못했습니다. NAS Drive를 다시 열어 확인해 주세요.");
                 if (AllAccounts().Count == 0)
                 {
                     Hide();
@@ -3143,17 +3154,89 @@ namespace NasDriveSetup
                 DateTime deadline = DateTime.UtcNow.AddSeconds(45);
                 while (DateTime.UtcNow < deadline)
                 {
-                    if (process.WaitForExit(250)) return process.ExitCode;
-                    // Agent 1.10.31 persists the local disconnect first, then
-                    // performs remote revoke and shell cleanup in the background.
-                    if (!HasAccountKey(accountKey)) return 0;
+                    if (process.WaitForExit(250)) return process.ExitCode == 0 && !IsSyncRootRegistered(accountKey) ? 0 : 1;
+                    // The config disappears first. Wait until Explorer also drops
+                    // this account before reporting logout completion to the UI.
+                    if (!HasAccountKey(accountKey) && !IsSyncRootRegistered(accountKey)) return 0;
                 }
                 try { process.Kill(); } catch { }
                 return 1;
             }
         }
 
-        private bool EmergencyLocalLogout(string requestedAccountKey)
+        private static bool IsSyncRootRegistered(string accountKey)
+        {
+            try
+            {
+                string sid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
+                string id = "NASDrive!" + sid + "!" + (accountKey ?? "").Replace('!', '_');
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\" + id))
+                    return key != null;
+            }
+            catch { return true; }
+        }
+
+        private static string RegisteredSyncRootPath(string accountKey)
+        {
+            try
+            {
+                string sid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
+                string id = "NASDrive!" + sid + "!" + (accountKey ?? "").Replace('!', '_');
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\" + id + @"\UserSyncRoots"))
+                    return Convert.ToString(key == null ? null : key.GetValue(sid)) ?? "";
+            }
+            catch { return ""; }
+        }
+
+        private bool CleanupExplorerAfterEmergencyLogout(string accountKey, IEnumerable<string> roots)
+        {
+            bool complete = true;
+            string provider = Path.Combine(Path.GetDirectoryName(agentExe), "NAS-Drive-Provider.exe");
+            foreach (string root in roots)
+            {
+                try
+                {
+                    Type shellType = Type.GetTypeFromProgID("Shell.Application");
+                    if (shellType != null)
+                    {
+                        dynamic shell = Activator.CreateInstance(shellType);
+                        dynamic home = shell.NameSpace("shell:::{679F85CB-0220-4080-B29B-5540CC05AAB6}");
+                        if (home != null)
+                        {
+                            dynamic items = home.Items();
+                            for (int index = 0; index < items.Count; index++)
+                            {
+                                dynamic item = items.Item(index);
+                                string pinnedPath = Convert.ToString(item.Path);
+                                if (string.Equals(Path.GetFullPath(pinnedPath), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+                                    item.InvokeVerb("unpinfromhome");
+                            }
+                        }
+                    }
+                }
+                catch { complete = false; }
+                try
+                {
+                    if (!File.Exists(provider)) { complete = false; continue; }
+                    using (var process = Process.Start(new ProcessStartInfo(provider,
+                        "unregister --root " + Program.QuoteArgument(root) + " --account " + Program.QuoteArgument(accountKey))
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    }))
+                    {
+                        if (!process.WaitForExit(5000)) { try { process.Kill(); } catch { } complete = false; }
+                        else if (process.ExitCode != 0 && IsSyncRootRegistered(accountKey)) complete = false;
+                    }
+                }
+                catch { complete = false; }
+                Program.SignalExplorerRootRemoved(root);
+            }
+            return complete && !IsSyncRootRegistered(accountKey);
+        }
+
+        private bool EmergencyLocalLogout(string requestedAccountKey, string selectedDrivePath)
         {
             try
             {
@@ -3165,6 +3248,7 @@ namespace NasDriveSetup
                 object rawProfiles;
                 var profiles = config.TryGetValue("profiles", out rawProfiles) ? rawProfiles as object[] : null;
                 var remainingProfiles = new List<object>();
+                var removedPersonalRoots = new List<string>();
                 if (profiles != null)
                 {
                     if (string.IsNullOrWhiteSpace(activeKey) && profiles.Length > 0)
@@ -3172,10 +3256,30 @@ namespace NasDriveSetup
                     foreach (object item in profiles)
                     {
                         var profile = item as Dictionary<string, object>;
-                        if (profile == null || string.Equals(GetString(profile, "accountKey"), activeKey, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (profile == null) continue;
+                        if (string.Equals(GetString(profile, "accountKey"), activeKey, StringComparison.OrdinalIgnoreCase))
+                        {
+                            object rawRoots;
+                            var roots = profile.TryGetValue("syncRoots", out rawRoots) ? rawRoots as object[] : null;
+                            if (roots != null) foreach (object rawRoot in roots)
+                            {
+                                var root = rawRoot as Dictionary<string, object>;
+                                if (root != null && string.Equals(GetString(root, "kind"), "personal-drive", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    string localPath = GetString(root, "localPath");
+                                    if (!string.IsNullOrWhiteSpace(localPath)) removedPersonalRoots.Add(localPath);
+                                }
+                            }
+                            continue;
+                        }
                         remainingProfiles.Add(item);
                     }
                 }
+                string registeredRoot = RegisteredSyncRootPath(activeKey);
+                if (!string.IsNullOrWhiteSpace(registeredRoot) && !removedPersonalRoots.Exists(root => string.Equals(root, registeredRoot, StringComparison.OrdinalIgnoreCase)))
+                    removedPersonalRoots.Add(registeredRoot);
+                if (!string.IsNullOrWhiteSpace(selectedDrivePath) && !removedPersonalRoots.Exists(root => string.Equals(root, selectedDrivePath, StringComparison.OrdinalIgnoreCase)))
+                    removedPersonalRoots.Add(selectedDrivePath);
                 config["schemaVersion"] = 2;
                 config["profiles"] = remainingProfiles.ToArray();
                 config["activeAccountKey"] = remainingProfiles.Count > 0
@@ -3201,6 +3305,8 @@ namespace NasDriveSetup
                 };
                 WriteTextAtomically(HealthFile, serializer.Serialize(health));
 
+                bool explorerCleared = CleanupExplorerAfterEmergencyLogout(activeKey, removedPersonalRoots);
+
                 string launcher = Path.Combine(Path.GetDirectoryName(agentExe), "NAS-Drive.exe");
                 if (File.Exists(launcher))
                 {
@@ -3212,7 +3318,7 @@ namespace NasDriveSetup
                         WorkingDirectory = Path.GetDirectoryName(launcher)
                     });
                 }
-                return !HasAccountKey(activeKey);
+                return !HasAccountKey(activeKey) && explorerCleared;
             }
             catch { return false; }
         }

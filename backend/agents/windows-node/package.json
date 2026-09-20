@@ -1,6 +1,6 @@
 {
   "name": "nas-sync-agent",
-  "version": "1.11.4",
+  "version": "1.11.5",
   "description": "NAS Drive for Windows",
   "main": "index.js",
   "scripts": {

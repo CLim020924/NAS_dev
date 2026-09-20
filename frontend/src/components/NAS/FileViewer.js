@@ -43,6 +43,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
   const [restoredViewState, setRestoredViewState] = useState(null);
   const officeSaveResolveRef = useRef(null);
   const pdfSaveRef = useRef(null);
+  const registerPdfSave = useCallback((handler) => { pdfSaveRef.current = handler; }, []);
   const dirtyRef = useRef(!!win.hasUnsavedChanges);
   const saveHandlerRef = useRef(null);
   
@@ -422,7 +423,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
       );
     }
     if (isPDF) {
-      return <PdfWorkspace win={win} isActive={focusedContext === win.id} onDirtyChange={onDirtyChange} onRegisterSave={(handler) => { pdfSaveRef.current = handler; }} />;
+      return <PdfWorkspace win={win} isActive={focusedContext === win.id} onDirtyChange={onDirtyChange} onRegisterSave={registerPdfSave} />;
     }
     if (isBinary) return <Box sx={{ textAlign: 'center', p: 4 }}><Typography>문서 ({ext.toUpperCase()})</Typography><Button onClick={() => window.open(url)}>다운로드</Button></Box>;
     if (isMarkdown && mode === 'view') return <Box ref={markdownRef} onScroll={(event) => viewStateDescriptor && viewStateHydratedRef.current && viewStateQueueRef.current.schedule(viewStateDescriptor, { scrollTop: event.currentTarget.scrollTop })} sx={{ p: 3, overflow: 'auto', height: '100%' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ''}</ReactMarkdown></Box>;

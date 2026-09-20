@@ -4,6 +4,7 @@ import { alpha } from '@mui/material/styles';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rnd } from 'react-rnd';
 import axios from 'axios';
+import { withWindowDirtyState } from '../utils/windowDirtyState';
 
 import { ensureSlash, getUniqueName, getRelativeSegments } from './NAS/nasUtils';
 import InlineInput from './NAS/InlineInput';
@@ -636,7 +637,7 @@ const NAS = ({ showWorkspace = true }) => {
   const toggleSidebar = (windowId) => setOpenWindows(prev => prev.map(w => w.id === windowId ? { ...w, sidebarOpen: !w.sidebarOpen } : w));
   const toggleEditMode = (id) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, mode: w.mode === 'view' ? 'edit' : 'view' } : w));
   const handleContentChange = (id, newContent) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, content: newContent, hasUnsavedChanges: newContent !== w.originalContent } : w));
-  const handleFileDirtyChange = (id, dirty) => setOpenWindows(prev => prev.map(w => w.id === id ? { ...w, hasUnsavedChanges: !!dirty } : w));
+  const handleFileDirtyChange = useCallback((id, dirty) => setOpenWindows(prev => withWindowDirtyState(prev, id, dirty)), [setOpenWindows]);
 
   const saveFile = async (win, options = {}) => {
     try { const blob = new Blob([win.content], { type: 'text/plain' }); const file = new File([blob], win.name, { type: 'text/plain' }); const formData = new FormData(); formData.append('path', ensureSlash(win.fullPath.substring(0, win.fullPath.lastIndexOf('/')))); formData.append('file', file);

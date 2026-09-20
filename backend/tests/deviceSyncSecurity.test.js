@@ -59,7 +59,16 @@ assert.doesNotMatch(nasRoutesSource, /WEB_PAIRING_REQUIRED/);
 assert.match(windowsAgentSource, /acquireForegroundLock\(\{ supersedeExisting = false \} = \{\}\)/);
 assert.match(windowsAgentSource, /acquireForegroundLock\(\{ supersedeExisting: true \}\)/);
 assert.match(windowsAgentSource, /if \(!profile\?\.deviceId\) \{[\s\S]{0,900}profiles: \[\][\s\S]{0,900}return true;/);
-assert.match(windowsAgentSource, /Persist the local[\s\S]{0,420}saveConfig\(nextConfig\);[\s\S]{0,300}devices\/agent\/logout/);
+const logoutSource = windowsAgentSource.slice(
+  windowsAgentSource.indexOf('async function logoutActiveProfile('),
+  windowsAgentSource.indexOf('function getRoots(', windowsAgentSource.indexOf('async function logoutActiveProfile('))
+);
+const logoutConfigAt = logoutSource.indexOf('saveConfig(nextConfig);');
+const logoutExplorerAt = logoutSource.indexOf('clearLocalProfileResources(profile);');
+const logoutRestartAt = logoutSource.indexOf('restartBackground();', logoutExplorerAt);
+const logoutRemoteAt = logoutSource.indexOf("'/api/devices/agent/logout'");
+assert(logoutConfigAt >= 0 && logoutConfigAt < logoutExplorerAt && logoutExplorerAt < logoutRestartAt && logoutRestartAt < logoutRemoteAt,
+  'A removed account must leave Explorer before remote logout can time out');
 assert.match(windowsAgentSource, /restartBackground\(\);[\s\S]{0,180}await sendHeartbeat\(profile, 'connecting'\);[\s\S]{0,300}first heartbeat deferred to background/);
 assert.match(windowsAgentSource, /post-registration provider setup deferred/);
 assert.match(windowsAgentSource, /initialConnectionRetryDelayMs\(initialConnectionError\)/);
@@ -80,7 +89,10 @@ assert.match(windowsLauncherSource, /DeletePidFileWhenOwnerIsGone\(NativeUiPidFi
 assert.match(windowsLauncherSource, /DeletePidFileWhenOwnerIsGone\(WebPickerPidFile, launcherExe\)/);
 assert.match(windowsLauncherSource, /RegisterWindowMessage\("TaskbarCreated"\)/);
 assert.match(windowsLauncherSource, /startupRestoreTick == 1 \|\| startupRestoreTick == 3 \|\| startupRestoreTick == 6/);
-assert.match(windowsLauncherSource, /EmergencyLocalLogout\(selectedAccount\.AccountKey\)/);
+assert.match(windowsLauncherSource, /EmergencyLocalLogout\(selectedAccount\.AccountKey, selectedAccount\.DrivePath\)/);
+assert.match(windowsLauncherSource, /if \(!HasAccountKey\(accountKey\) && !IsSyncRootRegistered\(accountKey\)\) return 0/);
+assert.match(windowsLauncherSource, /RegisteredSyncRootPath\(activeKey\)[\s\S]{0,250}removedPersonalRoots\.Add\(registeredRoot\)/);
+assert.match(windowsLauncherSource, /CleanupExplorerAfterEmergencyLogout\(activeKey, removedPersonalRoots\)/);
 assert.match(windowsLauncherSource, /profiles"\] = remainingProfiles\.ToArray\(\)/);
 assert.match(windowsLauncherSource, /try \{ exitCode = await Task\.Run\(\(\) => RunLogout\(selectedAccount\.AccountKey\)\); \} catch \{ \}/);
 assert.match(windowsLauncherSource, /AllAccounts\(\)\.Count == 0/);

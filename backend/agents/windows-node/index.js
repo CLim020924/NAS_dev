@@ -24,7 +24,7 @@ const {
 } = require('./project-path-portability');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.11.4';
+const AGENT_VERSION = '1.11.5';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -519,6 +519,7 @@ function refreshPersonalDriveShell(rootPath) {
   if (process.platform !== 'win32' || !rootPath) return;
   const script = `
 $root = [Environment]::GetEnvironmentVariable('NAS_DRIVE_REFRESH_ROOT')
+$parent = Split-Path -Parent $root
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -529,6 +530,7 @@ public static class NasDriveShellRefresh {
 '@
 [NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, $root, $null)
 [NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, (Join-Path $root 'desktop.ini'), $null)
+[NasDriveShellRefresh]::SHChangeNotify(0x00001000, 0x0005, $parent, $null)
 [NasDriveShellRefresh]::SHChangeNotify(0x08000000, 0x0000, $null, $null)
 $iconRefresh = Join-Path $env:WINDIR 'System32\\ie4uinit.exe'
 if (Test-Path -LiteralPath $iconRefresh) {
@@ -540,6 +542,7 @@ if (Test-Path -LiteralPath $iconRefresh) {
 Start-Sleep -Milliseconds 1400
 [NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, $root, $null)
 [NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, (Join-Path $root 'desktop.ini'), $null)
+[NasDriveShellRefresh]::SHChangeNotify(0x00001000, 0x0005, $parent, $null)
 [NasDriveShellRefresh]::SHChangeNotify(0x08000000, 0x0000, $null, $null)
 $shell = New-Object -ComObject Shell.Application
 foreach ($window in @($shell.Windows())) {
@@ -637,11 +640,13 @@ if ($null -ne $quickAccessFolder) {
 if ($null -ne $item -and ${pinned ? '$true' : '$false'} -and -not $isPinned) { $item.InvokeVerb('pintohome') }
 if ($null -ne $item -and -not ${pinned ? '$true' : '$false'} -and $isPinned) { $item.InvokeVerb('unpinfromhome') }
 `;
-  spawnSync('powershell.exe', ['-NoProfile', '-STA', '-NonInteractive', '-Command', script], {
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-NonInteractive', '-Command', script], {
     windowsHide: true,
     stdio: 'ignore',
+    timeout: 5_000,
     env: { ...process.env, NAS_DRIVE_HOME_ROOT: rootPath }
   });
+  if (result.status !== 0) log('[personal drive home pin update failed]', pinned ? 'pin' : 'unpin', result.error?.code || result.status);
 }
 
 function providerPidFile(profile, root) {
@@ -2614,19 +2619,25 @@ if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Write-Output "yes" }
 function clearLocalProfileResources(profile) {
   if (!profile) return;
   for (const root of getRoots(profile).filter(item => item.kind === 'personal-drive')) {
+    const providerPidPath = providerPidFile(profile, root);
+    let stoppedPid = 0;
+    try { stoppedPid = Number(fs.readFileSync(providerPidPath, 'utf8')); } catch {}
     try { stopPersonalDriveProvider(profile, root); } catch (error) { log('[logout provider stop deferred]', error.message); }
+    for (let attempt = 0; attempt < 8 && isExpectedProcessAlive(stoppedPid, INSTALLED_PROVIDER_EXE); attempt += 1) sleepMs(125);
     try { setPersonalDriveHomePin(root.localPath, false); } catch (error) { log('[logout home unpin deferred]', error.message); }
     try {
       if (root.localPath && fs.existsSync(INSTALLED_PROVIDER_EXE)) {
-        spawnSync(INSTALLED_PROVIDER_EXE, ['unregister', '--root', root.localPath, '--account', profile.accountKey], {
+        const unregister = spawnSync(INSTALLED_PROVIDER_EXE, ['unregister', '--root', root.localPath, '--account', profile.accountKey], {
           windowsHide: true,
           stdio: 'ignore',
           timeout: 5_000
         });
+        if (unregister.status !== 0) log('[logout provider unregister failed]', safeAccountKey(profile.accountKey), unregister.error?.code || unregister.status);
       }
     } catch (error) { log('[logout provider unregister deferred]', error.message); }
     try { setPersonalDriveFolderIcon(root.localPath, false); } catch (error) { log('[logout icon cleanup deferred]', error.message); }
     try { setPersonalDriveWebShortcut(root.localPath, profile, false); } catch (error) { log('[logout shortcut cleanup deferred]', error.message); }
+    try { refreshPersonalDriveShell(root.localPath); } catch (error) { log('[logout shell refresh deferred]', error.message); }
   }
   try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
 }
@@ -2671,6 +2682,14 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
   saveConfig(nextConfig);
   try { fs.unlinkSync(tokenFileFor(profile.accountKey)); } catch {}
 
+  // Remove this account from Explorer before any network request. A powered-off
+  // NAS must not leave a deleted local account visible for the logout timeout.
+  clearLocalProfileResources(profile);
+  setAgentHealth(remainingProfiles.length > 0 ? 'connecting' : 'needs-relink', remainingProfiles.length > 0
+    ? '선택한 계정 연결을 해제했습니다. 나머지 NAS Drive 계정을 계속 연결하는 중입니다.'
+    : '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
+  restartBackground();
+
   if (profile.agentToken) {
     try {
       await requestJson('POST', '/api/devices/agent/logout', {
@@ -2685,12 +2704,6 @@ async function logoutActiveProfile(config, { confirmed = false, reopenLogin = tr
   } else {
     log('[logout local only: token unavailable]', profile.deviceId);
   }
-  setAgentHealth(remainingProfiles.length > 0 ? 'connecting' : 'needs-relink', remainingProfiles.length > 0
-    ? '선택한 계정 연결을 해제했습니다. 나머지 NAS Drive 계정을 계속 연결하는 중입니다.'
-    : '이 PC의 NAS Drive 연결을 해제했습니다. 언제든 다시 로그인할 수 있습니다.');
-
-  clearLocalProfileResources(profile);
-  restartBackground();
   if (reopenLogin) {
     const launcher = path.join(path.dirname(INSTALLED_EXE), 'NAS-Drive.exe');
     const target = fs.existsSync(launcher) ? launcher : INSTALLED_EXE;
