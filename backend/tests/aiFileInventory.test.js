@@ -32,7 +32,7 @@ test('사진 목록 페이지와 ZIP 계획은 계정 밖·숨김 경로를 제�
     try { runtime.resolveBundleManifest(user, [{ ...bundle.files[0], name: '../escape.txt' }]); process.exit(16); }
     catch (err) { if (err.status !== 400) process.exit(17); }
     if (process.platform === 'linux') {
-      const ambiguous = path.join(base, 'photos', '..\\\\escape.jpg');
+      const ambiguous = path.join(base, 'photos', '..' + String.fromCharCode(92) + 'escape.jpg');
       fs.writeFileSync(ambiguous, 'ambiguous');
       try { runtime.buildBundleManifest(user, ['/photos']); process.exit(14); }
       catch (err) { if (err.status !== 400) process.exit(15); }
