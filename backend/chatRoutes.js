@@ -25,12 +25,13 @@ const {
 } = require('./chatStore');
 
 const router = express.Router();
-const { getQuotaBasePath, normalizeQuotaFields } = require('./storageQuota');
+const { getChatReceivedPaths } = require('./chatReceivedPaths');
+const { assertQuotaAvailable, getCachedPathUsage, invalidateUsageCache } = require('./storageQuota');
+const { CHAT_TEMP_ROOT, CHATDATA_ROOT, NAS_ROOT } = require('./config/env');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'my-service-platform-secure-key-2026';
 const membersFilePath = path.join(__dirname, 'data', 'members.json');
 const friendsFilePath = path.join(__dirname, 'data', 'friends.json');
-const nasPath = '/mnt/nas';
 
 const readJsonArray = (filePath) => {
   try {
@@ -217,25 +218,20 @@ const buildNotificationPreview = (message = {}) => {
   }
 };
 
-const getUserBasePath = (user) => {
-  return getQuotaBasePath(normalizeQuotaFields(user));
-};
-
 const ensureFixedSystemFolders = (user) => {
-  const basePath = getUserBasePath(user);
-  const receivedFolderPath = path.join(basePath, '받은 파일');
+  const { receivedDir: receivedFolderPath, accessRoot } = getChatReceivedPaths(user);
   if (!fs.existsSync(receivedFolderPath)) {
     fs.mkdirSync(receivedFolderPath, { recursive: true });
   }
 
-  if (user.Masters || user.globalAccess) {
-    const chatdataPath = path.join(nasPath, 'chatdata');
+  if (accessRoot === NAS_ROOT) {
+    const chatdataPath = CHATDATA_ROOT;
     if (!fs.existsSync(chatdataPath)) {
       fs.mkdirSync(chatdataPath, { recursive: true });
     }
   }
 
-  return { basePath, receivedFolderPath };
+  return { receivedFolderPath };
 };
 
 const normalizeRequestPath = (value = '/') => {
@@ -244,7 +240,7 @@ const normalizeRequestPath = (value = '/') => {
 };
 
 const serializeMessageForViewer = (message, viewer) => {
-  const basePath = getUserBasePath(viewer);
+  const { accessRoot: basePath, requestRoot } = getChatReceivedPaths(viewer);
   const savedMap =
     message.savedAttachmentPathsByUid && typeof message.savedAttachmentPathsByUid === 'object'
       ? message.savedAttachmentPathsByUid
@@ -272,7 +268,7 @@ const serializeMessageForViewer = (message, viewer) => {
     } else if (existingEntries.length > 1) {
       viewerOpenTarget = {
         type: 'folder',
-        relativePath: '/받은 파일',
+        relativePath: requestRoot,
         name: '받은 파일',
       };
     }
@@ -681,11 +677,25 @@ router.post('/chat/messages/:messageId/save', verifyToken, (req, res) => {
   }
   try {
     const { receivedFolderPath } = ensureFixedSystemFolders(me);
+    const { requestRoot } = getChatReceivedPaths(me);
+    invalidateUsageCache(receivedFolderPath);
+    const incomingBytes = (message.attachments || []).reduce((total, bundle) => {
+      const bundleId = String(bundle.bundleId || '');
+      if (!/^cab_[a-zA-Z0-9_-]+$/.test(bundleId)) {
+        const error = new Error('첨부 묶음 식별자가 올바르지 않습니다.');
+        error.status = 400;
+        throw error;
+      }
+      return total + getCachedPathUsage(path.join(CHAT_TEMP_ROOT, bundleId)).sizeBytes;
+    }, 0);
+    assertQuotaAvailable(me, incomingBytes, receivedFolderPath);
     const result = saveReceivedAttachmentsForUser({
       messageId,
       userUid: me.userUid,
       receivedDir: receivedFolderPath,
+      receivedRequestRoot: requestRoot,
     });
+    invalidateUsageCache(receivedFolderPath);
 
     return res.json({
       success: true,
@@ -704,7 +714,7 @@ router.post('/chat/messages/:messageId/save', verifyToken, (req, res) => {
     if (e.message === 'ATTACHMENT_SOURCE_MISSING') {
       return res.status(410).json({ error: '첨부 원본이 만료되었거나 존재하지 않습니다.' });
     }
-    return res.status(500).json({ error: '첨부 저장에 실패했습니다.' });
+    return res.status(e.status || 500).json({ error: e.status ? e.message : '첨부 저장에 실패했습니다.' });
   }
 });
 

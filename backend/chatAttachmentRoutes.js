@@ -99,7 +99,7 @@ router.post(
       }
 
       const incomingBytes = files.reduce((sum, file) => sum + Number(file.size || 0), 0);
-      await assertQuotaAvailable(req.user, incomingBytes, req.uploadBundleDir);
+      await assertQuotaAvailable(req.user, incomingBytes);
 
       const manifest = buildDeviceManifestMap(req.body.manifest);
       const manifestByKey = new Map();
@@ -204,7 +204,7 @@ router.post('/chat/attachments/from-nas', verifyToken, async (req, res) => {
       });
     }
 
-    await assertQuotaAvailable(req.user, incomingBytes, bundleDir);
+    await assertQuotaAvailable(req.user, incomingBytes);
 
     preparedCopies.forEach(({ targetPath, destPath, isDirectory }) => {
       if (isDirectory) fs.cpSync(targetPath, destPath, { recursive: true });
