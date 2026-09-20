@@ -1823,3 +1823,9 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: Windows backend 전체 152건(144 pass/8 환경 skip/0 fail), 프런트 production build와 PDF.js 4.8.69 compatibility 통과. 로컬 pnpm의 중복 ESLint plugin 경로 충돌은 기존 방식 `DISABLE_ESLINT_PLUGIN=true`로 빌드했다. 기존 `docs/NAS_PROJECT_LOG.xlsx`의 제어 시트부터 한글이 이미 깨져 있어 spreadsheet 안전 지침에 따라 덮어쓰지 않았으며 복구 후 시트 반영이 필요하다.
 - 운영 반영: 기능 commit `5a11c35`를 원격/NAS 활성 브랜치에 fast-forward했다. NAS Linux의 공유 정책·완료 조건 시험 3/3 및 `node --check` 통과. 검증된 Windows build `main.d507d768.js`를 별도 staging에서 운영 static 경로로 복사하고 이전 index를 제한 백업한 뒤 index를 마지막에 교체했다. 번들 로컬/staging/운영 SHA-256 일치, NAS backend·bundle 및 공개 사이트·bundle 모두 HTTP 200, PM2 `msp-backend` online/save, `ssh`·`tailscaled`·`nginx`·`docker`·`pm2-root`·`cloudflared` active, NAS Git clean이다. 무효 공유 token은 404. 두 실제 사용자 또는 새 로그인 필수 링크의 브라우저 다운로드 E2E는 아직 수행하지 않았고, 200개 초과 ZIP 파일명 전수 기록은 후속 과제다.
 - 후속 검증: 소유자 접근 기록의 단일 대상 ZIP 파일 수를 바로잡아 `45444f5`를 원격/NAS에 ff하고 PM2 재로드·저장, backend/public 200과 양쪽 Git clean을 재확인했다. 실제 Chrome NAS 화면을 새로고침한 뒤 `공유 링크 관리` 창이 오류 없이 열림과 콘솔 오류 0건을 확인했다. 현재 로그인된 시험 계정에는 공유 링크가 0개라 실제 다운로더별 펼침·로그인 유도 화면의 실사용 E2E는 확인하지 못했다. 시험 링크를 임의 생성하지 않았다.
+
+### 2026-09-20 접근 기록 버튼 위치 교정
+
+- 사용자 정정: 기존 파일 관리자 아이콘은 없애거나 기능을 바꾸지 않고 그대로 둔다. 접근 기록 아이콘은 상단 오른쪽의 파일 관리자 아이콘과 설정 아이콘 **사이**에 별도 버튼으로 배치한다.
+- 원인/수정: 기존 구현은 접근 기록 아이콘을 왼쪽 NAS 로고 옆에 배치해 사용자가 지정한 위치와 달랐다. `TopBar.js`에서 왼쪽 아이콘을 제거하고 오른쪽 `파일 관리자 → 접근 기록 → 설정` 순서로 옮겼다. 파일 관리자와 설정의 클릭 동작은 변경하지 않았다. UI contract verifier에 이 순서 회귀 검사를 추가했다.
+- 검증/경계: 로컬 UI contract 통과, 프런트 production build 및 PDF.js 4.8.69 호환성 검사 통과. 기존 workbook 제어 시트의 한국어가 손상되어 이번에도 `docs/NAS_PROJECT_LOG.xlsx`를 덮어쓰지 않았다. 운영 배포와 실제 화면 확인 결과는 이어서 기록한다.

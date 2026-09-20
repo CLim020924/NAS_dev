@@ -35,6 +35,13 @@ requireText('src/contexts/ThemeContext.js', "'.nas-dynamic-label'", 'dynamic lab
 requireText('src/components/GlobalAppWindowLayer.js', 'className="nas-dynamic-label"', 'app window titles must not displace window controls');
 requireText('src/components/NAS/Window/NASWindow.js', 'className="nas-dynamic-label"', 'file and folder window titles must not displace window controls');
 requireText('src/components/TopBar.js', "display: { xs: 'none', md: 'inline-flex' }", 'minimized-task chips must not overflow the mobile top bar');
+const topBar = read('src/components/TopBar.js');
+const fileButton = topBar.indexOf('aria-label="파일 관리자 열기"');
+const accessButton = topBar.indexOf('aria-label="접근 기록 열기"');
+const settingsButton = topBar.indexOf('aria-label="설정 열기"');
+if (!(fileButton >= 0 && fileButton < accessButton && accessButton < settingsButton)) {
+  failures.push('src/components/TopBar.js: file manager, access history, and settings buttons must remain adjacent in that order');
+}
 
 const sourceFiles = walk(sourceRoot).filter((file) => /\.[jt]sx?$/.test(file));
 const longStaticLabels = [];

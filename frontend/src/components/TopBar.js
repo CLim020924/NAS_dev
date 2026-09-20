@@ -356,9 +356,6 @@ const TopBar = ({
           </IconButton>
           {taskSwitcherOpen && <Chip size="small" color="error" variant="outlined" label="웹 창 전환 · Tab / Shift+Tab" title="웹 창 전환 · Tab / Shift+Tab" sx={{ height: 26, flex: '0 1 auto', maxWidth: { xs: 120, sm: 220 } }} />}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-            <IconButton size="small" aria-label="접근 기록 열기" title="접근 기록" onClick={() => setAccessHistoryOpen(true)} sx={{ width: 28, height: 28, color: 'primary.main', border: (theme) => `1px solid ${theme.palette.divider}` }}>
-              <HistoryIcon sx={{ fontSize: 18 }} />
-            </IconButton>
             <Box onClick={goDesktop} sx={{ cursor: 'pointer' }}>
             <Typography variant="h6" sx={{ fontWeight: 900, fontSize: '0.98rem', whiteSpace: 'nowrap' }}>NAS</Typography>
             </Box>
@@ -752,6 +749,7 @@ const TopBar = ({
             </IconButton>
 
             <IconButton aria-label="파일 관리자 열기" title="파일 관리자" onClick={() => { showDesktop(); navigate('/nas'); }} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
+            <IconButton aria-label="접근 기록 열기" title="접근 기록" onClick={() => setAccessHistoryOpen(true)} size="small" sx={{ color: 'text.primary' }}> <HistoryIcon fontSize="small" /> </IconButton>
             <IconButton aria-label="설정 열기" title="설정" onClick={() => { showDesktop(); navigate('/settings'); }} size="small" sx={{ color: 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
 
             <IconButton aria-label="계정 메뉴 열기" title="계정 메뉴" onClick={(e) => setAnchorEl(e.currentTarget)} size="small">
