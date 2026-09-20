@@ -31,6 +31,22 @@ test('승인 후 후속 응답도 실제 action 없는 승인 문구를 차단�
   assert.equal(result.protocolWarning, 'AI_FALSE_APPROVAL_CLAIM');
 });
 
+test('모델의 완료 문장은 실제 변경 도구 성공 기록이 있을 때만 신뢰한다', () => {
+  const expected = ['create_folder', 'write_text_file'];
+  for (const events of [[], [{ name: 'create_folder', ok: false }],
+    [{ name: 'create_folder', ok: true, result: { status: 'completed' } }]]) {
+    const result = finalizeAgentAnswer('폴더와 파일 만들어줘', { text: '모두 만들었습니다.', events }, expected);
+    assert.equal(result.protocolWarning, 'AI_UNVERIFIED_COMPLETION_CLAIM');
+    assert.match(result.answer, /확인하지 못했습니다/);
+  }
+  const result = finalizeAgentAnswer('폴더와 파일 만들어줘', {
+    text: '모두 만들었습니다.',
+    events: expected.map((name) => ({ name, ok: true, result: { status: 'completed' } })),
+  }, expected);
+  assert.equal(result.protocolWarning, null);
+  assert.equal(result.answer, '모두 만들었습니다.');
+});
+
 test('숫자만 요청은 답에 숫자가 하나일 때 군더더기를 제거한다', () => {
   assert.equal(finalizeAgentAnswer('내 키를 숫자로만 답해', { text: '내 키는 177입니다.' }).answer, '177');
   assert.equal(finalizeAgentAnswer('숫자만 답해', { text: '후보는 177과 6810입니다.' }).answer, '후보는 177과 6810입니다.');

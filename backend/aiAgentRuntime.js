@@ -336,8 +336,29 @@ const deriveAuthorizedMutationTools = (userRequest = '') => {
 const deriveAuthorizedMutationToolsFromConversation = (message = '', history = [], pendingTask = null) => {
   const text = String(message || '').trim();
   if (CANCEL_PENDING_REQUEST.test(text)) return { tools: [], cancelled: true, carried: false };
+  // A short follow-up is not blanket consent to reuse an older write request.
+  // In particular, negation and a new (possibly unsupported) command must not
+  // inherit the pending task's mutation permissions.
+  if (PROHIBITED_REQUEST.test(text) || NON_EXECUTION_QUESTION.test(text) || RECALL_OR_PAST_QUESTION.test(text)) {
+    return { tools: [], cancelled: false, carried: false };
+  }
+  const acknowledgesPending = /^(?:(?:응|네|예|그래|좋아|알겠어)\s*)?(?:진행해|계속해|그렇게\s*해|해줘|해주세요|만들어줘|생성해줘|보내줘|전송해줘|실행해줘|돌려줘|저장해줘)[.!?\s]*$/i.test(text);
+  const pendingTools = Array.isArray(pendingTask?.authorizedMutationTools) ? pendingTask.authorizedMutationTools : [];
+  const contextualRecipient = pendingTools.some((name) => ['send_friend_request', 'send_chat_message', 'send_file_to_user'].includes(name))
+    && !/[\p{L}\p{N}_.-]+(?:에게|한테)/u.test(String(pendingTask?.originalRequest || ''))
+    && /^[\p{L}\p{N}_.-]{1,60}(?:에게|한테)\s*(?:보내줘|전송해줘|말해줘)[.!?\s]*$/iu.test(text);
+  const contextualDocument = pendingTools.includes('create_document')
+    && /^(?:(?:txt|md|docx|hwp|hwpx|한글|워드|마크다운)(?:\s*파일)?로|(?:현재|여기|이곳|루트)(?:\s*폴더)?에)\s*(?:만들어줘|생성해줘|저장해줘)[.!?\s]*$/i.test(text);
   const direct = deriveAuthorizedMutationTools(text);
+  const pendingAge = Date.now() - Date.parse(pendingTask?.updatedAt || pendingTask?.createdAt || '');
+  const activePending = pendingTask?.status === 'collecting' && Number.isFinite(pendingAge) && pendingAge <= 30 * 60 * 1000;
+  if (activePending && (contextualRecipient || contextualDocument)) {
+    return { tools: [...new Set(pendingTools)], cancelled: false, carried: true };
+  }
   if (direct.length > 0) return { tools: direct, cancelled: false, carried: false };
+  if (EXPLICIT_EXECUTION_REQUEST.test(text) && !acknowledgesPending && !contextualRecipient && !contextualDocument) {
+    return { tools: [], cancelled: false, carried: false };
+  }
 
   if (pendingTask?.status === 'collecting' && Array.isArray(pendingTask.authorizedMutationTools)) {
     const age = Date.now() - Date.parse(pendingTask.updatedAt || pendingTask.createdAt || '');

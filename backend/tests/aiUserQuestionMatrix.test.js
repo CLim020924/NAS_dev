@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { deriveAuthorizedMutationTools, _test } = require('../aiAgentRuntime');
+const { deriveAuthorizedMutationTools, deriveAuthorizedMutationToolsFromConversation, _test } = require('../aiAgentRuntime');
 
 const sameTools = (actual, expected, prompt) => assert.deepEqual([...actual].sort(), [...expected].sort(), prompt);
 
@@ -197,4 +197,16 @@ test('질문 행렬은 기존 핵심 도구를 반복 검증하고 모든 현재
   ];
   expected.forEach((name) => assert.ok((counts.get(name) || 0) >= 3, `${name} coverage`));
   _test.MUTATION_TOOL_NAMES.forEach((name) => assert.ok((counts.get(name) || 0) >= 1, `${name} has no intent test`));
+});
+
+test('모든 변경 도구의 미완성 대화는 취소·금지·무관 명령에 권한을 누출하지 않는다', () => {
+  const cases = new Map(executableCases.flatMap(([prompt, tools]) => tools.map((name) => [name, prompt])));
+  _test.MUTATION_TOOL_NAMES.forEach((name) => {
+    const pending = {
+      status: 'collecting', updatedAt: new Date().toISOString(),
+      originalRequest: cases.get(name), authorizedMutationTools: [name],
+    };
+    ['취소', '이 작업은 하지 마', '오늘 날씨 알려줘', '서버를 재부팅해줘'].forEach((followUp) =>
+      sameTools(deriveAuthorizedMutationToolsFromConversation(followUp, [], pending).tools, [], `${name}: ${followUp}`));
+  });
 });

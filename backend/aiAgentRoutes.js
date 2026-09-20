@@ -824,7 +824,7 @@ router.post('/ai/chat', async (req, res) => {
         return result;
       },
     });
-    const finalized = finalizeAgentAnswer(message, agentResult);
+    const finalized = finalizeAgentAnswer(message, agentResult, authorizedMutationTools);
     const answer = agentResult.paused ? pendingAnswer(agentResult.interruptions) : finalized.answer;
     if (agentResult.paused) {
       if (pendingTask) clearPendingTask(user, 'approval-created');
