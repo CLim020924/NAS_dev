@@ -6,7 +6,8 @@ const RESTORE_WINDOW_MS = 15 * 24 * 60 * 60 * 1000;
 const MUTATION_TYPES = new Set([
   'file-created', 'file-updated', 'folder-created', 'moved-to-trash',
   'trash-restored', 'trash-permanently-deleted', 'item-copied', 'item-moved',
-  'pdf-annotations-updated', 'version-restored'
+  'pdf-annotations-updated', 'version-restored', 'moved-to-agent-trash',
+  'conflict-copy-created'
 ]);
 
 const sameOrChild = (parent, child) => {

@@ -783,6 +783,7 @@ app.patch('/api/user/preferences', (req, res) => {
   }
 });
 
+nasRoutes.setFileChangeEmitter(io);
 app.use('/api', nasRoutes);
 app.use('/api', friendsRoutes);
 app.use('/api', notificationsRoutes);

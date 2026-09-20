@@ -162,6 +162,7 @@ const agentLoginAttempts = new Map();
 const AGENT_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const AGENT_LOGIN_MAX_FAILURES = 5;
 const getActivityActor = (user = {}) => String(user.userUid || user.loginId || user.id || user.username || 'web-user');
+let fileChangeEmitter = null;
 const recentExternalVisits = new Map();
 const recentOwnerAlerts = new Map();
 let accessMembersCache = { stamp: '', rows: [] };
@@ -182,6 +183,11 @@ const appendActivity = (basePath, activity) => {
     const actor = members.find((member) => [member.userUid, member.loginId, member.id].some((value) => String(value || '') === actorKey));
     if (!actor) return row;
     const owned = ownerForPath(NAS_ROOT, target, members);
+    const change = { at: row.at, type: activity.type };
+    if (fileChangeEmitter && actor.userUid) fileChangeEmitter.to(`user:${actor.userUid}`).emit('files:changed', change);
+    if (fileChangeEmitter && owned?.owner?.userUid && owned.owner.userUid !== actor.userUid) {
+      fileChangeEmitter.to(`user:${owned.owner.userUid}`).emit('files:changed', change);
+    }
     if (owned) {
       const event = externalEvent({ nasRoot: NAS_ROOT, targetPath: target, members, actor, type: activity.type,
         extra: { source: String(activity.source || 'web').slice(0, 80), originalActivityId: row.activityId } });
@@ -210,7 +216,7 @@ const rememberBounded = (cache, key, now, max = 4096) => {
 const recordExternalVisit = (req, targetPath) => {
   // The file manager's periodic refresh carries a cache-busting timestamp.
   // It is not a new folder visit and must not create repeated audit entries.
-  if (req.query.t && req.headers['x-nas-navigation'] !== '1') return null;
+  if ((req.query.t || req.headers['x-nas-background'] === '1') && req.headers['x-nas-navigation'] !== '1') return null;
   const relative = path.relative(NAS_ROOT, targetPath);
   if (!relative.startsWith(`users${path.sep}`)) return null;
   if (relative.split(path.sep)[1] === getLoginId(req.user)) return null;
@@ -5651,5 +5657,7 @@ if (process.env.NODE_ENV === 'test') {
     getUserTrashRoot
   };
 }
+
+router.setFileChangeEmitter = (io) => { fileChangeEmitter = io; };
 
 module.exports = router;

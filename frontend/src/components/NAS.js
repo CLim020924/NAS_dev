@@ -4,6 +4,7 @@ import { alpha } from '@mui/material/styles';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rnd } from 'react-rnd';
 import axios from 'axios';
+import socket from '../socket';
 import { withWindowDirtyState } from '../utils/windowDirtyState';
 
 import { ensureSlash, getUniqueName, getRelativeSegments } from './NAS/nasUtils';
@@ -456,15 +457,28 @@ const NAS = ({ showWorkspace = true }) => {
   useEffect(() => { loadDesktopItems(); }, [loadDesktopItems]);
 
   useEffect(() => {
-    const syncInterval = setInterval(async () => {
+    let syncTimer;
+    const syncFiles = async () => {
       if (inlineEditRef.current || contextMenuRef.current) return;
       const listPath = ensureSlash(folderInlineMode ? (fileManagerPath || '/') : '/');
       try { const res = await axios.get(`/api/files?path=${encodeURIComponent(listPath)}&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(desktopItemsRef.current)) setDesktopItems(res.data || []); } catch(e) {}
       openWindowsRef.current.forEach(async (win) => {
         if (win.winType === 'folder') { try { const res = await axios.get(`/api/files?path=${encodeURIComponent(win.currentPath)}&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(win.files)) setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, files: res.data || [] } : w)); } catch(e) {} }
       });
-    }, 3000); 
-    return () => clearInterval(syncInterval);
+    };
+    const onFilesChanged = () => {
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(syncFiles, 120);
+    };
+    socket.on('files:changed', onFilesChanged);
+    socket.on('connect', onFilesChanged);
+    const syncInterval = setInterval(syncFiles, 30000);
+    return () => {
+      clearInterval(syncInterval);
+      clearTimeout(syncTimer);
+      socket.off('files:changed', onFilesChanged);
+      socket.off('connect', onFilesChanged);
+    };
   }, [setOpenWindows, folderInlineMode, fileManagerPath]);
 
   useEffect(() => {

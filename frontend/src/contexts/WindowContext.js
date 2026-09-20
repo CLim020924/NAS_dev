@@ -370,7 +370,7 @@ export const WindowProvider = ({ children }) => {
     try {
       const response = await axios.get(`/api/files?path=${encodeURIComponent(targetPath)}`, {
         withCredentials: true,
-        headers: options.navigation ? { 'X-NAS-Navigation': '1' } : undefined
+        headers: options.navigation ? { 'X-NAS-Navigation': '1' } : (options.background ? { 'X-NAS-Background': '1' } : undefined)
       });
       
       setOpenWindows(prev => prev.map(w => {
