@@ -1731,4 +1731,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 루트 항목을 정확히 분류했다. `.agent_incoming`, `.agent_versions`, `.nas_trash`, `.upload_tmp`, `backup`, `backups`, `chatdata`, `chat_tmp`, `tools`, `users`는 서비스/복구 경로라 이동하지 않는다. 대문자 `USERS` 안에는 `123`과 `dntdlzz` 자료만 있다. 루트의 나머지 개인 문서·폴더 26개는 `dntdlzz` 개인 영역의 날짜별 보존 폴더로 이동할 대상이다. `/사진`을 가리키는 활성 공유 링크 2개는 경로 동시 수정이 필요하다.
 - 유실 방지를 위해 원본을 영구 삭제하지 않고 동일 파일시스템 rename으로 보존하며, 기존 계정명 루트 폴더 7개와 `USERS` 하위 2개는 각 계정의 `이전 루트 데이터`로 분리한다. `dntdlzz`의 계획 이동량은 약 50.56GB, 계획 quota는 64GiB이다. `members.json`, `shares.json`, 사용량 캐시를 백업한 후 서비스 정지 상태에서 이동·경로 정규화·공유 링크 갱신을 실행한다. 검사 스크립트의 `--plan`은 24계정·35이동·공유 2개로 통과했으며, 아직 `--apply`는 실행하지 않았다.
 - 코드 수정 준비: 모든 개인/용량 경로를 `/users/<loginId>`로 정규화하고 신규 ID에 경로 구분자·상위 경로를 거부하며, 채팅의 `받은 파일`도 특권 계정에서 NAS 루트가 아닌 개인 영역으로 향하게 했다. Windows backend 전체 테스트 128개 중 120 통과·8 환경상 건너뜀, 실패 0. 운영 적용과 Linux 검증은 아직 남았다.
-- 미실행/다음 작업: 서버 파일 이동·삭제·quota 변경·코드 수정은 없다. Tailscale 관리 콘솔의 기존 NAS 장치 `Temporarily extend key` 또는 NAS 로컬 콘솔 재인증 후 SSH를 다시 확인하고 실제 인벤토리를 시작한다.
+
+### 2026-09-20 NAS 루트 경계 운영 적용 및 검증
+
+- 코드/사전 기록을 활성 브랜치 `cleanup/git-tracking-2026-06-08`의 `5255cdf`로 푸시하고 NAS 작업 트리에 fast-forward 적용했다. 운영 직전 one-off 검사 결과 24계정·35이동·기타 루트 자료 26개·사진 공유 링크 2개·마스터 64GiB가 다시 일치했다.
+- root PM2의 `msp-backend`를 중지한 상태에서 계정 메타데이터/공유 링크/사용량 캐시를 `/home/limchanyoung/runtime-backups/my-service-platform/root-boundary-2026-09-20`에 제한 권한으로 백업하고, 같은 파일시스템 rename으로 35개 항목을 이동했다. 원본 내용을 영구 삭제하지 않았다. 과거 계정명 루트 폴더는 각 계정의 `/users/<id>/이전 루트 데이터`에, 비시스템 루트 자료는 `/users/dntdlzz/루트에서 정리됨/2026-09-20`에 보존했다. 대문자 `USERS`는 두 하위 폴더 이동 후 빈 디렉터리만 제거했다.
+- 검증: 루트 1단계에는 `.agent_incoming`, `.agent_versions`, `.nas_trash`, `.upload_tmp`, `backup`, `backups`, `chat_tmp`, `chatdata`, `tools`, `users`만 남는다. 24/24 계정의 `rootPath`와 `personalRootPath`가 `/users/<loginId>`이며 마스터 `dntdlzz` quota는 64GiB, 개인 영역 실측은 약 50.56GB다. `/사진`을 참조하던 두 공유 대상의 수정 경로가 모두 존재하고, 백업 및 완료 마커도 존재한다. NAS Linux quota 테스트 6/6 통과, PM2 online, 로컬 HTTP 200, 공개 사이트 HTTP 200, NAS Git 작업 트리 clean이다. 재시작 직후 첫 HTTP 검사는 기동 경합으로 실패했으나 8초 후 재검사에서 200을 확인했다.
+- 남은 구분: Tailscale 노드 키 만료는 별도 접속 문제로 그대로이며 이번 LAN 경유 정리와 무관하다. `docs/NAS_PROJECT_LOG.xlsx`의 기존 한글 문자열/시트명이 이미 대량 깨져 있어 추가 편집이 무관 데이터까지 손상시킬 위험이 있다. 따라서 이번 변경 사항은 우선 이 릴레이에 정확히 기록하고 workbook 복원 후 관련 시트 반영을 보류한다. 운영 사용자 UI의 계정별 열람/공유 클릭까지는 직접 재현하지 못했으므로 후속 확인이 필요하다.
