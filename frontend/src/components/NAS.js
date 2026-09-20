@@ -154,6 +154,7 @@ const NAS = ({ showWorkspace = true }) => {
   const { startUpload } = useTransfer();
   const folderInlineMode = appOpenMode === 'inline';
   const currentFileManagerPath = folderInlineMode ? ensureSlash(fileManagerPath || '/') : '/';
+  const pendingNavigationPathRef = useRef(currentFileManagerPath);
 
   const desktopItemsRef = useRef(desktopItems); desktopItemsRef.current = desktopItems;
   const openWindowsRef = useRef(openWindows); openWindowsRef.current = openWindows;
@@ -448,7 +449,9 @@ const NAS = ({ showWorkspace = true }) => {
 
   const loadDesktopItems = useCallback(async (pathOverride = null) => {
     const targetPath = ensureSlash(pathOverride || currentFileManagerPath || '/');
-    try { const response = await axios.get(`/api/files?path=${encodeURIComponent(targetPath)}&t=${Date.now()}`, { withCredentials: true }); setDesktopItems(response.data || []); } catch (err) { showError('파일관리자 로드', err); }
+    const navigation = pendingNavigationPathRef.current === targetPath;
+    if (navigation) pendingNavigationPathRef.current = null;
+    try { const response = await axios.get(`/api/files?path=${encodeURIComponent(targetPath)}&t=${Date.now()}`, { withCredentials: true, headers: navigation ? { 'X-NAS-Navigation': '1' } : undefined }); setDesktopItems(response.data || []); } catch (err) { showError('파일관리자 로드', err); }
   }, [currentFileManagerPath]);
   useEffect(() => { loadDesktopItems(); }, [loadDesktopItems]);
 
@@ -565,6 +568,7 @@ const NAS = ({ showWorkspace = true }) => {
     }
     const targetPath = ensureSlash(item.path || item.fullPath || '/');
     if (folderInlineMode) {
+      pendingNavigationPathRef.current = targetPath;
       setFileManagerPath(targetPath);
       setFocusedContext('desktop');
       setSelectedItems([]);
@@ -2201,6 +2205,7 @@ const NAS = ({ showWorkspace = true }) => {
 
   const navigateFileManagerPath = (path) => {
     const safePath = ensureSlash(path || '/');
+    pendingNavigationPathRef.current = safePath;
     recordLastWork({ type: 'folder', path: safePath, label: safePath.split('/').filter(Boolean).pop() || '파일 관리자' });
     setFileManagerPath(safePath);
     setFocusedContext('desktop');

@@ -208,6 +208,9 @@ const rememberBounded = (cache, key, now, max = 4096) => {
 };
 
 const recordExternalVisit = (req, targetPath) => {
+  // The file manager's periodic refresh carries a cache-busting timestamp.
+  // It is not a new folder visit and must not create repeated audit entries.
+  if (req.query.t && req.headers['x-nas-navigation'] !== '1') return null;
   const relative = path.relative(NAS_ROOT, targetPath);
   if (!relative.startsWith(`users${path.sep}`)) return null;
   if (relative.split(path.sep)[1] === getLoginId(req.user)) return null;

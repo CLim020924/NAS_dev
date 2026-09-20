@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const archiver = require('archiver');
+const { whenSuccessfulResponseFinishes } = require('./shareDownloadCompletion');
 const config = require('./config/env');
 const {
   normalizeQuotaFields,
@@ -157,6 +158,20 @@ const addShareLog = (req, share, event, detail = {}) => {
     createdAt: new Date().toISOString()
   });
   writeShareLogs(logs);
+};
+
+const recordCompletedShareDownload = (req, res, share, event, detail) => {
+  whenSuccessfulResponseFinishes(res, () => {
+    try {
+      const shares = readShares().map((item) => item.shareId === share.shareId
+        ? { ...item, downloadCount: Number(item.downloadCount || 0) + 1, lastDownloadedAt: new Date().toISOString() }
+        : item);
+      writeShares(shares);
+      addShareLog(req, share, event, detail);
+    } catch (error) {
+      console.error('[share-download] completion log failed:', error.message);
+    }
+  });
 };
 
 const getShareAccessCookieName = (share) => `${SHARE_PASSWORD_COOKIE_PREFIX}${share.shareId}`;
@@ -841,11 +856,7 @@ const sendSharedFile = (req, res, disposition) => {
   }
 
   if (disposition === 'attachment') {
-    const shares = readShares().map((item) => item.shareId === share.shareId
-      ? { ...item, downloadCount: Number(item.downloadCount || 0) + 1, lastDownloadedAt: new Date().toISOString() }
-      : item);
-    writeShares(shares);
-    addShareLog(req, share, 'download', { path: req.query.path || '', name: path.basename(targetPath) });
+    recordCompletedShareDownload(req, res, share, 'download', { path: req.query.path || '', name: path.basename(targetPath) });
     res.download(targetPath, path.basename(targetPath), { dotfiles: 'allow' });
     return;
   }
@@ -886,17 +897,14 @@ router.get('/public-shares/:token/download-folder', (req, res) => {
     }
 
     const folderName = targetPath ? (path.basename(targetPath) || share.displayName || 'shared-folder') : (share.displayName || 'shared-bundle');
-    const shares = readShares().map((item) => item.shareId === share.shareId
-      ? { ...item, downloadCount: Number(item.downloadCount || 0) + 1, lastDownloadedAt: new Date().toISOString() }
-      : item);
-    writeShares(shares);
-    addShareLog(req, share, 'download-folder', { path: requestedRelative || '', name: folderName });
+    recordCompletedShareDownload(req, res, share, 'download-folder', { path: requestedRelative || '', name: folderName });
 
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(folderName)}.zip"`);
     const archive = archiver('zip', { zlib: { level: 9 } });
     archive.on('error', (err) => {
       if (!res.headersSent) res.status(500).json({ error: err.message });
+      else res.destroy(err);
     });
     archive.pipe(res);
     if (targetPath) {
@@ -951,20 +959,12 @@ router.post('/public-shares/:token/download-selected', express.json(), (req, res
     const hasFolder = resolvedItems.some((item) => item.type === 'folder');
     if (!hasFolder && resolvedItems.length === 1) {
       const target = resolvedItems[0];
-      const shares = readShares().map((item) => item.shareId === share.shareId
-        ? { ...item, downloadCount: Number(item.downloadCount || 0) + 1, lastDownloadedAt: new Date().toISOString() }
-        : item);
-      writeShares(shares);
-      addShareLog(req, share, 'download-selected-file', { path: target.relativePath, name: target.name });
+      recordCompletedShareDownload(req, res, share, 'download-selected-file', { path: target.relativePath, name: target.name });
       return res.download(target.fullPath, target.name, { dotfiles: 'allow' });
     }
 
     const archiveName = getSafeArchiveEntryName(share.displayName || 'selected-items');
-    const shares = readShares().map((item) => item.shareId === share.shareId
-      ? { ...item, downloadCount: Number(item.downloadCount || 0) + 1, lastDownloadedAt: new Date().toISOString() }
-      : item);
-    writeShares(shares);
-    addShareLog(req, share, 'download-selected-zip', {
+    recordCompletedShareDownload(req, res, share, 'download-selected-zip', {
       count: resolvedItems.length,
       hasFolder,
       paths: resolvedItems.map((item) => item.relativePath).slice(0, 50)
@@ -975,6 +975,7 @@ router.post('/public-shares/:token/download-selected', express.json(), (req, res
     const archive = archiver('zip', { zlib: { level: 9 } });
     archive.on('error', (err) => {
       if (!res.headersSent) res.status(500).json({ error: err.message });
+      else res.destroy(err);
     });
     archive.pipe(res);
 
