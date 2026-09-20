@@ -274,7 +274,7 @@ const NAS = () => {
       offsetX,
       offsetY
     }));
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.effectAllowed = 'copyMove';
   };
 
   const handleDragOver = (e, itemPath = null) => {

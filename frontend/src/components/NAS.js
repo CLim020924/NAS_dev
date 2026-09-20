@@ -2063,7 +2063,7 @@ const NAS = ({ showWorkspace = true }) => {
       offsetX: e.clientX - rect.left,
       offsetY: e.clientY - rect.top
     }));
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.effectAllowed = 'copyMove';
 
     // OS 바깥으로 드래그 아웃 다운로드 복구
     if (!isMobile) {

@@ -23,6 +23,9 @@ const APPROVAL_MODES = new Set(['ask_each', 'auto_safe', 'auto_reversible', 'aut
 const TEXT_EXTS = new Set(['.txt', '.md', '.json', '.csv', '.tsv', '.log', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.xml', '.yml', '.yaml', '.env', '.ini', '.conf', '.py', '.sql', '.sh']);
 const MAX_READ_BYTES = 180 * 1024;
 const MAX_ORGANIZE_ITEMS = 500;
+const MAX_BUNDLE_FILES = 200;
+const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.heic', '.heif', '.avif']);
 const INTERNAL_PATH_PARTS = new Set(['.nas_trash', '.agent_trash', '.agent_versions', '.ai_backups', '.note_studio', '.agent_incoming', 'chat_tmp']);
 const SENSITIVE_NAMES = /^(?:\.env(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|credentials?(?:\.[^.]+)?|secrets?(?:\.[^.]+)?|.*\.(?:pem|key|pfx|p12))$/i;
 let serverRhwpPromise = null;
@@ -65,6 +68,7 @@ const MUTATION_INTENT_RULES = {
   move_item: /이동|옮기|옮겨|이름.*(?:변경|바꾸|바꿔)|(?:변경|바꾸|바꿔).*이름/i,
   trash_item: /삭제|지우|지워|휴지통/i,
   organize_files_by_modified_date: /정리|분류|날짜별|월별/i,
+  create_zip_bundle: /(?:zip|압축|묶어서).*(?:만들|생성|묶|압축)|(?:만들|생성|묶|압축).*(?:zip|압축\s*파일)|(?:파일|문서|사진|이미지).*(?:zip|압축|묶어)/i,
   send_friend_request: /친구.*(?:추가|요청)|(?:추가|요청).*친구/i,
   set_user_blocked: /차단|차단.*해제|차단해제/i,
   send_chat_message: /(?:채팅|메시지|말).*(?:보내|전송)|(?:보내|전송).*(?:채팅|메시지|말)|에게.*(?:알려|말해)/i,
@@ -131,6 +135,8 @@ const TOOL_DEFINITIONS = [
   { type: 'function', name: 'get_agent_capabilities', description: '현재 배포된 NAS AI가 실제로 지원하는 제품 영역·도구 수와 보안상 위임하지 않는 경계를 조회한다.', strict: true, parameters: schema({}) },
   { type: 'function', name: 'list_files', description: '로그인 사용자가 접근 가능한 NAS 폴더의 파일과 하위 폴더를 조회한다.', strict: true, parameters: schema({ path: stringProp('조회할 NAS 경로. 루트는 /.') }, ['path']) },
   { type: 'function', name: 'search_files', description: '로그인 사용자의 NAS 범위에서 이름으로 파일과 폴더를 검색한다.', strict: true, parameters: schema({ query: stringProp('검색어'), path: stringProp('검색 시작 경로') }, ['query', 'path']) },
+  { type: 'function', name: 'create_zip_bundle', description: '이미 확인한 NAS 파일·폴더 경로들을 ZIP 다운로드로 묶는다. 의미상 관련 문서를 전부 찾았다고 추측하지 말고 검색 범위·선정 기준·빠진 결과를 먼저 확인한다. 승인 후 다운로드 버튼이 생긴다.', strict: true, parameters: schema({ paths: { type: 'array', items: { type: 'string' } }, file_name: stringProp('다운로드할 ZIP 이름') }, ['paths', 'file_name']) },
+  { type: 'function', name: 'list_image_files', description: '접근 가능한 폴더 아래 이미지 파일 이름과 경로를 페이지별로 열거한다. complete=false이면 전부 찾았다고 말하지 않는다.', strict: true, parameters: schema({ path: stringProp('검색 시작 경로'), offset: { type: 'integer' }, limit: { type: 'integer' } }, ['path', 'offset', 'limit']) },
   { type: 'function', name: 'read_text_file', description: '권한 범위의 텍스트 또는 코드 파일을 읽는다.', strict: true, parameters: schema({ path: stringProp('읽을 파일 경로') }, ['path']) },
   { type: 'function', name: 'search_conversation_history', description: '이 AI 대화창에 실제 저장된 이전 대화를 정확한 키워드로 검색한다. 기억을 추측하지 않는다.', strict: true, parameters: schema({ query: stringProp('찾을 문장 또는 키워드') }, ['query']) },
   { type: 'function', name: 'list_notes', description: '현재 계정의 Note Studio 노트를 제목과 내용 검색어로 조회한다. 전체 목록은 빈 문자열을 사용한다.', strict: true, parameters: schema({ query: stringProp('검색어. 전체 목록은 빈 문자열') }, ['query']) },
@@ -236,7 +242,7 @@ const TOOL_DEFINITION_BY_NAME = new Map(TOOL_DEFINITIONS.map((tool) => [tool.nam
 const READ_TOOL_NAMES = new Set(TOOL_DEFINITIONS.map((tool) => tool.name).filter((name) => !MUTATION_TOOL_NAMES.includes(name)));
 const SURFACE_HINTS = Object.freeze({
   conversation: /(?:대화|기억|전에|예전|말했|요청했|내\s*키)/i,
-  files: /(?:파일|폴더|경로|디렉터리|휴지통|복사|이동|삭제|정리|버전|복구\s*지점|즐겨찾기|최근|활동)/i,
+  files: /(?:파일|폴더|경로|디렉터리|첨부|사진|이미지|zip|압축|묶어서|휴지통|복사|이동|삭제|정리|버전|복구\s*지점|즐겨찾기|최근|활동)/i,
   storage: /(?:저장공간|저장\s*공간|용량|할당량|디스크)/i,
   friends: /(?:친구|사용자\s*검색|차단)/i,
   chat: /(?:채팅|메시지|대화방|받은\s*파일|방장|부방장|강퇴)/i,
@@ -279,7 +285,7 @@ const normalizePreferences = (value = {}) => ({
 const NON_EXECUTION_QUESTION = /(?:방법(?:만)?(?:을)?\s*(?:알려|설명)|어떻게\s*(?:해|하|쓰|사용)|가능한지|(?:할|해\s*줄)\s*수\s*(?:있|없)\s*(?:는지)?|해도\s*(?:돼|되|될)|하면\s*될까|뭐야|무엇이야|차이(?:가|는)?|버튼.*어디|어디.*버튼|여부(?:를)?\s*(?:알려|확인)|기능(?:을)?\s*(?:설명|알려)|안전해\??)/i;
 const RECALL_OR_PAST_QUESTION = /(?:했었|한\s*적|했는지|했지\??|했나\??|말했|요청했|기록.*찾아|대화.*찾아)/i;
 const PROHIBITED_REQUEST = /(?:하지\s*마|하지마|하지\s*말|하지말|하지\s*않|하지않|보내지\s*마|삭제하지|지우지|옮기지|복사하지|실행하지|만들지|생성하지|수정하지|저장하지|추가하지|차단하지|말고)/i;
-const EXPLICIT_EXECUTION_REQUEST = /(?:해\s*줘|해주세요|해\s*주세요|해라|해봐|부탁해|부탁합니다|시작해|실행해|돌려줘|돌려\s*줘|만들어|생성해|작성해|저장해|수정해|편집해|추가해|덧붙여|복사해|복제해|옮겨|이동해|바꿔|변경해|삭제해|지워|정리해|분류해|보내줘|보내\s*줘|전송해|공유해|차단해|해제해|알려줘|나가줘|퇴장해|수락해|거절해|거부해|재개해|중단해|켜\s*줘|꺼\s*줘|켜줘|꺼줘)/i;
+const EXPLICIT_EXECUTION_REQUEST = /(?:해\s*줘|해주세요|해\s*주세요|해라|해봐|부탁해|부탁합니다|시작해|실행해|돌려줘|돌려\s*줘|만들어|생성해|작성해|저장해|수정해|편집해|추가해|덧붙여|복사해|복제해|묶어줘|압축해줘|옮겨|이동해|바꿔|변경해|삭제해|지워|정리해|분류해|보내줘|보내\s*줘|전송해|공유해|차단해|해제해|알려줘|나가줘|퇴장해|수락해|거절해|거부해|재개해|중단해|켜\s*줘|꺼\s*줘|켜줘|꺼줘)/i;
 const FORBIDDEN_ACCOUNT_OR_SECURITY_MUTATION = /(?:영구\s*삭제|(?:계정|사용자).*(?:영구\s*)?(?:삭제|지우|생성|만들)|(?:비밀번호|암호|보안\s*설정|API\s*키|개인키).*(?:조회|보여|변경|바꿔|수정|설정))/i;
 const CANCEL_PENDING_REQUEST = /^(?:아니|아니야|취소|취소해|그만|그만해|됐어|하지\s*마|하지마|중단|중단해)[.!?\s]*$/i;
 
@@ -292,6 +298,8 @@ const deriveAuthorizedMutationTools = (userRequest = '') => {
   let candidates = Object.entries(MUTATION_INTENT_RULES)
     .filter(([, pattern]) => pattern.test(text))
     .map(([name]) => name);
+
+  if (candidates.includes('create_zip_bundle')) candidates = candidates.filter((name) => !['create_document', 'create_office_document', 'write_text_file', 'create_folder'].includes(name));
 
   // More specific note and Office operations must not inherit broad file-operation permission.
   if (candidates.includes('create_office_document')) {
@@ -466,6 +474,47 @@ const searchFiles = (user, query, requested = '/') => {
   return results;
 };
 
+const listImageFiles = (user, requested = '/', offset = 0, limit = 100) => {
+  const root = assertExistingPathSafe(user, requested);
+  if (!fs.statSync(root).isDirectory()) throw new Error('사진 검색 위치는 폴더여야 합니다.');
+  const pageOffset = Math.max(0, Math.min(10000, Number(offset) || 0));
+  const pageLimit = Math.max(1, Math.min(200, Number(limit) || 100));
+  const baseReal = fs.realpathSync(getAccessBasePath(user));
+  const stack = [{ dir: root, depth: 0 }];
+  const items = [];
+  let scanned = 0;
+  let matched = 0;
+  let depthLimited = false;
+  let inaccessibleCount = 0;
+  while (stack.length && scanned < 10000) {
+    const { dir, depth } = stack.pop();
+    if (depth > 16) { depthLimited = true; continue; }
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => b.name.localeCompare(a.name)); }
+    catch (err) { inaccessibleCount += 1; continue; }
+    for (const entry of entries) {
+      if (scanned >= 10000) break;
+      scanned += 1;
+      if (entry.name.startsWith('.') || INTERNAL_PATH_PARTS.has(entry.name) || SENSITIVE_NAMES.test(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        try {
+          const real = fs.realpathSync(full);
+          if (isSameOrChild(baseReal, real)) stack.push({ dir: full, depth: depth + 1 });
+        } catch (err) { inaccessibleCount += 1; }
+      } else if (entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        try {
+          if (matched >= pageOffset && items.length < pageLimit) items.push(itemFor(user, full));
+          matched += 1;
+        } catch (err) { inaccessibleCount += 1; }
+      }
+    }
+  }
+  const complete = !depthLimited && inaccessibleCount === 0 && stack.length === 0 && scanned < 10000;
+  return { items, matchedCount: matched, scannedCount: scanned, inaccessibleCount, complete, nextOffset: pageOffset + items.length < matched ? pageOffset + items.length : null };
+};
+
 const readTextFile = (user, requested) => {
   const full = assertExistingPathSafe(user, requested);
   const stat = fs.statSync(full);
@@ -487,6 +536,7 @@ const actionSpec = (name, args) => {
     move_item: { title: '파일/폴더 이동', risk: 'reversible', actionType: name, sourcePath: args.source_path, destinationPath: args.destination_path },
     trash_item: { title: '휴지통으로 이동', risk: 'reversible', actionType: name, targetPath: args.path },
     organize_files_by_modified_date: { title: '수정일 기준 파일 정리', risk: 'reversible', actionType: name, sourcePath: args.folder_path, destinationFolder: args.destination_folder, granularity: args.granularity },
+    create_zip_bundle: { title: 'ZIP 다운로드 준비', risk: 'compute', actionType: name, paths: args.paths, bundleName: args.file_name },
     send_friend_request: { title: '친구 요청 보내기', risk: 'external', actionType: name, targetUser: args.user },
     set_user_blocked: { title: args.blocked ? '사용자 차단' : '차단 해제', risk: 'external', actionType: name, targetUser: args.user, blocked: args.blocked },
     send_chat_message: { title: '채팅 메시지 보내기', risk: 'external', actionType: name, targetUser: args.user, text: args.text },
@@ -584,6 +634,53 @@ const resolveOrganizationPlans = (user, plannedItems) => {
       throw new Error('승인 후 파일 상태가 변경되어 날짜별 정리를 중단했습니다. 새 계획을 만들어 다시 승인해주세요.');
     }
     return { from, folder: path.dirname(to), to };
+  });
+};
+
+const buildBundleManifest = (user, requestedPaths) => {
+  if (!Array.isArray(requestedPaths) || requestedPaths.length === 0 || requestedPaths.length > 50) {
+    throw Object.assign(new Error('ZIP 원본은 1개 이상 50개 이하의 NAS 경로로 지정해 주세요.'), { status: 400 });
+  }
+  const manifest = [];
+  const seen = new Set();
+  let totalBytes = 0;
+  let scanned = 0;
+  const visit = (full, depth) => {
+    scanned += 1;
+    if (scanned > 5000) throw new Error('ZIP 대상 탐색이 5000개 항목을 초과합니다. 범위를 나눠 요청해 주세요.');
+    if (depth > 16) throw new Error('ZIP 폴더 깊이가 16단계를 초과합니다.');
+    const stat = fs.lstatSync(full);
+    if (stat.isSymbolicLink()) throw new Error('ZIP에는 심볼릭 링크를 포함하지 않습니다.');
+    const relative = toRelative(user, full).slice(1);
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(full, { withFileTypes: true })) {
+        if (entry.name.startsWith('.') || INTERNAL_PATH_PARTS.has(entry.name) || SENSITIVE_NAMES.test(entry.name)) continue;
+        visit(path.join(full, entry.name), depth + 1);
+      }
+      return;
+    }
+    if (!stat.isFile() || seen.has(relative)) return;
+    if (manifest.length >= MAX_BUNDLE_FILES || totalBytes + stat.size > MAX_BUNDLE_BYTES) {
+      throw new Error('ZIP 한 번의 한도는 파일 200개·원본 합계 256MB입니다. 범위를 나눠 요청해 주세요.');
+    }
+    seen.add(relative);
+    totalBytes += stat.size;
+    manifest.push({ path: `/${relative}`, name: relative, size: stat.size, modifiedAtMs: Math.trunc(stat.mtimeMs) });
+  };
+  for (const requested of [...new Set(requestedPaths)]) visit(assertExistingPathSafe(user, requested), 0);
+  if (manifest.length === 0) throw new Error('ZIP에 넣을 일반 파일을 찾지 못했습니다.');
+  return { files: manifest, totalBytes };
+};
+
+const resolveBundleManifest = (user, manifest) => {
+  if (!Array.isArray(manifest) || manifest.length === 0 || manifest.length > MAX_BUNDLE_FILES) throw new Error('승인된 ZIP 파일 목록이 올바르지 않습니다.');
+  return manifest.map((item) => {
+    const full = assertExistingPathSafe(user, item.path);
+    const stat = fs.lstatSync(full);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== item.size || Math.trunc(stat.mtimeMs) !== item.modifiedAtMs) {
+      throw Object.assign(new Error('ZIP 승인 후 원본 파일이 바뀌었습니다. 다시 검색하고 ZIP을 준비해 주세요.'), { status: 409 });
+    }
+    return { full, name: item.name };
   });
 };
 
@@ -710,6 +807,10 @@ const executeAction = async (user, actionId, { platformCall }) => {
         throw err;
       }
       result = { movedCount: moved.length, destinationFolder: action.destinationFolder, granularity: action.granularity };
+    } else if (action.actionType === 'create_zip_bundle') {
+      const manifest = buildBundleManifest(user, action.paths);
+      updateAction(user, actionId, { bundleManifest: manifest.files });
+      result = { fileCount: manifest.files.length, totalBytes: manifest.totalBytes, downloadUrl: `/api/ai/actions/${encodeURIComponent(actionId)}/download` };
     } else if (action.actionType === 'create_note') {
       result = await platformCall('POST', '/note-studio/notes', action.notePayload);
     } else if (action.actionType === 'update_note') {
@@ -883,6 +984,7 @@ const runTool = async (user, name, args, context) => {
   if (name === 'get_agent_capabilities') return buildCapabilityCatalog(TOOL_DEFINITIONS);
   if (name === 'list_files') return listFiles(user, args.path);
   if (name === 'search_files') return searchFiles(user, args.query, args.path);
+  if (name === 'list_image_files') return listImageFiles(user, args.path, args.offset, args.limit);
   if (name === 'read_text_file') return readTextFile(user, args.path);
   if (name === 'search_conversation_history') return searchMessages(user, args.query, 20);
   if (name === 'list_notes') return context.platformCall('GET', `/note-studio/notes?q=${encodeURIComponent(args.query || '')}`);
@@ -940,6 +1042,13 @@ const runTool = async (user, name, args, context) => {
     throw err;
   }
   if (name === 'create_document') assertDocumentRequestSlots(context.userIntentText);
+  if (name === 'create_zip_bundle') {
+    if (!Array.isArray(args.paths) || !args.paths.every((value) => typeof value === 'string')) throw new Error('ZIP 원본 경로 목록이 올바르지 않습니다.');
+    if (!/^[^<>:"/\\|?*\x00-\x1f]{1,100}(?:\.zip)?$/i.test(String(args.file_name || ''))) throw new Error('ZIP 파일 이름이 올바르지 않습니다.');
+    for (const source of args.paths) assertExistingPathSafe(user, source);
+    const preview = buildBundleManifest(user, args.paths);
+    spec.preview = { itemCount: preview.files.length, totalBytes: preview.totalBytes, items: preview.files.map((item) => item.path) };
+  }
   if (name === 'move_item' && String(args.source_path || '').trim() === '/') throw new Error('계정 루트 자체는 이동할 수 없습니다.');
   if (name === 'organize_files_by_modified_date' && !['day', 'month'].includes(args.granularity)) throw new Error('정리 단위는 day 또는 month여야 합니다.');
   if (name === 'organize_files_by_modified_date') {
@@ -988,7 +1097,11 @@ module.exports = {
   runTool,
   listFiles,
   searchFiles,
+  listImageFiles,
+  buildBundleManifest,
+  resolveBundleManifest,
   readTextFile,
+  assertExistingPathSafe,
   assertToolPathAllowed,
   _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans, deriveAuthorizedMutationTools, deriveAuthorizedMutationToolsFromConversation, shouldKeepPendingTask, getMissingDocumentSlots, assertDocumentRequestSlots, MUTATION_TOOL_NAMES },
 };

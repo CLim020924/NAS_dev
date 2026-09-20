@@ -128,7 +128,7 @@ const buildChatPreviewText = (payload = {}) => {
 };
 
 
-const PersistentMainRoutes = () => {
+const PersistentMainRoutes = ({ aiPanelOpen = false }) => {
   const location = useLocation();
   const { openWindows, focusedContext } = useWindows();
   const isNasRoute = location.pathname.startsWith('/nas');
@@ -150,7 +150,7 @@ const PersistentMainRoutes = () => {
       <Box
         sx={getNasWorkspaceLayerSx({
           isNasRoute,
-          hasImmersiveNasWindow,
+          hasImmersiveNasWindow: hasImmersiveNasWindow && !aiPanelOpen,
           layerZIndex: getNasWindowLayerZIndex(openWindows, focusedContext, isNasRoute),
         })}
       >
@@ -418,12 +418,6 @@ function AppContent() {
                   chatSidebarMode={chatSidebarMode}
                   onOpenAi={() => { setAiPanelRequest(null); setAiPanelOpen(true); }}
                 />
-                <AiAgentPanel
-                  open={aiPanelOpen}
-                  onClose={() => { setAiPanelOpen(false); setAiPanelRequest(null); }}
-                  context={{ ...aiUiContext, ...(aiPanelRequest?.context || {}) }}
-                  draftRequest={aiPanelRequest}
-                />
                 <NotificationSidebar
                   open={notificationsOpen}
                   onClose={() => setNotificationsOpen(false)}
@@ -452,9 +446,17 @@ function AppContent() {
                   <DedicatedChatWindowLayer />
                   <ChatWorkspaceWindowLayer />
                 </ChatProvider>
-                <Box component="main" sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <Toolbar size="small" sx={{ minHeight: '48px !important', flexShrink: 0 }} />
-                  <PersistentMainRoutes />
+                <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
+                  <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, display: { xs: aiPanelOpen ? 'none' : 'flex', sm: 'flex' }, flexDirection: 'column', overflow: 'hidden' }}>
+                    <Toolbar size="small" sx={{ minHeight: '48px !important', flexShrink: 0 }} />
+                    <PersistentMainRoutes aiPanelOpen={aiPanelOpen} />
+                  </Box>
+                  <AiAgentPanel
+                    open={aiPanelOpen}
+                    onClose={() => { setAiPanelOpen(false); setAiPanelRequest(null); }}
+                    context={{ ...aiUiContext, ...(aiPanelRequest?.context || {}) }}
+                    draftRequest={aiPanelRequest}
+                  />
                 </Box>
                 </Box>
               </TransferProvider>

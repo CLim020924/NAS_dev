@@ -5,7 +5,6 @@ import {
   Button,
   Chip,
   Collapse,
-  Drawer,
   IconButton,
   LinearProgress,
   Paper,
@@ -20,12 +19,14 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import axios from 'axios';
 import { copyTextToClipboard } from '../utils/copyTextToClipboard';
+import ChatNasPickerDialog from './ChatNasPickerDialog';
 
 const DEFAULT_PREFERENCES = { approvalMode: 'ask_each', dailyTokenLimit: 50000 };
 const ACTIVE_ACTION_STATUSES = new Set(['pending', 'recovery_required']);
-const AI_PANEL_Z_INDEX = 2147483100;
 
 const newRequestId = () => {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -49,6 +50,12 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
   const [activity, setActivity] = useState(null);
   const [showLatestButton, setShowLatestButton] = useState(false);
   const [copiedMessageKey, setCopiedMessageKey] = useState('');
+  const [nasPickerOpen, setNasPickerOpen] = useState(false);
+  const [attachedNasPaths, setAttachedNasPaths] = useState([]);
+  const [localFiles, setLocalFiles] = useState([]);
+  const [dragActive, setDragActive] = useState(false);
+  const localInputRef = useRef(null);
+  const dragDepthRef = useRef(0);
   const scrollRef = useRef(null);
   const endRef = useRef(null);
   const followLatestRef = useRef(true);
@@ -145,6 +152,57 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
     copyClearTimerRef.current = window.setTimeout(() => setCopiedMessageKey(''), 1800);
   };
 
+  const addNasPaths = (paths) => {
+    setAttachedNasPaths((current) => [...new Set([...current, ...paths.filter((value) => typeof value === 'string' && value.startsWith('/'))])].slice(0, 10));
+  };
+
+  const addLocalFiles = async (incoming) => {
+    const prepared = [];
+    for (const file of Array.from(incoming || []).slice(0, 3)) {
+      let next = file;
+      if (file.type.startsWith('image/') && file.size > 160 * 1024 && window.createImageBitmap) {
+        const bitmap = await window.createImageBitmap(file);
+        try {
+          const scale = Math.min(1, 1200 / Math.max(bitmap.width, bitmap.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+          canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+          canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          for (const quality of [0.76, 0.58, 0.4]) {
+            const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+            if (blob) next = new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+            if (next.size <= 300 * 1024) break;
+          }
+        } finally { bitmap.close?.(); }
+      }
+      prepared.push(next);
+    }
+    const merged = [...localFiles, ...prepared];
+    if (merged.length > 3 || merged.reduce((sum, file) => sum + file.size, 0) > 320 * 1024) {
+      setError('PC 첨부는 최대 3개, 합계 320KB입니다. 큰 PDF·이미지는 크기를 줄인 뒤 다시 첨부해 주세요.');
+      return;
+    }
+    setError('');
+    setLocalFiles(merged);
+  };
+
+  const handleNasDrop = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    if (event.dataTransfer.files?.length) {
+      addLocalFiles(event.dataTransfer.files).catch(() => setError('PC 파일을 읽지 못했습니다. 다른 파일로 다시 시도해 주세요.'));
+      return;
+    }
+    try {
+      const dropped = JSON.parse(event.dataTransfer.getData('application/json') || '{}');
+      if (Array.isArray(dropped.draggedPaths)) addNasPaths(dropped.draggedPaths);
+    } catch (err) {
+      setError('NAS 항목을 확인할 수 없습니다. 첨부 버튼으로 다시 선택해 주세요.');
+    }
+  };
+
   const run = async (fn, options = {}) => {
     setLoading(true);
     setError('');
@@ -161,7 +219,10 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
 
   const sendMessage = () => {
     const text = message.trim();
-    if (!text || loading) return;
+    if ((!text && attachedNasPaths.length === 0 && localFiles.length === 0) || loading) return;
+    const promptText = text || '첨부한 항목을 확인하고 무엇인지 알려줘';
+    const sendingPaths = [...attachedNasPaths];
+    const sendingFiles = [...localFiles];
     followLatestRef.current = true;
     setShowLatestButton(false);
     const requestId = newRequestId();
@@ -171,16 +232,23 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
     });
     run(async () => {
       setMessage('');
+      setAttachedNasPaths([]);
+      setLocalFiles([]);
       const now = new Date().toISOString();
       setMessages((prev) => [
         ...prev,
-        { role: 'user', content: text, createdAt: now },
+        { role: 'user', content: `${promptText}${sendingPaths.length ? `\nNAS 첨부: ${sendingPaths.join(', ')}` : ''}${sendingFiles.length ? `\nPC 첨부: ${sendingFiles.map((file) => file.name).join(', ')}` : ''}`, createdAt: now },
       ]);
-      const res = await axios.post('/api/ai/chat', {
-        message: text,
-        context,
-        requestId,
-      }, { withCredentials: true });
+      const payload = sendingFiles.length ? new FormData() : {
+        message: promptText, context: { ...context, attachedNasPaths: sendingPaths }, requestId,
+      };
+      if (sendingFiles.length) {
+        payload.append('message', promptText);
+        payload.append('context', JSON.stringify({ ...context, attachedNasPaths: sendingPaths }));
+        payload.append('requestId', requestId);
+        sendingFiles.forEach((file) => payload.append('files', file, file.name));
+      }
+      const res = await axios.post('/api/ai/chat', payload, { withCredentials: true });
       const nextMessages = res.data?.messages || [];
       if (nextMessages.length) {
         setMessages(nextMessages);
@@ -203,6 +271,9 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
       clearActivityLater(waiting ? 3200 : 1800);
     }, {
       onError: (err) => {
+        setMessage(promptText);
+        setAttachedNasPaths(sendingPaths);
+        setLocalFiles(sendingFiles);
         setMessages((prev) => prev.filter((item) => !item.pending));
         setActivity((prev) => ({
           ...(prev || {}), requestId, state: 'failed', phase: 'failed', progress: 100,
@@ -247,21 +318,48 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
     setSettingsOpen(false);
   });
 
+  const downloadBundle = (action) => run(async () => {
+    await axios.get(`${action.result.downloadUrl}/check`, { withCredentials: true });
+    const anchor = document.createElement('a');
+    anchor.href = action.result.downloadUrl;
+    anchor.download = `${String(action.bundleName || 'NAS-files').replace(/\.zip$/i, '')}.zip`;
+    anchor.click();
+  });
+
   const visibleActions = useMemo(() => actions.filter((action) => (
     ACTIVE_ACTION_STATUSES.has(action.status) || action.continuationStatus === 'response_pending'
   )), [actions]);
+  const completedBundles = useMemo(() => actions.filter((action) =>
+    action.actionType === 'create_zip_bundle' && action.status === 'completed' && action.result?.downloadUrl).slice(0, 3), [actions]);
   const firstModernMessageIndex = messages.findIndex((item) => item.agentRunId);
   const hasLegacyMessages = messages.some((item) => !item.agentRunId);
   const today = new Date().toISOString().slice(0, 10);
   const todayUsage = usage.days?.[today] || { totalTokens: 0, requests: 0 };
 
   return (
-    <Drawer
-      anchor="right"
-      open={open}
-      onClose={onClose}
-      sx={{ zIndex: AI_PANEL_Z_INDEX }}
-      PaperProps={{ sx: { width: { xs: '100%', sm: 480 }, maxWidth: '100vw', zIndex: AI_PANEL_Z_INDEX } }}
+    <Box
+      component="aside"
+      aria-label="AI 에이전트"
+      onDragEnter={(event) => { event.preventDefault(); dragDepthRef.current += 1; setDragActive(true); }}
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+      onDragLeave={(event) => { event.preventDefault(); dragDepthRef.current = Math.max(0, dragDepthRef.current - 1); if (dragDepthRef.current === 0) setDragActive(false); }}
+      onDrop={handleNasDrop}
+      onPaste={(event) => {
+        const files = event.clipboardData?.files;
+        if (files?.length) {
+          event.preventDefault();
+          addLocalFiles(files).catch(() => setError('붙여넣은 파일을 읽지 못했습니다.'));
+        }
+      }}
+      sx={{
+        display: open ? 'block' : 'none',
+        width: { xs: '100%', sm: 400, lg: 440 },
+        flexShrink: 0,
+        minWidth: 0,
+        height: '100%',
+        borderLeft: (theme) => `2px solid ${dragActive ? theme.palette.primary.main : theme.palette.divider}`,
+        bgcolor: 'background.paper',
+      }}
     >
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
@@ -418,6 +516,11 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                   {action.destinationFolder && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>대상 폴더: {action.destinationFolder}</Typography>}
                   {(action.targetUserDisplayName || action.targetUser) && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>사용자: {action.targetUserDisplayName || action.targetUser}</Typography>}
                   {action.preview?.itemCount !== undefined && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>승인 대상: {action.preview.itemCount}개</Typography>}
+                  {action.actionType === 'create_zip_bundle' && Array.isArray(action.preview?.items) && (
+                    <Box component="ul" sx={{ maxHeight: 150, overflowY: 'auto', mt: 0.5, pl: 2, fontSize: 12 }}>
+                      {action.preview.items.map((item) => <li key={item}>{item}</li>)}
+                    </Box>
+                  )}
                   {action.recoveryReason && <Alert severity="warning" sx={{ mt: 1 }}>{action.recoveryReason}</Alert>}
                   {action.status === 'pending' && (
                     <Stack direction="row" spacing={1} sx={{ mt: 1.25 }}>
@@ -430,6 +533,16 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                       <Button size="small" sx={{ mt: 1 }} disabled={loading} onClick={() => resumeRun(action.agentRunId)}>답변 이어가기</Button>
                     </Tooltip>
                   )}
+                </Paper>
+              ))}
+
+              {completedBundles.map((action) => (
+                <Paper key={action.actionId} variant="outlined" sx={{ p: 1.5 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>ZIP 다운로드 준비 완료</Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                    {action.result.fileCount}개 파일 · {Math.ceil(action.result.totalBytes / 1024 / 1024)}MB · 다운로드 시 원본 변경 여부 재확인
+                  </Typography>
+                  <Button size="small" variant="outlined" disabled={loading} onClick={() => downloadBundle(action)}>ZIP 다운로드</Button>
                 </Paper>
               ))}
 
@@ -456,7 +569,33 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
         </Box>
 
         <Box sx={{ p: 1.5, borderTop: (theme) => `1px solid ${theme.palette.divider}`, bgcolor: 'background.paper' }}>
+          {attachedNasPaths.length > 0 && (
+            <Stack direction="row" spacing={0.5} sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }}>
+              {attachedNasPaths.map((item) => (
+                <Chip key={item} size="small" label={item.split('/').pop() || '/'} title={item} onDelete={() => setAttachedNasPaths((current) => current.filter((path) => path !== item))} />
+              ))}
+            </Stack>
+          )}
+          {localFiles.length > 0 && (
+            <Stack direction="row" spacing={0.5} sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }}>
+              {localFiles.map((file, index) => (
+                <Chip key={`${file.name}-${index}`} size="small" label={`PC · ${file.name}`} onDelete={() => setLocalFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} />
+              ))}
+            </Stack>
+          )}
+          {Array.isArray(context.selectedPaths) && context.selectedPaths.length > 0 && (
+            <Button size="small" sx={{ mb: 0.75 }} onClick={() => addNasPaths(context.selectedPaths)} disabled={loading}>
+              바탕화면 선택 항목 첨부 ({context.selectedPaths.length})
+            </Button>
+          )}
           <Stack direction="row" spacing={1} alignItems="flex-end">
+            <input ref={localInputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,.docx,.pptx,.xlsx,.odt,.ods,.txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.py,.html,.css,.xml,.yaml,.yml,.log" hidden onChange={(event) => { addLocalFiles(event.target.files).catch(() => setError('PC 파일을 읽지 못했습니다.')); event.target.value = ''; }} />
+            <Tooltip title="PC 사진·파일 첨부">
+              <IconButton aria-label="PC 사진·파일 첨부" onClick={() => localInputRef.current?.click()} disabled={loading} sx={{ mb: 0.5 }}><AttachFileIcon /></IconButton>
+            </Tooltip>
+            <Tooltip title="NAS 파일·폴더 첨부">
+              <IconButton aria-label="NAS 파일·폴더 첨부" onClick={() => setNasPickerOpen(true)} disabled={loading} sx={{ mb: 0.5 }}><FolderOpenIcon /></IconButton>
+            </Tooltip>
             <TextField
               fullWidth
               multiline
@@ -474,14 +613,15 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
               }}
               inputProps={{ 'aria-label': 'AI에게 요청' }}
             />
-            <Button variant="contained" disabled={loading || !message.trim()} onClick={sendMessage} sx={{ minHeight: 40 }}>전송</Button>
+            <Button variant="contained" disabled={loading || (!message.trim() && attachedNasPaths.length === 0 && localFiles.length === 0)} onClick={sendMessage} sx={{ minHeight: 40 }}>전송</Button>
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Enter 전송 · Shift+Enter 줄바꿈
+            Enter 전송 · Shift+Enter 줄바꿈 · PC 파일 붙여넣기/드래그 · NAS 파일 드래그 · 첨부 내용은 AI 모델로 전송됩니다
           </Typography>
         </Box>
       </Box>
-    </Drawer>
+      <ChatNasPickerDialog open={nasPickerOpen} onClose={() => setNasPickerOpen(false)} onConfirm={(paths) => { addNasPaths(paths); setNasPickerOpen(false); }} title="AI에 NAS 항목 첨부" />
+    </Box>
   );
 };
 
