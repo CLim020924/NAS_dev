@@ -288,13 +288,16 @@ const normalizePreferences = (value = {}) => ({
 const NON_EXECUTION_QUESTION = /(?:방법(?:만)?(?:을)?\s*(?:알려|설명)|어떻게\s*(?:해|하|쓰|사용)|가능한지|(?:할|해\s*줄)\s*수\s*(?:있|없)\s*(?:는지)?|해도\s*(?:돼|되|될)|하면\s*될까|뭐야|무엇이야|차이(?:가|는)?|버튼.*어디|어디.*버튼|여부(?:를)?\s*(?:알려|확인)|기능(?:을)?\s*(?:설명|알려)|안전해\??)/i;
 const RECALL_OR_PAST_QUESTION = /(?:했었|한\s*적|했는지|했지\??|했나\??|(?:했|됐|되었|지워졌)(?:어|어요|니|나요)\??|말했|요청했|기록.*찾아|대화.*찾아)/i;
 const PROHIBITED_REQUEST = /(?:하지\s*마|하지마|하지\s*말|하지말|하지\s*않|하지않|보내지\s*마|삭제하지|지우지|옮기지|복사하지|실행하지|만들지|생성하지|수정하지|저장하지|추가하지|차단하지|말고)/i;
-const EXPLICIT_EXECUTION_REQUEST = /(?:해\s*줘|해\s*줄래|해줄래|해주세요|해\s*주세요|해라|해봐|부탁해|부탁합니다|시작해|실행해|돌려줘|돌려\s*줘|돌려\s*줄래|돌려줄래|복원해\s*줄래|복원해줄래|만들어|생성해|작성해|저장해|수정해|편집해|추가해|덧붙여|복사해|복제해|묶어줘|압축해줘|옮겨|이동해|바꿔|변경해|삭제해|지워|정리해|분류해|보내줘|보내\s*줘|보내\s*줄래|보내줄래|전송해|공유해|차단해|해제해|알려줘|나가줘|퇴장해|수락해|거절해|거부해|재개해|중단해|켜\s*줘|꺼\s*줘|켜줘|꺼줘)/i;
+const EXPLICIT_EXECUTION_REQUEST = /(?:해\s*줘|해\s*줄래|해줄래|해주세요|해\s*주세요|해라|해봐|부탁해|부탁합니다|시작해|실행해|돌려줘|돌려\s*줘|돌려\s*줄래|돌려줄래|복원해\s*줄래|복원해줄래|만들어|생성해|작성해|저장해|수정해|편집해|추가해|덧붙여|복사해|복제해|묶어줘|압축해줘|옮겨|이동해|바꿔|변경해|삭제해|지워|정리해|분류해|보내줘|보내\s*줘|보내\s*줄래|보내줄래|전송해|공유해|차단해|해제해|나가줘|퇴장해|수락해|거절해|거부해|재개해|중단해|켜\s*줘|꺼\s*줘|켜줘|꺼줘)/i;
+const EXPLICIT_COMMUNICATION_REQUEST = /(?:에게|한테).{0,200}(?:알려\s*줘|말해\s*줘)/i;
+const INFORMATION_REQUEST = /(?:알려\s*줘|보여\s*줘|찾아\s*줘|확인해\s*줘|조회해\s*줘|목록|리스트|현황|상태|기록|내역|누가|몇\s*개|뭐|무엇|어떤|어느|어디|언제|왜|어떻게|있는지|없는지)/i;
 const FORBIDDEN_ACCOUNT_OR_SECURITY_MUTATION = /(?:영구\s*삭제|(?:계정|사용자).*(?:영구\s*)?(?:삭제|지우|생성|만들)|(?:비밀번호|암호|보안\s*설정|API\s*키|개인키).*(?:조회|보여|변경|바꿔|수정|설정))/i;
 const CANCEL_PENDING_REQUEST = /^(?:아니|아니야|취소|취소해|그만|그만해|됐어|하지\s*마|하지마|중단|중단해)[.!?\s]*$/i;
 
 const deriveAuthorizedMutationTools = (userRequest = '') => {
   const text = String(userRequest || '').trim();
-  if (!text || !EXPLICIT_EXECUTION_REQUEST.test(text)) return [];
+  const hasExecutionRequest = EXPLICIT_EXECUTION_REQUEST.test(text) || EXPLICIT_COMMUNICATION_REQUEST.test(text);
+  if (!text || !hasExecutionRequest) return [];
   if (NON_EXECUTION_QUESTION.test(text) || RECALL_OR_PAST_QUESTION.test(text) || PROHIBITED_REQUEST.test(text)) return [];
   if (FORBIDDEN_ACCOUNT_OR_SECURITY_MUTATION.test(text)) return [];
 
@@ -353,6 +356,10 @@ const deriveAuthorizedMutationToolsFromConversation = (message = '', history = [
   if (PROHIBITED_REQUEST.test(text) || NON_EXECUTION_QUESTION.test(text) || RECALL_OR_PAST_QUESTION.test(text)) {
     return { tools: [], cancelled: false, carried: false };
   }
+  const hasExecutionRequest = EXPLICIT_EXECUTION_REQUEST.test(text) || EXPLICIT_COMMUNICATION_REQUEST.test(text);
+  if (INFORMATION_REQUEST.test(text) && !hasExecutionRequest) {
+    return { tools: [], cancelled: false, carried: false };
+  }
   const acknowledgesPending = /^(?:(?:응|네|예|그래|좋아|알겠어)\s*)?(?:진행해|계속해|그렇게\s*해|해줘|해주세요|만들어줘|생성해줘|보내줘|전송해줘|실행해줘|돌려줘|저장해줘)[.!?\s]*$/i.test(text);
   const pendingTools = Array.isArray(pendingTask?.authorizedMutationTools) ? pendingTask.authorizedMutationTools : [];
   const contextualRecipient = pendingTools.some((name) => ['send_friend_request', 'send_chat_message', 'send_file_to_user'].includes(name))
@@ -373,7 +380,7 @@ const deriveAuthorizedMutationToolsFromConversation = (message = '', history = [
 
   if (pendingTask?.status === 'collecting' && Array.isArray(pendingTask.authorizedMutationTools)) {
     const age = Date.now() - Date.parse(pendingTask.updatedAt || pendingTask.createdAt || '');
-    const looksLikeNewQuestion = /(?:뭐|무엇|어디|언제|왜|어떻게|알려|설명|가능|있어|없어|인가|일까|까\??)$/i.test(text);
+    const looksLikeNewQuestion = INFORMATION_REQUEST.test(text) || /(?:설명|가능|있어|없어|인가|일까|까\??)$/i.test(text);
     if (Number.isFinite(age) && age <= 30 * 60 * 1000 && text.length <= 120 && !looksLikeNewQuestion) {
       return { tools: [...new Set(pendingTask.authorizedMutationTools)], cancelled: false, carried: true };
     }

@@ -325,12 +325,12 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
       ? `${replies.join(', ')} 복구 요청`
       : (selectAll && frame.allowAll ? '표시된 항목 전부 선택' : `${replies.join(', ')} 선택`);
     setSelectionByMessage((current) => ({ ...current, [messageKey]: [] }));
-    sendMessage(reply, {
+    sendMessage(reply, isTrashRestore ? {
       sourceMessageId: item.messageId || null,
       sourceCreatedAt: item.createdAt || null,
       selectedKeys: keys,
       selectAll,
-    });
+    } : null);
   };
 
   const executeAction = (actionId) => run(async () => {

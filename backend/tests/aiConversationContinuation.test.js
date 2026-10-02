@@ -87,6 +87,38 @@ test('과거 삭제 내역 질문은 이전 복구 권한을 이어받지 않는
   }
 });
 
+test('변경 단어가 포함된 전 영역 조회는 실행 권한을 만들거나 이전 작업을 승계하지 않는다', () => {
+  const prompts = [
+    '차단된 사용자 알려줘',
+    '친구 추가된 사용자 목록 알려줘',
+    '읽음 처리된 알림 알려줘',
+    '연결 해제된 PC 알려줘',
+    '가입 승인된 계정 알려줘',
+    '삭제된 노트 알려줘',
+    '이동한 파일 내역 알려줘',
+    '공유한 파일 목록 알려줘',
+    '변경된 사용자 역할 현황 알려줘',
+  ];
+  const pending = {
+    status: 'collecting',
+    updatedAt: new Date().toISOString(),
+    originalRequest: '민수를 차단해줘',
+    authorizedMutationTools: ['set_user_blocked'],
+  };
+  prompts.forEach((message) => {
+    assert.deepEqual(deriveAuthorizedMutationTools(message), [], message);
+    assert.deepEqual(
+      deriveAuthorizedMutationToolsFromConversation(message, [], pending),
+      { tools: [], cancelled: false, carried: false },
+      message,
+    );
+  });
+});
+
+test('상대에게 알려달라는 명시적 전송 요청은 조회가 아니라 채팅 실행으로 유지한다', () => {
+  assert.deepEqual(deriveAuthorizedMutationTools('민수에게 회의가 취소됐다고 알려줘'), ['send_chat_message']);
+});
+
 test('실행되지 않은 보충 질문만 미완성 작업으로 유지한다', () => {
   assert.equal(shouldKeepPendingTask('누구에게 보낼까요?', [], ['send_chat_message']), true);
   assert.equal(shouldKeepPendingTask('완료했습니다.', [{ name: 'send_chat_message', ok: true }], ['send_chat_message']), false);

@@ -63,6 +63,37 @@ const CONFIG = {
   search_public_meetings: { title: '회의 선택' },
 };
 
+const SOURCE_TO_MUTATIONS = Object.freeze({
+  list_trash: ['restore_trash_item'],
+  list_files: ['copy_item', 'move_item', 'trash_item', 'organize_files_by_modified_date', 'create_zip_bundle', 'send_file_to_user', 'set_file_favorite', 'create_share_link', 'attach_note_item'],
+  search_files: ['copy_item', 'move_item', 'trash_item', 'organize_files_by_modified_date', 'create_zip_bundle', 'send_file_to_user', 'set_file_favorite', 'create_share_link', 'attach_note_item'],
+  list_image_files: ['copy_item', 'move_item', 'trash_item', 'create_zip_bundle', 'send_file_to_user', 'set_file_favorite', 'create_share_link', 'attach_note_item'],
+  list_file_versions: ['restore_file_version'],
+  list_drive_restore_points: ['restore_drive_restore_point'],
+  list_activity: ['copy_item', 'move_item', 'trash_item', 'create_zip_bundle', 'send_file_to_user', 'set_file_favorite', 'create_share_link'],
+  list_favorites: ['copy_item', 'move_item', 'trash_item', 'create_zip_bundle', 'send_file_to_user', 'set_file_favorite', 'create_share_link', 'attach_note_item'],
+  list_recent_files: ['copy_item', 'move_item', 'trash_item', 'create_zip_bundle', 'send_file_to_user', 'set_file_favorite', 'create_share_link', 'attach_note_item'],
+  list_friends: ['send_friend_request', 'set_user_blocked', 'send_chat_message', 'send_file_to_user', 'accept_friend_request', 'reject_friend_request', 'remove_friend', 'set_friend_favorite', 'create_group_chat', 'invite_group_chat', 'transfer_group_owner', 'set_group_cohost', 'kick_group_member'],
+  search_users: ['send_friend_request', 'set_user_blocked', 'send_chat_message', 'send_file_to_user', 'accept_friend_request', 'reject_friend_request', 'remove_friend', 'set_friend_favorite', 'create_group_chat', 'invite_group_chat', 'transfer_group_owner', 'set_group_cohost', 'kick_group_member'],
+  list_chat_conversations: ['send_chat_message', 'create_group_chat', 'invite_group_chat', 'respond_group_invite', 'leave_group_chat', 'send_group_message', 'transfer_group_owner', 'set_group_cohost', 'kick_group_member', 'delete_group_chat', 'save_chat_attachments', 'mark_chat_read'],
+  list_notifications: ['mark_notification_read', 'mark_all_notifications_read', 'respond_group_invite'],
+  list_notebooks: ['create_note', 'create_office_document', 'attach_note_item'],
+  list_notes: ['update_note', 'trash_note', 'run_python_note', 'run_javascript_note', 'restore_note_version', 'attach_note_item', 'remove_note_attachment', 'create_office_document'],
+  list_deleted_notes: ['restore_note'],
+  list_note_versions: ['restore_note_version'],
+  list_devices: ['set_device_sync', 'revoke_device'],
+  list_users_admin: ['update_managed_user', 'approve_signup', 'reject_signup', 'set_resource_policy'],
+  list_shares: ['set_share_paused', 'revoke_share_link', 'update_share_link', 'regenerate_share_token'],
+  search_public_meetings: ['configure_meeting', 'start_meeting', 'save_meeting'],
+});
+
+const getSelectionSourcesForMutationTools = (mutationTools = []) => {
+  const requested = new Set(Array.isArray(mutationTools) ? mutationTools : []);
+  return Object.entries(SOURCE_TO_MUTATIONS)
+    .filter(([, compatible]) => compatible.some((name) => requested.has(name)))
+    .map(([source]) => source);
+};
+
 const describe = (toolName, item) => {
   const parts = [];
   if (item?._selectionGroup) parts.push(clean(item._selectionGroup, 40));
@@ -122,8 +153,11 @@ const normalizeSelectionFrame = (frame) => {
   };
 };
 
-const buildSelectionFrame = (events = []) => {
-  const event = [...events].reverse().find((candidate) => candidate?.ok === true && CONFIG[candidate.name]);
+const buildSelectionFrame = (events = [], { allowedSourceTools = null } = {}) => {
+  const allowed = Array.isArray(allowedSourceTools) ? new Set(allowedSourceTools) : null;
+  const event = [...events].reverse().find((candidate) => candidate?.ok === true
+    && CONFIG[candidate.name]
+    && (!allowed || allowed.has(candidate.name)));
   if (!event) return null;
   const rows = extractRows(event.name, event.result);
   if (!rows.length) return null;
@@ -151,4 +185,10 @@ const formatSelectionText = (frame) => {
   return `${normalized.instruction} 번호는 \`1, 3\`처럼 입력할 수 있고${allHint}라고 입력할 수 있습니다.\n\n${rows.join('\n')}`;
 };
 
-module.exports = { buildSelectionFrame, normalizeSelectionFrame, formatSelectionText, _test: { extractRows, optionFor } };
+module.exports = {
+  buildSelectionFrame,
+  normalizeSelectionFrame,
+  formatSelectionText,
+  getSelectionSourcesForMutationTools,
+  _test: { extractRows, optionFor, SOURCE_TO_MUTATIONS },
+};

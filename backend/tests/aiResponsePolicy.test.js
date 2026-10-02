@@ -157,6 +157,43 @@ test('변경 권한이 있어도 모델이 선택을 요청하지 않은 무관�
   assert.equal(finalized.answer, '현재 폴더를 확인했습니다.');
 });
 
+test('변경 요청의 선택 UI는 해당 작업과 호환되는 목록 결과에만 결속한다', () => {
+  const finalized = finalizeAgentAnswer('민수에게 파일을 보내줘', {
+    text: '보낼 파일을 선택해 주세요.',
+    events: [
+      { name: 'search_files', ok: true, result: [{ name: '보고서.pdf', path: '/문서/보고서.pdf' }] },
+      { name: 'list_notifications', ok: true, result: { notifications: [{ title: '새 알림', id: 'secret' }] } },
+    ],
+  }, ['send_file_to_user']);
+  assert.equal(finalized.selectionFrame.sourceTool, 'search_files');
+  assert.equal(finalized.selectionFrame.title, '검색 결과 선택');
+  assert.doesNotMatch(JSON.stringify(finalized.selectionFrame), /secret/);
+});
+
+test('응답이 선택을 요구해도 현재 변경 작업과 무관한 목록은 선택 UI로 만들지 않는다', () => {
+  const finalized = finalizeAgentAnswer('민수를 차단해줘', {
+    text: '어느 알림을 선택해 주세요.',
+    events: [{ name: 'list_notifications', ok: true, result: { notifications: [{ title: '새 알림' }] } }],
+  }, ['set_user_blocked']);
+  assert.equal(finalized.selectionFrame, null);
+  assert.equal(finalized.answer, '어느 알림을 선택해 주세요.');
+});
+
+test('파일 사용자 노트 장치 공유 회의의 단순 조회는 모두 텍스트 응답만 유지한다', () => {
+  const cases = [
+    ['최근 파일 알려줘', 'list_recent_files', { files: [{ name: '보고서.pdf', path: '/보고서.pdf' }] }],
+    ['차단된 사용자 알려줘', 'list_friends', { blockedUsers: [{ displayName: '민수', username: 'minsu' }] }],
+    ['노트 목록 알려줘', 'list_notes', { notes: [{ title: '회의록' }] }],
+    ['연결된 PC 상태 알려줘', 'list_devices', { devices: [{ deviceName: '노트북' }] }],
+    ['공유 링크 목록 알려줘', 'list_shares', { shares: [{ name: '자료 공유' }] }],
+    ['참여 가능한 회의 알려줘', 'search_public_meetings', { meetings: [{ title: '주간 회의' }] }],
+  ];
+  cases.forEach(([prompt, name, result]) => {
+    const finalized = finalizeAgentAnswer(prompt, { text: `${prompt} 결과입니다.`, events: [{ name, ok: true, result }] });
+    assert.equal(finalized.selectionFrame, null, prompt);
+  });
+});
+
 test('모델이 후보 목록을 이미 썼어도 선택 질문은 서버의 한 목록으로 정규화한다', () => {
   const result = finalizeAgentAnswer('어떤 파일인지 골라줘', {
     text: '후보입니다.\n1. 보고서.pdf\n2. 사진.png\n어떤 파일을 선택할까요?',

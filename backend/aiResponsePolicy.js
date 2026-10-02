@@ -6,12 +6,13 @@ const NUMERIC_ONLY_REQUEST = /(?:숫자(?:로)?만|번호(?:로)?만)/i;
 const PATH_ONLY_REQUEST = /(?:경로만\s*(?:답|말|알려)|(?:답|말).*(?:경로만))/i;
 const EXPLICIT_SELECTION_REQUEST = /(?:선택\s*(?:가능한|할\s*수\s*있는)?\s*(?:목록|리스트|항목|화면)|번호(?:를|로)?\s*(?:매겨|나눠|보여|알려)|(?:목록|리스트|후보).{0,24}(?:골라|선택)|(?:골라|선택).{0,24}(?:목록|리스트|후보)|선택지(?:를|가)?\s*(?:보여|필요))/i;
 const ANSWER_REQUESTS_SELECTION = /(?:선택해\s*(?:줘|주세요|주시면)|골라\s*(?:줘|주세요|주시면)|번호(?:를|로)?\s*(?:알려|입력|선택)|(?:어떤|어느).{0,32}(?:고를|선택|복구|복원|원하시|할까요)|원하는.{0,24}(?:항목|파일|사용자|번호).{0,20}(?:알려|선택))/i;
-const { buildSelectionFrame, formatSelectionText } = require('./aiSelectionFrame');
+const { buildSelectionFrame, formatSelectionText, getSelectionSourcesForMutationTools } = require('./aiSelectionFrame');
 
-const shouldExposeSelectionFrame = (userMessage, answer, authorizedMutationTools = []) => (
-  EXPLICIT_SELECTION_REQUEST.test(String(userMessage || ''))
-  || (authorizedMutationTools.length > 0 && ANSWER_REQUESTS_SELECTION.test(String(answer || '')))
-);
+const shouldExposeSelectionFrame = (userMessage, answer, authorizedMutationTools = [], sourceTool = '') => {
+  if (EXPLICIT_SELECTION_REQUEST.test(String(userMessage || ''))) return true;
+  if (!ANSWER_REQUESTS_SELECTION.test(String(answer || ''))) return false;
+  return getSelectionSourcesForMutationTools(authorizedMutationTools).includes(sourceTool);
+};
 
 const formatTrashSelection = (items = []) => {
   const safeItems = items.slice(0, 50);
@@ -76,9 +77,11 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTo
       };
     }
   }
-  const candidateSelectionFrame = buildSelectionFrame(agentResult.events || []);
+  const explicitSelection = EXPLICIT_SELECTION_REQUEST.test(String(userMessage || ''));
+  const allowedSourceTools = explicitSelection ? null : getSelectionSourcesForMutationTools(authorizedMutationTools);
+  const candidateSelectionFrame = buildSelectionFrame(agentResult.events || [], { allowedSourceTools });
   const selectionFrame = candidateSelectionFrame
-    && shouldExposeSelectionFrame(userMessage, answer, authorizedMutationTools)
+    && shouldExposeSelectionFrame(userMessage, answer, authorizedMutationTools, candidateSelectionFrame.sourceTool)
     ? candidateSelectionFrame
     : null;
   if (authorizedMutationTools.includes('restore_trash_item')) {
