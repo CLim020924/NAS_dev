@@ -1930,3 +1930,9 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 운영 배포: 기능·기록 commit `949fdf1`을 GitHub와 NAS 활성 브랜치에 fast-forward했다. NAS Linux 단가 시험 3/3과 변경 JavaScript 구문 검사가 통과했고 `msp-backend` restart/save 후 online이다. 로컬·staging·운영 `main.050cdd80.js` SHA-256은 `1602E83E387E4CB010AD0F3C372DEC52E561AD66626D23BA53112A5D7F07F723`으로 일치한다. `ssh`·`tailscaled`·`nginx`·`docker`·`pm2-root`·`cloudflared` active, 내부 AI status·공개 사이트·새 bundle HTTP 200을 확인했다.
 - 운영 실화면: 로그인된 Chrome에서 최소 요청을 1회 실행했고 새 답변 `확인`의 최하단 왼쪽에 `0.00$`가 작고 희미한 회색으로 표시됐다. 실제 메타데이터는 `gpt-4.1-mini`, 입력 1,696·캐시 입력 0·출력 4토큰이며 계산액은 반올림 전 약 `$0.0006848`이다. 표시 computed style은 rgba(0,0,0,0.38), opacity 0.72, 8.64px였다. 새로고침 후에도 동일 billing 스냅샷과 tooltip이 유지됐고 브라우저 console error는 0건이었다. 기존 메시지는 의도대로 비용을 표시하지 않는다.
 - 최종 기록: workbook의 관련 Feature_Index·Patch_Log·Generated_Check 상태를 `완료 · 운영 배포 · 실화면 검증`으로 갱신하고 artifact-tool export·재열기·수식 오류 0건·대상 행 검색·변경 범위 렌더를 다시 확인했다.
+
+### 2026-10-02 AI 응답 비용 소수점 네 자리 표시
+
+- 사용자 정정: AI 답변 하단의 USD 비용을 소수점 둘째 자리가 아니라 넷째 자리까지 표시한다.
+- 수정: 비용 계산·저장·공식 단가 스냅샷은 그대로 유지하고 `AiAgentPanel.js`의 화면 문자열과 접근성 설명을 모두 `toFixed(4)`로 바꿨다. UI contract도 `0.0000$` 형식을 강제해 두 자리 표시로 되돌아가는 회귀를 막는다.
+- 현재 검증: UI contract 121개 소스, production build `main.a90a9809.js`, react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate가 통과했다. workbook의 Do_Not_Break·Feature_Index·Relation_Map·Code_Map 기존 설명을 네 자리 기준으로 고치고 Request_Archive·Patch_Log·Generated_Check에 이번 정정을 추가했다. artifact-tool export·재열기·수식 오류 0건·신규 문자열 깨짐 검사·변경 범위 렌더를 확인했다. 운영 배포와 실화면 결과는 이어서 기록한다.

@@ -638,7 +638,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                         {item.role === 'assistant' && Number.isFinite(Number(item.billing?.estimatedUsd)) && (
                           <Typography
                             variant="caption"
-                            aria-label={`${item.billing.model || 'AI'} 토큰 비용 ${Number(item.billing.estimatedUsd).toFixed(2)}달러`}
+                            aria-label={`${item.billing.model || 'AI'} 토큰 비용 ${Number(item.billing.estimatedUsd).toFixed(4)}달러`}
                             title={`${item.billing.model || 'AI'} · 입력 ${Number(item.billing.usage?.inputTokens || 0).toLocaleString()} · 캐시 입력 ${Number(item.billing.usage?.cachedInputTokens || 0).toLocaleString()} · 출력 ${Number(item.billing.usage?.outputTokens || 0).toLocaleString()} 토큰`}
                             sx={{
                               mr: 'auto',
@@ -649,7 +649,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                               userSelect: 'text',
                             }}
                           >
-                            {Number(item.billing.estimatedUsd).toFixed(2)}$
+                            {Number(item.billing.estimatedUsd).toFixed(4)}$
                           </Typography>
                         )}
                         <Tooltip title={copiedMessageKey === messageKey ? '복사됨' : '메시지 복사'}>
