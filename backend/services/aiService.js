@@ -79,13 +79,31 @@ const normalizeUsage = (usage = {}) => ({
   inputTokens: Number(usage.input_tokens ?? usage.prompt_tokens ?? 0),
   outputTokens: Number(usage.output_tokens ?? usage.completion_tokens ?? 0),
   totalTokens: Number(usage.total_tokens ?? 0),
+  cachedInputTokens: Number(
+    usage.input_tokens_details?.cached_tokens
+    ?? usage.prompt_tokens_details?.cached_tokens
+    ?? 0
+  ),
 });
 
 const addUsage = (left, right) => ({
   inputTokens: left.inputTokens + right.inputTokens,
   outputTokens: left.outputTokens + right.outputTokens,
   totalTokens: left.totalTokens + right.totalTokens,
+  cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
 });
+
+const canonicalJson = (value) => {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+const safeLoopAnswer = (reason) => reason === 'token_budget'
+  ? '오늘 남은 AI 토큰 한도 안에서 안전하게 중단했습니다. 이미 완료된 조회 결과는 유지했으며, 변경 작업을 완료했다고 처리하지 않았습니다. 요청 범위를 줄이거나 한도를 조정한 뒤 이어서 요청해 주세요.'
+  : '같은 조회가 반복되어 추가 비용이 생기지 않도록 자동으로 중단했습니다. 이미 확인한 조회 결과는 유지했으며, 변경 작업을 완료했다고 처리하지 않았습니다.';
 
 const callOpenAIAgent = async ({
   systemPrompt,
@@ -97,6 +115,8 @@ const callOpenAIAgent = async ({
   onProgress,
   maxTurns = config.AI_MAX_AGENT_TURNS,
   maxOutputTokens = config.AI_MAX_OUTPUT_TOKENS,
+  maxTotalTokens = Number.POSITIVE_INFINITY,
+  isReadOnlyToolCall = () => false,
   fetchImpl = fetch,
 }) => {
   if (!isAiConfigured()) {
@@ -116,8 +136,10 @@ const callOpenAIAgent = async ({
   if (Array.isArray(resumeOutputs) && resumeOutputs.length > 0) {
     responseInput = [...responseInput, ...resumeOutputs];
   }
-  let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0 };
   const events = [];
+  const completedReadCalls = new Map();
+  const readCallOccurrences = new Map();
   let toolCallCount = Number(resumeState?.toolCallCount || 0);
   const firstTurn = Number(resumeState?.nextTurn || 0);
   const notifyProgress = async (event) => {
@@ -126,6 +148,9 @@ const callOpenAIAgent = async ({
   };
 
   for (let turn = firstTurn; turn < maxTurns; turn += 1) {
+    if (usage.totalTokens > 0 && usage.totalTokens + 128 > maxTotalTokens) {
+      return { text: safeLoopAnswer('token_budget'), usage, events, protocolWarning: 'AI_REQUEST_TOKEN_BUDGET_STOPPED' };
+    }
     await notifyProgress({ type: 'model_request', turn: turn + 1, toolCallCount });
     let data;
     try {
@@ -143,6 +168,10 @@ const callOpenAIAgent = async ({
       throw err;
     }
     usage = addUsage(usage, normalizeUsage(data.usage));
+
+    if (usage.totalTokens > maxTotalTokens) {
+      return { text: safeLoopAnswer('token_budget'), usage, events, protocolWarning: 'AI_REQUEST_TOKEN_BUDGET_STOPPED' };
+    }
 
     const calls = (data.output || []).filter((item) => item.type === 'function_call');
     if (calls.length === 0) {
@@ -178,9 +207,30 @@ const callOpenAIAgent = async ({
         outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify({ ok: false, ...failure }) });
         continue;
       }
+      const readOnly = isReadOnlyToolCall(call.name, args) === true;
+      const signature = readOnly ? `${call.name}:${canonicalJson(args)}` : '';
+      if (readOnly) {
+        const occurrences = Number(readCallOccurrences.get(signature) || 0) + 1;
+        readCallOccurrences.set(signature, occurrences);
+        if (occurrences >= 3) {
+          events.push({ callId: call.call_id, name: call.name, ok: false, repeated: true, result: { code: 'AI_REPEAT_TOOL_LOOP_STOPPED' } });
+          await notifyProgress({ type: 'loop_stopped', name: call.name, callId: call.call_id, toolCallCount });
+          return { text: safeLoopAnswer('repeat_tool'), usage, events, protocolWarning: 'AI_REPEAT_TOOL_LOOP_STOPPED' };
+        }
+        if (completedReadCalls.has(signature)) {
+          const result = completedReadCalls.get(signature);
+          events.push({ callId: call.call_id, name: call.name, ok: true, reused: true, result });
+          outputs.push({
+            type: 'function_call_output', call_id: call.call_id,
+            output: JSON.stringify({ ok: true, reused: true, result, instruction: '동일한 조회 결과를 재사용했다. 이 도구를 다시 호출하지 말고 지금 답변한다.' }),
+          });
+          continue;
+        }
+      }
       try {
         await notifyProgress({ type: 'tool_start', name: call.name, callId: call.call_id, toolCallCount });
         const result = await onToolCall(call.name, args, call.call_id);
+        if (readOnly) completedReadCalls.set(signature, result);
         events.push({ callId: call.call_id, name: call.name, ok: true, result });
         await notifyProgress({ type: 'tool_complete', name: call.name, callId: call.call_id, toolCallCount, resultStatus: result?.status || 'completed' });
         if (result?.status === 'pending_approval' && result?.actionId) {
@@ -217,10 +267,12 @@ const callOpenAIAgent = async ({
     responseInput = [...responseInput, ...(data.output || []), ...outputs];
   }
 
-  const error = new Error('AI 도구 실행 횟수 제한에 도달했습니다. 요청을 더 작은 단위로 나눠주세요.');
-  error.status = 429;
-  error.usage = usage;
-  throw error;
+  return {
+    text: '도구 조회를 마쳤지만 제한된 반복 횟수 안에 최종 답변을 만들지 못해 안전하게 중단했습니다. 완료되지 않은 변경 작업을 완료했다고 처리하지 않았습니다.',
+    usage,
+    events,
+    protocolWarning: 'AI_AGENT_TURN_LIMIT_STOPPED',
+  };
 };
 
 const callOpenAIResponses = async ({ systemPrompt, userPrompt, temperature = 0.2 }) => {

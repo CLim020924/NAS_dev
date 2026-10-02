@@ -287,6 +287,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
       clearActivityLater(waiting ? 3200 : 1800);
     }, {
       onError: (err) => {
+        if (err.response?.data?.usage) setUsage(err.response.data.usage);
         setMessage(promptText);
         setAttachedNasPaths(sendingPaths);
         setLocalFiles(sendingFiles);

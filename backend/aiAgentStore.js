@@ -264,6 +264,7 @@ const recordUsage = (user, delta = {}) => {
     inputTokens: Number(current.inputTokens || 0) + Number(delta.inputTokens || 0),
     outputTokens: Number(current.outputTokens || 0) + Number(delta.outputTokens || 0),
     totalTokens: Number(current.totalTokens || 0) + Number(delta.totalTokens || 0),
+    cachedInputTokens: Number(current.cachedInputTokens || 0) + Number(delta.cachedInputTokens || 0),
     requests: Number(current.requests || 0) + 1,
   };
   const next = { days: { ...(usage.days || {}), [day]: nextDay }, updatedAt: nowIso() };

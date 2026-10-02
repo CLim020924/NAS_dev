@@ -14,6 +14,14 @@ test('AI 도구 스키마는 strict이며 임의 속성을 허용하지 않는�
   });
 });
 
+test('기능 질문일 때만 전체 기능 조회 도구를 노출한다', () => {
+  const restoreTools = _test.selectToolDefinitions('삭제한 파일 후보를 보여줘. 실제 복원은 하지 마.').map((tool) => tool.name);
+  assert.equal(restoreTools.includes('get_agent_capabilities'), false);
+  assert.equal(restoreTools.includes('list_trash'), true);
+  const capabilityTools = _test.selectToolDefinitions('AI 에이전트가 무슨 작업을 할 수 있어?').map((tool) => tool.name);
+  assert.equal(capabilityTools.includes('get_agent_capabilities'), true);
+});
+
 test('승인 모드는 위험 등급에 따라 자동 실행 범위를 제한한다', () => {
   assert.equal(_test.mayAutoExecute('safe', 'ask_each'), false);
   assert.equal(_test.mayAutoExecute('safe', 'auto_safe'), true);

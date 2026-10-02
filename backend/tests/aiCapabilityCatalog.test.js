@@ -57,7 +57,7 @@ test('프로덕션 REST 라우트는 AI 연결 또는 명시된 UI·보안 경�
 
 test('요청별 도구 선택은 무관한 변경 도구와 토큰 비용을 노출하지 않는다', () => {
   const hello = selectToolDefinitions('안녕하세요', []).map((tool) => tool.name);
-  assert.deepEqual(hello, ['get_agent_capabilities']);
+  assert.deepEqual(hello, []);
   const fileSend = selectToolDefinitions('민수에게 이 파일을 보내줘', ['send_file_to_user']).map((tool) => tool.name);
   assert.ok(fileSend.includes('send_file_to_user'));
   assert.ok(fileSend.includes('search_files'));

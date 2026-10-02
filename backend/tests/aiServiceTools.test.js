@@ -157,3 +157,63 @@ test('승인 결과를 같은 call id로 주입해 저장된 요청을 이어간
     config.OPENAI_API_KEY = previousKey;
   }
 });
+
+test('같은 읽기 도구 반복은 한 번만 실행하고 세 번째 요청 전에 안전 종료한다', async () => {
+  const previousKey = config.OPENAI_API_KEY;
+  config.OPENAI_API_KEY = 'test-only-key';
+  let requestCount = 0;
+  let toolCount = 0;
+  const fetchImpl = async () => {
+    requestCount += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        output: [{ type: 'function_call', name: 'search_files', call_id: `repeat_${requestCount}`, arguments: '{"path":"/","query":"시험"}' }],
+        usage: { input_tokens: 100, output_tokens: 2, total_tokens: 102 },
+      }),
+    };
+  };
+  try {
+    const result = await callOpenAIAgent({
+      systemPrompt: 'test', input: 'test', tools: [], fetchImpl,
+      isReadOnlyToolCall: (name) => name === 'search_files',
+      onToolCall: async () => { toolCount += 1; return { results: ['/시험.txt'] }; },
+    });
+    assert.equal(requestCount, 3);
+    assert.equal(toolCount, 1);
+    assert.equal(result.protocolWarning, 'AI_REPEAT_TOOL_LOOP_STOPPED');
+    assert.match(result.text, /반복/);
+    assert.equal(result.events.some((event) => event.reused), true);
+    assert.equal(result.usage.totalTokens, 306);
+  } finally {
+    config.OPENAI_API_KEY = previousKey;
+  }
+});
+
+test('요청 누적 토큰 예산에 도달하면 추가 모델 호출 없이 안전 종료한다', async () => {
+  const previousKey = config.OPENAI_API_KEY;
+  config.OPENAI_API_KEY = 'test-only-key';
+  let requestCount = 0;
+  const fetchImpl = async () => {
+    requestCount += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        output: [{ type: 'function_call', name: 'search_files', call_id: 'budget_1', arguments: '{"query":"a"}' }],
+        usage: { input_tokens: 180, output_tokens: 20, total_tokens: 200, input_tokens_details: { cached_tokens: 150 } },
+      }),
+    };
+  };
+  try {
+    const result = await callOpenAIAgent({
+      systemPrompt: 'test', input: 'test', tools: [], fetchImpl, maxTotalTokens: 200,
+      isReadOnlyToolCall: () => true,
+      onToolCall: async () => ({ results: [] }),
+    });
+    assert.equal(requestCount, 1);
+    assert.equal(result.protocolWarning, 'AI_REQUEST_TOKEN_BUDGET_STOPPED');
+    assert.equal(result.usage.cachedInputTokens, 150);
+  } finally {
+    config.OPENAI_API_KEY = previousKey;
+  }
+});

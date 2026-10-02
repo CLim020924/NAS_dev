@@ -258,7 +258,10 @@ const SURFACE_HINTS = Object.freeze({
 
 const selectToolDefinitions = (message = '', authorizedMutationTools = []) => {
   const text = String(message || '');
-  const selected = new Set(['get_agent_capabilities']);
+  const selected = new Set();
+  if (/(?:AI|에이전트).*(?:무엇|뭐|가능|기능|지원|할\s*수)|(?:가능한|지원하는)\s*(?:작업|기능)/i.test(text)) {
+    selected.add('get_agent_capabilities');
+  }
   const matchedSurfaces = new Set();
   Object.entries(SURFACE_HINTS).forEach(([surface, pattern]) => { if (pattern.test(text)) matchedSurfaces.add(surface); });
   for (const mutationName of authorizedMutationTools || []) {
@@ -1124,5 +1127,5 @@ module.exports = {
   readTextFile,
   assertExistingPathSafe,
   assertToolPathAllowed,
-  _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans, deriveAuthorizedMutationTools, deriveAuthorizedMutationToolsFromConversation, shouldKeepPendingTask, getMissingDocumentSlots, assertDocumentRequestSlots, MUTATION_TOOL_NAMES },
+  _test: { mayAutoExecute, actionSpec, buildOrganizationPlan, resolveOrganizationPlans, deriveAuthorizedMutationTools, deriveAuthorizedMutationToolsFromConversation, shouldKeepPendingTask, getMissingDocumentSlots, assertDocumentRequestSlots, selectToolDefinitions, MUTATION_TOOL_NAMES },
 };
