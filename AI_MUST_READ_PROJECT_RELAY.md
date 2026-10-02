@@ -1920,3 +1920,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 파일 상태 교차검증: 원래 경로 `/cmoe work space`에는 `CMOE-Workspace-Setup-1.15.3/1.15.5/1.15.6/1.15.7-Windows.exe` 네 파일이 모두 없다. 반대로 계정별 `.nas_trash`에는 네 항목의 메타데이터와 실제 `content`가 모두 그대로 존재한다.
 - 결론: 복구는 진행되지 않았다. AI가 미래 작업 안내 문장만 응답하고 `restore_trash_item` 실행 단계로 이어지지 않은 것이다. 휴지통 내용은 남아 있어 현재 복구 가능하지만, 사용자 명시 요청 없이 이번 진단에서는 복구하지 않았다.
 - 후속 결함: 선택 프레임 전송 뒤 변경 문맥이 실제 도구 호출로 이어지지 않아도 `진행하겠습니다`, `잠시만 기다려 주세요` 같은 진행 예정 문구를 허용하는 공백이 남아 있다. 후속 수정 시 유효한 action 또는 같은 응답의 도구 호출이 없으면 이러한 진행 주장을 차단하고, 다중 선택을 최신 휴지통 ID에 재대조해 실제 복구 도구 호출로 이어지는 회귀 시험이 필요하다.
+
+### 2026-10-02 AI 응답별 토큰 비용 표시
+
+- 사용자 요청: AI 대화마다 현재 모델의 토큰 단가로 비용을 계산해 말풍선 맨 아래에 `1.32$`처럼 소수점 둘째 자리까지 작고 희미한 회색으로 표시한다.
+- 구현: 서버가 OpenAI 응답별 input, cached input, output usage를 받아 비캐시 입력·캐시 입력·출력을 각각 계산하고, 그 시점의 모델·사용량·단가·확인일·공식 출처를 assistant 메시지의 `billing` 스냅샷으로 저장한다. 현재 운영 모델 `gpt-4.1-mini`와 날짜 고정 별칭만 공식 Standard 단가 입력 $0.40, cached input $0.10, output $1.60/100만 토큰으로 계산하며, 알 수 없는 모델은 잘못된 금액을 꾸며내지 않고 표시를 생략한다.
+- UI: 새 assistant 메시지의 최하단 왼쪽에 `0.00$` 형식, `text.disabled`, 0.64rem, opacity 0.72로 표시한다. 마우스를 올리면 모델과 입력·캐시 입력·출력 토큰을 확인할 수 있다. 과거 메시지는 응답별 usage 원본이 없으므로 일일 누계로 역산하지 않고 표시하지 않는다.
+- 현재 검증: 가격 계산 단위 시험 3/3, Windows backend 전체 168건 중 160 pass·8 환경 skip·0 fail, UI contract 121개 소스, production build 및 react-pdf 9.2.1/PDF.js API+Worker 4.8.69 gate, JavaScript 구문·diff 검사가 통과했다. `docs/NAS_PROJECT_LOG.xlsx`의 Do_Not_Break, Feature_Index, Relation_Map, Code_Map, Patch_Log, Request_Archive, Generated_Check에 구현·검증 내용을 추가하고 재열기·수식·신규 문자열·변경 범위 렌더를 확인했다. 운영 배포와 로그인된 실제 화면 검증 결과는 이어서 기록한다.

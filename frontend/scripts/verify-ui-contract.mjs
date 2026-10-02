@@ -41,6 +41,8 @@ requireText('src/components/AiAgentPanel.js', 'aria-label="AI 상단바 표시"'
 requireText('src/components/AiAgentPanel.js', '&:hover .AiAgentHeader, &:has(.AiAgentHeader :focus-visible)', 'AI header must reveal for pointer and keyboard-visible focus without sticking after a mouse click');
 requireText('src/components/AiAgentPanel.js', 'data-pinned={settingsOpen', 'AI header must remain operable while settings are open');
 requireText('src/components/AiAgentPanel.js', "transform: 'translateY(calc(-100% - 1px))'", 'AI header must stay outside the content area while idle');
+requireText('src/components/AiAgentPanel.js', 'item.billing?.estimatedUsd', 'AI assistant messages must retain their per-response token cost metadata');
+requireText('src/components/AiAgentPanel.js', ".toFixed(2)}$", 'AI token cost must render in compact two-decimal USD format');
 requireText('src/components/TopBar.js', "display: { xs: 'none', md: 'inline-flex' }", 'minimized-task chips must not overflow the mobile top bar');
 const topBar = read('src/components/TopBar.js');
 const fileButton = topBar.indexOf('aria-label="파일 관리자 열기"');

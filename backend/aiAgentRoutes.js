@@ -66,10 +66,12 @@ const {
 const { finalizeAgentAnswer, finalizeContinuationAnswer, needsConversationSearch } = require('./aiResponsePolicy');
 const { buildCapabilityCatalog } = require('./aiCapabilityCatalog');
 const { prepareAiAttachments, MAX_FILES, MAX_TOTAL_BYTES } = require('./aiAttachments');
+const { calculateAiTokenCost } = require('./aiPricing');
 
 const router = express.Router();
 const receiveAiFiles = multer({ storage: multer.memoryStorage(), limits: { files: MAX_FILES, fileSize: MAX_TOTAL_BYTES, fieldSize: 64 * 1024 } }).array('files', MAX_FILES);
 const activeBundleDownloads = new Set();
+const buildAiBilling = (usage) => calculateAiTokenCost(config.OPENAI_MODEL, usage);
 const parseAiFiles = (req, res, next) => receiveAiFiles(req, res, (err) => {
   if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: '첨부 파일 개수 또는 크기 제한을 초과했습니다.' });
   return next();
@@ -570,6 +572,7 @@ const continueStoredRun = async (user, run, req, { forceApproval = false } = {})
       });
       const messages = appendMessages(user, [{
         role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId: run.runId, pendingApproval: true,
+        billing: buildAiBilling(agentResult.usage) || undefined,
       }]);
       return { status: 'waiting_approval', answer, messages, toolEvents: agentResult.events };
     }
@@ -586,6 +589,7 @@ const continueStoredRun = async (user, run, req, { forceApproval = false } = {})
     });
     const messages = appendMessages(user, [{
       role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId: run.runId, selectionFrame: finalized.selectionFrame || undefined,
+      billing: buildAiBilling(agentResult.usage) || undefined,
     }]);
     return { status: 'completed', answer, messages, toolEvents: agentResult.events, selectionFrame: finalized.selectionFrame || null };
   } catch (err) {
@@ -1072,7 +1076,11 @@ router.post('/ai/chat', (req, res, next) => {
 
     const saved = appendMessages(user, [
       { role: 'user', content: attachments.names.length ? `${message}\n첨부: ${attachments.names.join(', ')}` : message, createdAt: new Date().toISOString(), context, agentRunId },
-      { role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId, pendingApproval: !!agentResult.paused, selectionFrame: finalized.selectionFrame || undefined },
+      {
+        role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId,
+        pendingApproval: !!agentResult.paused, selectionFrame: finalized.selectionFrame || undefined,
+        billing: buildAiBilling(agentResult.usage) || undefined,
+      },
     ]);
 
     finishProgress(user, requestId, agentResult.paused ? {
