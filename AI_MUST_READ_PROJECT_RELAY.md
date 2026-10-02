@@ -1978,3 +1978,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - HTTP 교차검증: 공개 `/onlyoffice/web-apps/apps/api/documents/api.js`, `/onlyoffice/healthcheck`, 스프레드시트 편집기 리소스가 모두 HTTP 502였다. NAS backend의 `127.0.0.1:3030/onlyoffice/...` 프록시도 `OnlyOffice proxy failed` 502였고, 컨테이너 포트 `127.0.0.1:8080` 직접 요청은 연결이 리셋됐다.
 - 확정 원인: Docker의 `onlyoffice/documentserver` 컨테이너는 상태만 `running`이지만 실제로는 `/app/ds/run-document-server.sh`와 `sleep 1`만 남아 있고 nginx·supervisor·문서 서버 포트가 시작되지 않았다. 로그는 빈 호스트·포트에 대해 `nc: port number invalid`와 `Waiting for connection to the  host on port `를 반복한다. 컨테이너 내부 `/etc/onlyoffice/documentserver/local.json`이 2026-09-14 시각의 0바이트 파일이며 별도 영구 마운트도 아니다. 시작 스크립트가 여기서 DB·RabbitMQ 주소를 읽지 못해 빈 연결 정보를 기다리는 단계에서 멈춘 것이 흰 화면의 직접 원인이다.
 - 결론/안전 경계: 현재 증상은 중복 제거 결과 파일의 내용이나 확장자 때문에 발생한 것으로 볼 근거가 없고, 파일을 가져오기 전 문서 뷰어 SDK 자체가 죽어 발생한다. 이번 진단에서는 사용자 파일, OnlyOffice 컨테이너, DB, nginx를 수정하거나 재시작하지 않았다. 후속 복구에서는 기존 데이터 볼륨을 보존한 채 `local.json`의 정상 설정을 복구하고, OnlyOffice healthcheck·SDK 200·해당 XLSX 실화면 렌더링까지 순서대로 검증해야 한다.
+
+### 2026-10-02 OnlyOffice 복구 시도 중 NAS 오프라인 전환
+
+- 사용자 요청: 손상된 OnlyOffice 설정을 복구하고 실제 문서 화면까지 확인한다.
+- 진행: 기존 OnlyOffice 데이터 볼륨을 보존하고 0바이트 `local.json`을 백업한 뒤 동일 이미지의 정상 기본 설정과 현재 컨테이너 환경을 대조하는 최소 복구 절차를 시작했다. 첫 읽기 직전에 NAS 접속이 끊겨 운영 파일·컨테이너에는 아직 어떤 변경도 하지 않았다.
+- 현재 장애 근거: Windows Tailscale 상태는 NAS `100.80.39.112`를 `offline, last seen 21d ago` 및 `peer's node key has expired`로 표시한다. LAN `192.168.45.30`과 Tailscale 주소의 22·80·3030·8080 TCP가 모두 닫혀 있고 공개 `https://filemanager-nas.com`은 Cloudflare 530이다. 따라서 SSH·웹·backend·OnlyOffice 모두 현재 접근 불가다.
+- 미완료/다음 행동: NAS 본체와 네트워크가 다시 온라인이 되어 SSH가 복구되어야 작업을 계속할 수 있다. 복구 후에는 컨테이너 inspect 백업, 정상 이미지의 `local.json` 추출·비밀값 비노출 대조, 손상 파일 백업, 최소 교체, 컨테이너 재시작, healthcheck와 SDK HTTP 200, 대상 XLSX 실화면 렌더링을 순서대로 검증한다. 서버 checkout 동기화도 접속 복구 뒤 수행해야 한다.
