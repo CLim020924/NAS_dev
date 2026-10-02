@@ -68,7 +68,7 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTo
     }
   }
   if (selectionFrame && SELECTION_QUESTION.test(answer) && !authorizedMutationTools.includes('restore_trash_item')) {
-    answer = `${answer}\n\n${formatSelectionText(selectionFrame)}`.trim();
+    answer = formatSelectionText(selectionFrame);
   }
   if (NUMERIC_ONLY_REQUEST.test(String(userMessage || ''))) answer = extractUniqueNumber(answer) || answer;
   if (PATH_ONLY_REQUEST.test(String(userMessage || ''))) answer = extractUniquePath(answer) || answer;

@@ -95,6 +95,18 @@ test('파일·사용자·노트 등 조회 결과에도 공통 선택 프레임�
   });
 });
 
+test('모델이 후보 목록을 이미 썼어도 선택 질문은 서버의 한 목록으로 정규화한다', () => {
+  const result = finalizeAgentAnswer('어떤 파일인지 골라줘', {
+    text: '후보입니다.\n1. 보고서.pdf\n2. 사진.png\n어떤 파일을 선택할까요?',
+    events: [{ name: 'search_files', ok: true, result: [
+      { name: '보고서.pdf', path: '/문서/보고서.pdf', type: 'file' },
+      { name: '사진.png', path: '/사진/사진.png', type: 'file' },
+    ] }],
+  });
+  assert.equal((result.answer.match(/1\. 보고서\.pdf/g) || []).length, 1);
+  assert.equal((result.answer.match(/2\. 사진\.png/g) || []).length, 1);
+});
+
 test('숫자만 요청은 답에 숫자가 하나일 때 군더더기를 제거한다', () => {
   assert.equal(finalizeAgentAnswer('내 키를 숫자로만 답해', { text: '내 키는 177입니다.' }).answer, '177');
   assert.equal(finalizeAgentAnswer('숫자만 답해', { text: '후보는 177과 6810입니다.' }).answer, '후보는 177과 6810입니다.');
