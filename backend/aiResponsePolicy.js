@@ -1,8 +1,23 @@
 const FALSE_APPROVAL_CLAIM = /(?:승인이 필요한 작업이\s*\d+개|승인\s*카드.{0,12}(?:승인|실행)|승인\s*대기\s*중)/i;
-const UNSUPPORTED_COMPLETION_CLAIM = /(?:완료했|완료되었|생성했|만들었|저장했|수정했|삭제했|복사했|이동했|옮겼|전송했|보냈|실행했|처리했|추가했|차단했|복원했|변환했)(?:습니다|어요|다)/i;
+const UNSUPPORTED_COMPLETION_CLAIM = /(?:(?:완료|생성|저장|수정|삭제|복사|이동|전송|실행|처리|추가|차단|복원|복구|변환)(?:했|되었|됐)|만들었|옮겼|보냈|되돌렸)(?:습니다|어요|다)/i;
 const RECALL_REQUEST = /(?:과거|예전|이전|전에|맨\s*처음|기억|대화|말했던|말했|내\s*키)/i;
 const NUMERIC_ONLY_REQUEST = /(?:숫자(?:로)?만|번호(?:로)?만)/i;
 const PATH_ONLY_REQUEST = /(?:경로만\s*(?:답|말|알려)|(?:답|말).*(?:경로만))/i;
+
+const formatTrashSelection = (items = []) => {
+  const safeItems = items.slice(0, 50);
+  const rows = safeItems.map((item, index) => {
+    const name = String(item?.name || '이름 없는 항목').replace(/[\r\n]+/g, ' ');
+    const originalPath = String(item?.originalPath || item?.originalRelativePath || '/').replace(/[\r\n]+/g, ' ');
+    const deletedAt = item?.deletedAt ? new Date(item.deletedAt) : null;
+    const deletedLabel = deletedAt && !Number.isNaN(deletedAt.getTime())
+      ? deletedAt.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false })
+      : '삭제 시간 확인 불가';
+    return `${index + 1}. ${name}\n   원래 위치: ${originalPath}\n   삭제 시간: ${deletedLabel}`;
+  });
+  if (items.length > safeItems.length) rows.push(`…외 ${items.length - safeItems.length}개`);
+  return `복구할 항목을 번호로 선택해 주세요. 여러 개면 \`1, 3, 4\`, 전부면 \`전부\`라고 입력할 수 있습니다.\n\n${rows.join('\n')}`;
+};
 
 const extractUniqueNumber = (answer) => {
   const matches = String(answer || '').match(/\d+(?:[.,]\d+)*/g) || [];
@@ -39,6 +54,14 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTo
       };
     }
   }
+  if (authorizedMutationTools.includes('restore_trash_item')) {
+    const restoreEvent = (agentResult.events || []).some((event) => event.name === 'restore_trash_item' && event.ok === true);
+    const trashEvent = [...(agentResult.events || [])].reverse().find((event) => event.name === 'list_trash' && event.ok === true);
+    const items = Array.isArray(trashEvent?.result?.items) ? trashEvent.result.items : [];
+    if (!restoreEvent && items.length > 0 && /(?:어떤|어느|무엇|뭐|선택|번호|복구|복원|되돌)/i.test(answer)) {
+      answer = formatTrashSelection(items);
+    }
+  }
   if (NUMERIC_ONLY_REQUEST.test(String(userMessage || ''))) answer = extractUniqueNumber(answer) || answer;
   if (PATH_ONLY_REQUEST.test(String(userMessage || ''))) answer = extractUniquePath(answer) || answer;
   return { answer, protocolWarning: null };
@@ -58,5 +81,5 @@ module.exports = {
   finalizeAgentAnswer,
   finalizeContinuationAnswer,
   needsConversationSearch,
-  _test: { extractUniqueNumber, extractUniquePath, FALSE_APPROVAL_CLAIM },
+  _test: { extractUniqueNumber, extractUniquePath, formatTrashSelection, FALSE_APPROVAL_CLAIM },
 };

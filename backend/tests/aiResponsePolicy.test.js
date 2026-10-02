@@ -47,6 +47,32 @@ test('모델의 완료 문장은 실제 변경 도구 성공 기록이 있을 �
   assert.equal(result.answer, '모두 만들었습니다.');
 });
 
+test('복원되었습니다 문구도 실제 복구 실행 기록이 없으면 차단한다', () => {
+  ['요청한 파일이 모두 복원되었습니다.', '삭제 파일을 복구했습니다.', '원래 위치로 되돌렸습니다.'].forEach((text) => {
+    const result = finalizeAgentAnswer('오늘 삭제한거 전부 되돌려줄래', { text, events: [] }, ['restore_trash_item']);
+    assert.equal(result.protocolWarning, 'AI_UNVERIFIED_COMPLETION_CLAIM');
+    assert.match(result.answer, /확인하지 못했습니다/);
+  });
+});
+
+test('복원 대상을 다시 물을 때 휴지통 결과를 번호 목록으로 고정한다', () => {
+  const result = finalizeAgentAnswer('삭제한 파일 복원해줄래', {
+    text: '어떤 파일을 복원할까요?',
+    events: [{
+      name: 'list_trash',
+      ok: true,
+      result: { items: [
+        { trashId: 'secret-a', name: '보고서.pdf', originalPath: '/문서/보고서.pdf', deletedAt: '2026-10-02T01:02:03.000Z' },
+        { trashId: 'secret-b', name: '사진.png', originalPath: '/사진/사진.png', deletedAt: '2026-10-02T02:03:04.000Z' },
+      ] },
+    }],
+  }, ['restore_trash_item']);
+  assert.match(result.answer, /^복구할 항목을 번호로 선택해 주세요/);
+  assert.match(result.answer, /1\. 보고서\.pdf/);
+  assert.match(result.answer, /2\. 사진\.png/);
+  assert.doesNotMatch(result.answer, /secret-a|secret-b/);
+});
+
 test('숫자만 요청은 답에 숫자가 하나일 때 군더더기를 제거한다', () => {
   assert.equal(finalizeAgentAnswer('내 키를 숫자로만 답해', { text: '내 키는 177입니다.' }).answer, '177');
   assert.equal(finalizeAgentAnswer('숫자만 답해', { text: '후보는 177과 6810입니다.' }).answer, '후보는 177과 6810입니다.');

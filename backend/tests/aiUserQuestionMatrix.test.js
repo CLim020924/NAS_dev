@@ -69,6 +69,8 @@ const executableCases = [
   ['노트를 만들고 그 안에 DOCX 문서를 만들어줘', ['create_note', 'create_office_document']],
   ['간증문을 한글 문서로 만들어줘', ['create_document']],
   ['휴지통에서 삭제한 파일을 복원해줘', ['restore_trash_item']],
+  ['오늘 삭제한거 전부 되돌려줄래', ['restore_trash_item']],
+  ['삭제한 파일을 복원해줄래', ['restore_trash_item']],
   ['보고서 파일의 이전 버전을 복원해줘', ['restore_file_version']],
   ['전체 드라이브 복구 지점을 만들어줘', ['create_drive_restore_point']],
   ['전체 드라이브를 복구 지점으로 복원해줘', ['restore_drive_restore_point']],

@@ -32,7 +32,8 @@ const TopBar = ({
   chatPreview = null,
   onChatPreviewClick = () => {},
   chatSidebarMode = 'none',
-  onOpenAi = () => {},
+  aiPanelOpen = false,
+  onToggleAi = () => {},
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -704,7 +705,14 @@ const TopBar = ({
           )}
 
           <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
-            <IconButton aria-label="AI 에이전트 열기" onClick={() => { dismissRecoveryOffer(); onOpenAi(); }} size="small" sx={{ color: 'primary.main', bgcolor: 'action.hover' }} title="AI 에이전트">
+            <IconButton
+              aria-label={aiPanelOpen ? 'AI 에이전트 닫기' : 'AI 에이전트 열기'}
+              aria-pressed={aiPanelOpen}
+              onClick={() => { dismissRecoveryOffer(); onToggleAi(); }}
+              size="small"
+              sx={{ color: 'primary.main', bgcolor: aiPanelOpen ? 'action.selected' : 'action.hover' }}
+              title={aiPanelOpen ? 'AI 에이전트 닫기' : 'AI 에이전트 열기'}
+            >
               <SmartToyIcon fontSize="small" />
             </IconButton>
 

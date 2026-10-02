@@ -416,7 +416,11 @@ function AppContent() {
                   chatPreview={chatPreview}
                   onChatPreviewClick={handleChatPreviewClick}
                   chatSidebarMode={chatSidebarMode}
-                  onOpenAi={() => { setAiPanelRequest(null); setAiPanelOpen(true); }}
+                  aiPanelOpen={aiPanelOpen}
+                  onToggleAi={() => {
+                    setAiPanelRequest(null);
+                    setAiPanelOpen((current) => !current);
+                  }}
                 />
                 <NotificationSidebar
                   open={notificationsOpen}
@@ -446,17 +450,19 @@ function AppContent() {
                   <DedicatedChatWindowLayer />
                   <ChatWorkspaceWindowLayer />
                 </ChatProvider>
-                <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
-                  <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, display: { xs: aiPanelOpen ? 'none' : 'flex', sm: 'flex' }, flexDirection: 'column', overflow: 'hidden' }}>
-                    <Toolbar size="small" sx={{ minHeight: '48px !important', flexShrink: 0 }} />
-                    <PersistentMainRoutes aiPanelOpen={aiPanelOpen} />
+                <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <Toolbar size="small" sx={{ minHeight: '48px !important', flexShrink: 0 }} />
+                  <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
+                    <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, display: { xs: aiPanelOpen ? 'none' : 'flex', sm: 'flex' }, flexDirection: 'column', overflow: 'hidden' }}>
+                      <PersistentMainRoutes aiPanelOpen={aiPanelOpen} />
+                    </Box>
+                    <AiAgentPanel
+                      open={aiPanelOpen}
+                      onClose={() => { setAiPanelOpen(false); setAiPanelRequest(null); }}
+                      context={{ ...aiUiContext, ...(aiPanelRequest?.context || {}) }}
+                      draftRequest={aiPanelRequest}
+                    />
                   </Box>
-                  <AiAgentPanel
-                    open={aiPanelOpen}
-                    onClose={() => { setAiPanelOpen(false); setAiPanelRequest(null); }}
-                    context={{ ...aiUiContext, ...(aiPanelRequest?.context || {}) }}
-                    draftRequest={aiPanelRequest}
-                  />
                 </Box>
                 </Box>
               </TransferProvider>
