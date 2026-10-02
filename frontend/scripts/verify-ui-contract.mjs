@@ -36,7 +36,10 @@ requireText('src/components/GlobalAppWindowLayer.js', 'className="nas-dynamic-la
 requireText('src/components/NAS/Window/NASWindow.js', 'className="nas-dynamic-label"', 'file and folder window titles must not displace window controls');
 requireText('src/components/AiAgentPanel.js', 'item.selectionFrame?.options?.length > 0', 'AI selectable results must render through the shared selection frame');
 requireText('src/components/AiAgentPanel.js', 'aria-multiselectable={frame.multiple !== false}', 'AI selection frames must retain keyboard and assistive-technology semantics');
-requireText('src/components/AiAgentPanel.js', '선택 보내기', 'AI choices must require an explicit send step instead of executing on card click');
+requireText('src/components/AiAgentPanel.js', 'sourceMessageId: item.messageId', 'AI selections must bind to the exact server-stored assistant message');
+requireText('src/components/AiAgentPanel.js', "frame.sourceTool === 'list_trash'", 'trash choices must use the verified restore-selection flow');
+requireText('src/components/AiAgentPanel.js', '복구 준비', 'trash choices must clearly distinguish preparation from completed restoration');
+requireText('src/components/AiAgentPanel.js', "action.actionType === 'restore_trash_items'", 'batch restore approval must show the exact bound paths');
 requireText('src/components/AiAgentPanel.js', 'aria-label="AI 상단바 표시"', 'AI panel must keep a narrow top-edge reveal target');
 requireText('src/components/AiAgentPanel.js', '&:hover .AiAgentHeader, &:has(.AiAgentHeader :focus-visible)', 'AI header must reveal for pointer and keyboard-visible focus without sticking after a mouse click');
 requireText('src/components/AiAgentPanel.js', 'data-pinned={settingsOpen', 'AI header must remain operable while settings are open');

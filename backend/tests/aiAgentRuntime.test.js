@@ -129,6 +129,72 @@ test('날짜별 정리는 승인 후 원본이 바뀌면 실행 계획을 거부
   }
 });
 
+test('휴지통 다중 복구는 승인 목록을 재검증하고 실제 결과를 항목별 기록한다', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-ai-trash-batch-'));
+  const runtimePath = path.resolve(__dirname, '..', 'aiAgentRuntime.js');
+  const storePath = path.resolve(__dirname, '..', 'aiAgentStore.js');
+  const script = `
+    const runtime = require(${JSON.stringify(runtimePath)});
+    const store = require(${JSON.stringify(storePath)});
+    const user = { loginId: 'trash-batch', userUid: 'trash-batch', role: 'USER' };
+    const items = [
+      { trashId: 't1', name: 'a.txt', originalPath: '/a.txt', deletedAt: '2026-10-02T01:00:00.000Z' },
+      { trashId: 't2', name: 'b.txt', originalPath: '/b.txt', deletedAt: '2026-10-02T02:00:00.000Z' },
+    ];
+    const action = store.createAction(user, { title: '2개 복원', risk: 'reversible', actionType: 'restore_trash_items', trashItems: items });
+    const calls = [];
+    (async () => {
+      const completed = await runtime.executeAction(user, action.actionId, { platformCall: async (method, apiPath) => {
+        calls.push({ method, apiPath });
+        if (method === 'GET') return { items };
+        return { success: true };
+      } });
+      if (completed.status !== 'completed' || completed.result.restoredCount !== 2 || completed.result.failedCount !== 0) process.exit(2);
+      if (calls.filter((call) => call.method === 'POST').length !== 2) process.exit(3);
+    })().catch((error) => { console.error(error); process.exit(4); });
+  `;
+  try {
+    const result = spawnSync(process.execPath, ['-e', script], { env: { ...process.env, AI_AGENT_DATA_ROOT: tempRoot }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('휴지통 다중 복구는 승인 뒤 목록이 바뀌면 실제 복구 호출 전에 중단한다', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-ai-trash-stale-'));
+  const runtimePath = path.resolve(__dirname, '..', 'aiAgentRuntime.js');
+  const storePath = path.resolve(__dirname, '..', 'aiAgentStore.js');
+  const script = `
+    const runtime = require(${JSON.stringify(runtimePath)});
+    const store = require(${JSON.stringify(storePath)});
+    const user = { loginId: 'trash-stale', userUid: 'trash-stale', role: 'USER' };
+    const approved = [{ trashId: 't1', name: 'a.txt', originalPath: '/a.txt', deletedAt: '2026-10-02T01:00:00.000Z' }];
+    const changed = [{ trashId: 't9', name: 'other.txt', originalPath: '/other.txt', deletedAt: '2026-10-02T03:00:00.000Z' }];
+    const action = store.createAction(user, { title: '1개 복원', risk: 'reversible', actionType: 'restore_trash_items', trashItems: approved });
+    let postCalls = 0;
+    (async () => {
+      try {
+        await runtime.executeAction(user, action.actionId, { platformCall: async (method) => {
+          if (method === 'GET') return { items: changed };
+          postCalls += 1;
+          return { success: true };
+        } });
+        process.exit(2);
+      } catch (error) {
+        if (error.code !== 'AI_APPROVED_STATE_CHANGED') process.exit(3);
+        if (postCalls !== 0) process.exit(4);
+      }
+    })().catch((error) => { console.error(error); process.exit(5); });
+  `;
+  try {
+    const result = spawnSync(process.execPath, ['-e', script], { env: { ...process.env, AI_AGENT_DATA_ROOT: tempRoot }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('외부 사용자 작업은 승인 전에 UID를 고정하고 실행 때 달라지면 중단한다', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-ai-target-binding-'));
   const runtimePath = path.resolve(__dirname, '..', 'aiAgentRuntime.js');

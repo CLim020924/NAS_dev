@@ -853,6 +853,39 @@ const executeAction = async (user, actionId, { platformCall }) => {
       result = await platformCall('POST', `/note-studio/notes/${encodeURIComponent(action.noteId)}/python/run`, { expectedRevision: action.expectedRevision });
     } else if (action.actionType === 'run_javascript_note') {
       result = await platformCall('POST', `/note-studio/notes/${encodeURIComponent(action.noteId)}/javascript/run`, { expectedRevision: action.expectedRevision });
+    } else if (action.actionType === 'restore_trash_items') {
+      const approvedItems = Array.isArray(action.trashItems) ? action.trashItems : [];
+      if (!approvedItems.length || approvedItems.length > 50) throw new Error('승인된 휴지통 복구 목록이 올바르지 않습니다.');
+      const latestTrash = await platformCall('GET', '/trash');
+      const latestById = new Map((latestTrash?.items || []).map((item) => [String(item.trashId || ''), item]));
+      for (const approved of approvedItems) {
+        const latest = latestById.get(String(approved.trashId || ''));
+        if (!latest || String(latest.name || '') !== String(approved.name || '')
+          || String(latest.originalPath || latest.originalRelativePath || '/') !== String(approved.originalPath || '/')
+          || String(latest.deletedAt || '') !== String(approved.deletedAt || '')) {
+          throw Object.assign(new Error('승인 이후 휴지통 항목이 변경되었습니다. 최신 목록에서 다시 선택해 주세요.'), {
+            status: 409,
+            code: 'AI_APPROVED_STATE_CHANGED',
+          });
+        }
+      }
+      const outcomes = [];
+      for (const approved of approvedItems) {
+        try {
+          const restored = await platformCall('POST', `/trash/${encodeURIComponent(approved.trashId)}/restore`, {});
+          outcomes.push({ name: approved.name, originalPath: approved.originalPath, status: 'completed', result: restored });
+        } catch (restoreError) {
+          outcomes.push({ name: approved.name, originalPath: approved.originalPath, status: 'failed', error: restoreError.message });
+        }
+      }
+      const restoredCount = outcomes.filter((item) => item.status === 'completed').length;
+      const failedCount = outcomes.length - restoredCount;
+      result = { status: failedCount ? 'partial' : 'completed', restoredCount, failedCount, items: outcomes };
+      return updateAction(user, actionId, {
+        status: failedCount ? 'partial' : 'completed',
+        executedAt: new Date().toISOString(),
+        result,
+      });
     } else if (action.actionType === 'restore_trash_item') {
       result = await platformCall('POST', `/trash/${encodeURIComponent(action.trashId)}/restore`, {});
     } else if (action.actionType === 'restore_file_version') {

@@ -112,6 +112,7 @@ const normalizeSelectionFrame = (frame) => {
   if (!options.length) return null;
   return {
     version: 1,
+    sourceTool: CONFIG[clean(frame.sourceTool, 60)] ? clean(frame.sourceTool, 60) : undefined,
     title: clean(frame.title || '항목 선택', 80),
     instruction: clean(frame.instruction || '후속 작업할 항목을 고른 뒤 선택 내용을 보내세요.', 160),
     multiple: frame.multiple !== false,
@@ -128,6 +129,7 @@ const buildSelectionFrame = (events = []) => {
   if (!rows.length) return null;
   const config = CONFIG[event.name];
   return normalizeSelectionFrame({
+    sourceTool: event.name,
     title: config.title,
     instruction: config.instruction,
     multiple: true,

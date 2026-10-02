@@ -232,7 +232,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
     }
   };
 
-  const sendMessage = (overrideText = null) => {
+  const sendMessage = (overrideText = null, selection = null) => {
     const isSelectionReply = typeof overrideText === 'string';
     const text = isSelectionReply ? overrideText.trim() : message.trim();
     if ((!text && attachedNasPaths.length === 0 && localFiles.length === 0) || loading) return;
@@ -255,12 +255,13 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
         ...prev,
         { role: 'user', content: `${promptText}${sendingPaths.length ? `\nNAS 첨부: ${sendingPaths.join(', ')}` : ''}${sendingFiles.length ? `\nPC 첨부: ${sendingFiles.map((file) => file.name).join(', ')}` : ''}`, createdAt: now },
       ]);
+      const requestContext = { ...context, attachedNasPaths: sendingPaths, ...(selection ? { selection } : {}) };
       const payload = sendingFiles.length ? new FormData() : {
-        message: promptText, context: { ...context, attachedNasPaths: sendingPaths }, requestId,
+        message: promptText, context: requestContext, requestId,
       };
       if (sendingFiles.length) {
         payload.append('message', promptText);
-        payload.append('context', JSON.stringify({ ...context, attachedNasPaths: sendingPaths }));
+        payload.append('context', JSON.stringify(requestContext));
         payload.append('requestId', requestId);
         sendingFiles.forEach((file) => payload.append('files', file, file.name));
       }
@@ -314,13 +315,22 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
     });
   };
 
-  const sendSelection = (messageKey, frame, selectAll = false) => {
+  const sendSelection = (messageKey, item, selectAll = false) => {
+    const frame = item.selectionFrame;
     const keys = selectAll ? frame.options.map((option) => option.key) : (selectionByMessage[messageKey] || []);
     if (!keys.length || loading) return;
     const replies = frame.options.filter((option) => keys.includes(option.key)).map((option) => option.reply);
-    const reply = selectAll && frame.allowAll ? '전부' : `${replies.join(', ')} 선택`;
+    const isTrashRestore = frame.sourceTool === 'list_trash';
+    const reply = isTrashRestore
+      ? `${replies.join(', ')} 복구 요청`
+      : (selectAll && frame.allowAll ? '표시된 항목 전부 선택' : `${replies.join(', ')} 선택`);
     setSelectionByMessage((current) => ({ ...current, [messageKey]: [] }));
-    sendMessage(reply);
+    sendMessage(reply, {
+      sourceMessageId: item.messageId || null,
+      sourceCreatedAt: item.createdAt || null,
+      selectedKeys: keys,
+      selectAll,
+    });
   };
 
   const executeAction = (actionId) => run(async () => {
@@ -619,11 +629,13 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                               })}
                             </Stack>
                             <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
-                              <Button size="small" variant="contained" disabled={!selected.length || loading} onClick={() => sendSelection(messageKey, frame)}>
-                                {selected.length ? `${selected.length}개 선택 보내기` : '항목을 선택하세요'}
+                              <Button size="small" variant="contained" disabled={!selected.length || loading} onClick={() => sendSelection(messageKey, item)}>
+                                {selected.length ? (frame.sourceTool === 'list_trash' ? `${selected.length}개 복구 준비` : `${selected.length}개 선택 보내기`) : '항목을 선택하세요'}
                               </Button>
                               {frame.allowAll && (
-                                <Button size="small" variant="text" disabled={loading} onClick={() => sendSelection(messageKey, frame, true)}>전부 선택</Button>
+                                <Button size="small" variant="text" disabled={loading} onClick={() => sendSelection(messageKey, item, true)}>
+                                  {frame.sourceTool === 'list_trash' ? (frame.totalCount > frame.options.length ? '표시 항목 전부 복구 준비' : '전부 복구 준비') : '전부 선택'}
+                                </Button>
                               )}
                             </Stack>
                             {frame.totalCount > frame.options.length && (
@@ -687,6 +699,11 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                   {action.preview?.itemCount !== undefined && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>승인 대상: {action.preview.itemCount}개</Typography>}
                   {action.actionType === 'create_zip_bundle' && Array.isArray(action.preview?.items) && (
                     <Box component="ul" sx={{ maxHeight: 150, overflowY: 'auto', mt: 0.5, pl: 2, fontSize: 12 }}>
+                      {action.preview.items.map((item) => <li key={item}>{item}</li>)}
+                    </Box>
+                  )}
+                  {action.actionType === 'restore_trash_items' && Array.isArray(action.preview?.items) && (
+                    <Box component="ol" sx={{ maxHeight: 150, overflowY: 'auto', mt: 0.5, pl: 2.5, fontSize: 12 }}>
                       {action.preview.items.map((item) => <li key={item}>{item}</li>)}
                     </Box>
                   )}

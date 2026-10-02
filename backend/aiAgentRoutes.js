@@ -64,6 +64,7 @@ const {
   failProgress,
 } = require('./aiProgressStore');
 const { finalizeAgentAnswer, finalizeContinuationAnswer, needsConversationSearch } = require('./aiResponsePolicy');
+const { resolveTrashSelection, summarizeTrashRestoreAction } = require('./aiSelectionExecution');
 const { buildCapabilityCatalog } = require('./aiCapabilityCatalog');
 const { prepareAiAttachments, MAX_FILES, MAX_TOTAL_BYTES } = require('./aiAttachments');
 const { calculateAiTokenCost } = require('./aiPricing');
@@ -76,6 +77,32 @@ const parseAiFiles = (req, res, next) => receiveAiFiles(req, res, (err) => {
   if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: '첨부 파일 개수 또는 크기 제한을 초과했습니다.' });
   return next();
 });
+
+const prepareSelectionAction = async (user, selection, req) => {
+  const platformCall = createPlatformCaller(getToken(req));
+  const trashResult = await platformCall('GET', '/trash');
+  const verified = resolveTrashSelection({
+    messages: listMessages(user, 120),
+    selection,
+    trashResult,
+  });
+  let action = createAction(user, {
+    title: `휴지통 항목 ${verified.items.length}개 복원`,
+    description: verified.items.map((item, index) => `${index + 1}. ${item.name}\n${item.originalPath}`).join('\n'),
+    risk: 'reversible',
+    actionType: 'restore_trash_items',
+    trashItems: verified.items,
+    preview: { itemCount: verified.items.length, items: verified.items.map((item) => item.originalPath) },
+    idempotencyKey: verified.idempotencyKey,
+    sourceMessageId: verified.sourceMessageId,
+    requestedByAgent: true,
+  });
+  const approvalMode = normalizePreferences(getPreferences(user)).approvalMode;
+  if (action.status === 'pending' && ['auto_reversible', 'auto_all'].includes(approvalMode)) {
+    action = await executeRuntimeAction(user, action.actionId, { platformCall });
+  }
+  return action;
+};
 
 const readBoundedAiNasFile = (user, full, expectedSize) => {
   const fd = fs.openSync(full, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
@@ -817,10 +844,13 @@ router.post('/ai/actions/:actionId/execute', async (req, res) => {
     const continuation = await resolveRunDecision(user, action, 'approved', {
       ok: true, status: 'completed', actionId: action.actionId, result: action.result || null,
     }, req);
+    const standaloneMessages = action.actionType === 'restore_trash_items' && !continuation
+      ? appendMessages(user, [{ role: 'assistant', content: summarizeTrashRestoreAction(action), createdAt: new Date().toISOString(), agentRunId: `selection-${action.actionId}` }])
+      : null;
     res.json({
       action,
       continuation,
-      messages: continuation?.messages?.slice(-80),
+      messages: continuation?.messages?.slice(-80) || standaloneMessages?.slice(-80),
       actions: listActions(user).slice(0, 50),
       usage: getUsage(user),
     });
@@ -884,10 +914,13 @@ router.post('/ai/actions/:actionId/reject', async (req, res) => {
     const continuation = await resolveRunDecision(user, rejected, 'rejected', {
       ok: false, status: 'rejected_by_user', actionId: rejected.actionId,
     }, req);
+    const standaloneMessages = rejected.actionType === 'restore_trash_items' && !continuation
+      ? appendMessages(user, [{ role: 'assistant', content: summarizeTrashRestoreAction(rejected), createdAt: new Date().toISOString(), agentRunId: `selection-${rejected.actionId}` }])
+      : null;
     return res.json({
       action: rejected,
       continuation,
-      messages: continuation?.messages?.slice(-80),
+      messages: continuation?.messages?.slice(-80) || standaloneMessages?.slice(-80),
       actions: listActions(user).slice(0, 50),
       usage: getUsage(user),
     });
@@ -908,7 +941,8 @@ router.post('/ai/chat', (req, res, next) => {
     if (!message) return res.status(400).json({ error: '메시지를 입력해주세요.' });
     startProgress(user, requestId);
 
-    const history = listMessages(user, 6).map((item) => ({ role: item.role, content: String(item.content || '').slice(0, 800) }));
+    const storedMessages = listMessages(user, 120);
+    const history = storedMessages.slice(-6).map((item) => ({ role: item.role, content: String(item.content || '').slice(0, 800) }));
     const pendingTask = getPendingTask(user);
     const authorization = deriveAuthorizedMutationToolsFromConversation(message, history, pendingTask);
     if (authorization.cancelled && pendingTask) clearPendingTask(user, 'cancelled-by-user');
@@ -921,6 +955,39 @@ router.post('/ai/chat', (req, res, next) => {
     }
     const contextLines = [];
     const preferences = normalizePreferences(getPreferences(user));
+    if (context.selection) {
+      updateProgress(user, requestId, {
+        phase: 'tool', title: '선택한 휴지통 항목을 다시 확인하고 있습니다',
+        detail: '저장된 선택 목록과 최신 휴지통을 대조합니다.', progress: 45, stepTitle: '선택 재검증',
+      });
+      const action = await prepareSelectionAction(user, context.selection, req);
+      const answer = summarizeTrashRestoreAction(action);
+      clearPendingTask(user, 'selection-action-prepared');
+      const saved = appendMessages(user, [
+        { role: 'user', content: message, createdAt: new Date().toISOString(), context: { selection: { sourceMessageId: context.selection.sourceMessageId || null, selectedKeys: context.selection.selectedKeys || [], selectAll: context.selection.selectAll === true } }, agentRunId: `selection-${action.actionId}` },
+        { role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId: `selection-${action.actionId}` },
+      ]);
+      const waiting = action.status === 'pending';
+      finishProgress(user, requestId, waiting ? {
+        state: 'waiting_approval', phase: 'waiting_approval', title: '사용자 승인을 기다리고 있습니다',
+        detail: '선택한 복구 대상이 아래 승인 카드에 준비되었습니다.', stepTitle: '승인 대기',
+      } : {
+        state: 'completed', phase: 'completed', title: '휴지통 복구 확인이 끝났습니다',
+        detail: answer, stepTitle: '복구 결과 확인',
+      });
+      return res.json({
+        answer,
+        messages: saved.slice(-80),
+        actions: listActions(user).slice(0, 50),
+        toolEvents: action.status === 'completed' || action.status === 'partial'
+          ? [{ name: 'restore_trash_items', ok: action.status === 'completed', result: action.result }]
+          : [],
+        usage: getUsage(user),
+        continuation: { status: waiting ? 'waiting_approval' : 'completed' },
+        protocolWarning: null,
+        selectionFrame: null,
+      });
+    }
     const today = new Date().toISOString().slice(0, 10);
     const todayUsage = getUsage(user).days?.[today] || { totalTokens: 0 };
     if (Number(todayUsage.totalTokens || 0) >= preferences.dailyTokenLimit) {

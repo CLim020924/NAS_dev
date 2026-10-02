@@ -55,6 +55,15 @@ test('복원되었습니다 문구도 실제 복구 실행 기록이 없으면 �
   });
 });
 
+test('복구 작업 없이 진행하겠다는 미래형 문구도 차단한다', () => {
+  const result = finalizeAgentAnswer('1번, 2번 선택', {
+    text: '삭제된 항목 1번과 2번 모두 복구를 진행하겠습니다. 잠시만 기다려 주세요.',
+    events: [],
+  }, []);
+  assert.equal(result.protocolWarning, 'AI_UNVERIFIED_PROGRESS_CLAIM');
+  assert.match(result.answer, /아무 작업도 실행하지 않았습니다/);
+});
+
 test('복원 대상을 다시 물을 때 휴지통 결과를 번호 목록으로 고정한다', () => {
   const result = finalizeAgentAnswer('삭제한 파일 복원해줄래', {
     text: '어떤 파일을 복원할까요?',
@@ -78,6 +87,7 @@ test('복원 대상을 다시 물을 때 휴지통 결과를 번호 목록으로
   assert.equal(result.selectionFrame.options[0].details[0], '/문서/보고서.pdf');
   assert.match(result.selectionFrame.options[0].details[1], /^삭제 2026\. 10\. 2\./);
   assert.equal(result.selectionFrame.options[0].reply, '1번 · 보고서.pdf');
+  assert.equal(result.selectionFrame.sourceTool, 'list_trash');
   assert.doesNotMatch(JSON.stringify(result.selectionFrame), /secret-a|secret-b/);
 });
 

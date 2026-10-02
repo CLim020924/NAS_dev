@@ -1,5 +1,6 @@
 const FALSE_APPROVAL_CLAIM = /(?:승인이 필요한 작업이\s*\d+개|승인\s*카드.{0,12}(?:승인|실행)|승인\s*대기\s*중)/i;
 const UNSUPPORTED_COMPLETION_CLAIM = /(?:(?:완료|생성|저장|수정|삭제|복사|이동|전송|실행|처리|추가|차단|복원|복구|변환)(?:했|되었|됐)|만들었|옮겼|보냈|되돌렸)(?:습니다|어요|다)/i;
+const UNSUPPORTED_PROGRESS_CLAIM = /(?:(?:복원|복구|삭제|생성|저장|수정|복사|이동|전송|실행|처리|추가|차단|변환).{0,24}(?:진행|처리|실행)(?:하겠|할게)|잠시만\s*기다려\s*주)/i;
 const RECALL_REQUEST = /(?:과거|예전|이전|전에|맨\s*처음|기억|대화|말했던|말했|내\s*키)/i;
 const NUMERIC_ONLY_REQUEST = /(?:숫자(?:로)?만|번호(?:로)?만)/i;
 const PATH_ONLY_REQUEST = /(?:경로만\s*(?:답|말|알려)|(?:답|말).*(?:경로만))/i;
@@ -47,6 +48,17 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTo
       selectionFrame: null,
     };
   }
+  if (UNSUPPORTED_PROGRESS_CLAIM.test(answer)) {
+    const hasMutationEvent = (agentResult.events || []).some((event) => authorizedMutationTools.includes(event.name)
+      && (event.ok === true || event.result?.status === 'pending_approval'));
+    if (!hasMutationEvent) {
+      return {
+        answer: '실제 변경 작업이 생성되지 않아 아무 작업도 실행하지 않았습니다. 선택한 항목을 다시 확인한 뒤 실행을 요청해 주세요.',
+        protocolWarning: 'AI_UNVERIFIED_PROGRESS_CLAIM',
+        selectionFrame: null,
+      };
+    }
+  }
   if (authorizedMutationTools.length > 0 && UNSUPPORTED_COMPLETION_CLAIM.test(answer)) {
     const completed = authorizedMutationTools.every((name) => (agentResult.events || []).some((event) =>
       event.name === name && event.ok === true && event.result?.status === 'completed'));
@@ -89,5 +101,5 @@ module.exports = {
   finalizeAgentAnswer,
   finalizeContinuationAnswer,
   needsConversationSearch,
-  _test: { extractUniqueNumber, extractUniquePath, formatTrashSelection, FALSE_APPROVAL_CLAIM },
+  _test: { extractUniqueNumber, extractUniquePath, formatTrashSelection, FALSE_APPROVAL_CLAIM, UNSUPPORTED_PROGRESS_CLAIM },
 };

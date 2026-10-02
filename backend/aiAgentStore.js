@@ -59,6 +59,7 @@ const listMessages = (user, limit = 80) => {
 const appendMessages = (user, messages = []) => {
   const safeMessages = messages.map((message) => ({
     ...message,
+    messageId: safeId(message.messageId || createId('aimsg')),
     ...(message.selectionFrame ? { selectionFrame: normalizeSelectionFrame(message.selectionFrame) } : {}),
   }));
   const next = [...listMessages(user, 4980), ...safeMessages].slice(-5000);
