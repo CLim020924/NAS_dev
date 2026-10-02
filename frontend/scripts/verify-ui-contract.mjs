@@ -34,6 +34,9 @@ requireText('src/contexts/ThemeContext.js', "textOverflow: 'ellipsis'", 'dynamic
 requireText('src/contexts/ThemeContext.js', "'.nas-dynamic-label'", 'dynamic label utility must remain available');
 requireText('src/components/GlobalAppWindowLayer.js', 'className="nas-dynamic-label"', 'app window titles must not displace window controls');
 requireText('src/components/NAS/Window/NASWindow.js', 'className="nas-dynamic-label"', 'file and folder window titles must not displace window controls');
+requireText('src/components/AiAgentPanel.js', 'item.selectionFrame?.options?.length > 0', 'AI selectable results must render through the shared selection frame');
+requireText('src/components/AiAgentPanel.js', 'aria-multiselectable={frame.multiple !== false}', 'AI selection frames must retain keyboard and assistive-technology semantics');
+requireText('src/components/AiAgentPanel.js', '선택 보내기', 'AI choices must require an explicit send step instead of executing on card click');
 requireText('src/components/TopBar.js', "display: { xs: 'none', md: 'inline-flex' }", 'minimized-task chips must not overflow the mobile top bar');
 const topBar = read('src/components/TopBar.js');
 const fileButton = topBar.indexOf('aria-label="파일 관리자 열기"');

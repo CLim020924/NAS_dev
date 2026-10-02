@@ -3,6 +3,8 @@ const UNSUPPORTED_COMPLETION_CLAIM = /(?:(?:완료|생성|저장|수정|삭제|�
 const RECALL_REQUEST = /(?:과거|예전|이전|전에|맨\s*처음|기억|대화|말했던|말했|내\s*키)/i;
 const NUMERIC_ONLY_REQUEST = /(?:숫자(?:로)?만|번호(?:로)?만)/i;
 const PATH_ONLY_REQUEST = /(?:경로만\s*(?:답|말|알려)|(?:답|말).*(?:경로만))/i;
+const SELECTION_QUESTION = /(?:선택|고르|어떤|어느|무엇|뭐|번호|대상)/i;
+const { buildSelectionFrame, formatSelectionText } = require('./aiSelectionFrame');
 
 const formatTrashSelection = (items = []) => {
   const safeItems = items.slice(0, 50);
@@ -36,12 +38,13 @@ const extractUniquePath = (answer) => {
 };
 
 const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTools = []) => {
-  if (agentResult.paused) return { answer: '', protocolWarning: null };
+  if (agentResult.paused) return { answer: '', protocolWarning: null, selectionFrame: null };
   let answer = String(agentResult.text || '').trim();
   if (FALSE_APPROVAL_CLAIM.test(answer)) {
     return {
       answer: '실제 승인 작업이 생성되지 않아 아무 작업도 실행하지 않았습니다. 대상과 원하는 작업을 구체적으로 다시 말씀해 주세요.',
       protocolWarning: 'AI_FALSE_APPROVAL_CLAIM',
+      selectionFrame: null,
     };
   }
   if (authorizedMutationTools.length > 0 && UNSUPPORTED_COMPLETION_CLAIM.test(answer)) {
@@ -51,26 +54,31 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTo
       return {
         answer: '요청한 변경 작업 전체의 완료를 서버에서 확인하지 못했습니다. 일부 작업은 실행됐을 수 있으니 작업 내역을 확인한 뒤 재시도해 주세요.',
         protocolWarning: 'AI_UNVERIFIED_COMPLETION_CLAIM',
+        selectionFrame: null,
       };
     }
   }
+  const selectionFrame = buildSelectionFrame(agentResult.events || []);
   if (authorizedMutationTools.includes('restore_trash_item')) {
     const restoreEvent = (agentResult.events || []).some((event) => event.name === 'restore_trash_item' && event.ok === true);
     const trashEvent = [...(agentResult.events || [])].reverse().find((event) => event.name === 'list_trash' && event.ok === true);
     const items = Array.isArray(trashEvent?.result?.items) ? trashEvent.result.items : [];
     if (!restoreEvent && items.length > 0 && /(?:어떤|어느|무엇|뭐|선택|번호|복구|복원|되돌)/i.test(answer)) {
-      answer = formatTrashSelection(items);
+      answer = selectionFrame ? formatSelectionText(selectionFrame) : formatTrashSelection(items);
     }
+  }
+  if (selectionFrame && SELECTION_QUESTION.test(answer) && !authorizedMutationTools.includes('restore_trash_item')) {
+    answer = `${answer}\n\n${formatSelectionText(selectionFrame)}`.trim();
   }
   if (NUMERIC_ONLY_REQUEST.test(String(userMessage || ''))) answer = extractUniqueNumber(answer) || answer;
   if (PATH_ONLY_REQUEST.test(String(userMessage || ''))) answer = extractUniquePath(answer) || answer;
-  return { answer, protocolWarning: null };
+  return { answer, protocolWarning: null, selectionFrame };
 };
 
 const finalizeContinuationAnswer = (interruptions = [], agentResult = {}) => {
   const decisions = Array.isArray(interruptions) ? interruptions.map((item) => item?.decision).filter(Boolean) : [];
   if (decisions.length > 0 && decisions.every((decision) => decision === 'rejected')) {
-    return { answer: '요청한 작업을 거절해 실행하지 않았습니다.', protocolWarning: null };
+    return { answer: '요청한 작업을 거절해 실행하지 않았습니다.', protocolWarning: null, selectionFrame: null };
   }
   return finalizeAgentAnswer('', agentResult);
 };

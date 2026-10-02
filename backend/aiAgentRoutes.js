@@ -458,6 +458,7 @@ const buildAgentSystemPrompt = (user, preferences = {}) => {
     '파일·친구·채팅 작업은 반드시 해당 도구로만 수행한다. 도구 결과가 completed일 때만 완료했다고 말한다.',
     '휴지통 복원 대상이 여러 개이고 사용자가 대상을 특정하지 않았다면 list_trash로 조회한 뒤 이름·원래 위치·삭제 시간을 1번부터 번호로 보여주고 번호 선택을 요청한다. 휴지통 ID는 사용자에게 노출하지 않는다.',
     '사용자가 번호로 답하면 list_trash를 다시 조회해 같은 정렬 순서의 항목을 확인한 뒤 정확한 휴지통 ID로 복원한다. 사용자가 전부 또는 모두를 명시하면 조건에 맞는 각 항목을 빠짐없이 복원 도구로 요청한다.',
+    '파일·사용자·친구·대화·알림·노트·연동 PC·공유·회의 등 여러 후보 중 사용자의 선택이 필요하면 먼저 해당 조회 도구로 최신 목록을 확인한다. 이름과 사용자가 구분할 수 있는 안전한 정보만 번호 목록으로 제시하고 내부 UID·토큰·복구 ID를 노출하지 않는다. 번호 답변을 받으면 변경 도구를 호출하기 전에 최신 목록과 사용자의 선택을 다시 대조한다.',
     '도구 결과가 pending_approval이면 작업이 승인 대기 중이라고 정확히 말하고 작업 이름을 알려준다.',
     '지원 도구가 없는 작업은 할 수 있다고 꾸미지 말고, 현재 불가능한 범위와 필요한 다음 구현을 명시한다.',
     '영구 삭제, 계정 생성·삭제, 비밀번호·보안 비밀 변경이나 조회, 임의 명령 실행은 절대 시도하지 않는다. 역할·용량·가입 승인·자원 정책은 관리자/마스터 권한과 critical 개별 승인을 모두 거치는 전용 도구로만 처리한다.',
@@ -563,7 +564,8 @@ const continueStoredRun = async (user, run, req, { forceApproval = false } = {})
       return { status: 'waiting_approval', answer, messages, toolEvents: agentResult.events };
     }
 
-    const answer = finalizeContinuationAnswer(run.interruptions || [], agentResult).answer;
+    const finalized = finalizeContinuationAnswer(run.interruptions || [], agentResult);
+    const answer = finalized.answer;
     (run.interruptions || []).forEach((item) => updateAction(user, item.actionId, { continuationStatus: null }));
     updateAgentRun(user, run.runId, {
       status: 'completed',
@@ -573,9 +575,9 @@ const continueStoredRun = async (user, run, req, { forceApproval = false } = {})
       lastError: null,
     });
     const messages = appendMessages(user, [{
-      role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId: run.runId,
+      role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId: run.runId, selectionFrame: finalized.selectionFrame || undefined,
     }]);
-    return { status: 'completed', answer, messages, toolEvents: agentResult.events };
+    return { status: 'completed', answer, messages, toolEvents: agentResult.events, selectionFrame: finalized.selectionFrame || null };
   } catch (err) {
     if (err.usage) recordUsage(user, err.usage);
     updateAgentRun(user, run.runId, {
@@ -1058,7 +1060,7 @@ router.post('/ai/chat', (req, res, next) => {
 
     const saved = appendMessages(user, [
       { role: 'user', content: attachments.names.length ? `${message}\n첨부: ${attachments.names.join(', ')}` : message, createdAt: new Date().toISOString(), context, agentRunId },
-      { role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId, pendingApproval: !!agentResult.paused },
+      { role: 'assistant', content: answer, createdAt: new Date().toISOString(), agentRunId, pendingApproval: !!agentResult.paused, selectionFrame: finalized.selectionFrame || undefined },
     ]);
 
     finishProgress(user, requestId, agentResult.paused ? {
@@ -1074,6 +1076,7 @@ router.post('/ai/chat', (req, res, next) => {
       usage: getUsage(user),
       continuation: agentResult.paused ? { status: 'waiting_approval', remaining: agentResult.interruptions.length } : { status: 'completed' },
       protocolWarning: finalized.protocolWarning,
+      selectionFrame: finalized.selectionFrame || null,
     });
   } catch (err) {
     if (user) failProgress(user, requestId, err.message);

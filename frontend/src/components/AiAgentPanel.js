@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  ButtonBase,
   Chip,
   Collapse,
   IconButton,
@@ -53,6 +54,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
   const [nasPickerOpen, setNasPickerOpen] = useState(false);
   const [attachedNasPaths, setAttachedNasPaths] = useState([]);
   const [localFiles, setLocalFilesState] = useState([]);
+  const [selectionByMessage, setSelectionByMessage] = useState({});
   const localFilesRef = useRef([]);
   const setLocalFiles = (update) => {
     const next = typeof update === 'function' ? update(localFilesRef.current) : update;
@@ -230,12 +232,13 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
     }
   };
 
-  const sendMessage = () => {
-    const text = message.trim();
+  const sendMessage = (overrideText = null) => {
+    const isSelectionReply = typeof overrideText === 'string';
+    const text = isSelectionReply ? overrideText.trim() : message.trim();
     if ((!text && attachedNasPaths.length === 0 && localFiles.length === 0) || loading) return;
     const promptText = text || '첨부한 항목을 확인하고 무엇인지 알려줘';
-    const sendingPaths = [...attachedNasPaths];
-    const sendingFiles = [...localFiles];
+    const sendingPaths = isSelectionReply ? [] : [...attachedNasPaths];
+    const sendingFiles = isSelectionReply ? [] : [...localFiles];
     followLatestRef.current = true;
     setShowLatestButton(false);
     const requestId = newRequestId();
@@ -296,6 +299,27 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
         clearActivityLater(5000);
       },
     });
+  };
+
+  const toggleSelection = (messageKey, frame, optionKey) => {
+    setSelectionByMessage((current) => {
+      const selected = new Set(current[messageKey] || []);
+      if (selected.has(optionKey)) selected.delete(optionKey);
+      else {
+        if (frame.multiple === false) selected.clear();
+        selected.add(optionKey);
+      }
+      return { ...current, [messageKey]: [...selected] };
+    });
+  };
+
+  const sendSelection = (messageKey, frame, selectAll = false) => {
+    const keys = selectAll ? frame.options.map((option) => option.key) : (selectionByMessage[messageKey] || []);
+    if (!keys.length || loading) return;
+    const replies = frame.options.filter((option) => keys.includes(option.key)).map((option) => option.reply);
+    const reply = selectAll && frame.allowAll ? '전부' : `${replies.join(', ')} 선택`;
+    setSelectionByMessage((current) => ({ ...current, [messageKey]: [] }));
+    sendMessage(reply);
   };
 
   const executeAction = (actionId) => run(async () => {
@@ -495,6 +519,62 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
                       >
                         {item.content}
                       </Typography>
+                      {item.role === 'assistant' && item.selectionFrame?.options?.length > 0 && (() => {
+                        const frame = item.selectionFrame;
+                        const selected = selectionByMessage[messageKey] || [];
+                        return (
+                          <Box sx={{ mt: 1.25, pt: 1.25, borderTop: (theme) => `1px solid ${theme.palette.divider}` }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>{frame.title}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                              {frame.instruction}
+                            </Typography>
+                            <Stack spacing={0.5} sx={{ mt: 1, maxHeight: 280, overflowY: 'auto', pr: 0.5 }} role="listbox" aria-label={frame.title} aria-multiselectable={frame.multiple !== false}>
+                              {frame.options.map((option) => {
+                                const checked = selected.includes(option.key);
+                                return (
+                                  <ButtonBase
+                                    key={option.key}
+                                    role="option"
+                                    aria-selected={checked}
+                                    onClick={() => toggleSelection(messageKey, frame, option.key)}
+                                    sx={{
+                                      width: '100%', alignItems: 'flex-start', justifyContent: 'flex-start', textAlign: 'left',
+                                      border: '1px solid', borderColor: checked ? 'primary.main' : 'divider', borderRadius: 0.75,
+                                      bgcolor: checked ? 'action.selected' : 'transparent', px: 1, py: 0.75,
+                                      transition: 'border-color 120ms ease, background-color 120ms ease',
+                                      '&:hover': { bgcolor: checked ? 'action.selected' : 'action.hover' },
+                                      '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 1 },
+                                    }}
+                                  >
+                                    <Box sx={{ width: 20, height: 20, mr: 1, mt: 0.1, flex: '0 0 auto', border: '1px solid', borderColor: checked ? 'primary.main' : 'text.disabled', bgcolor: checked ? 'primary.main' : 'transparent', color: 'primary.contrastText', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 900 }}>
+                                      {checked ? '✓' : option.key}
+                                    </Box>
+                                    <Box sx={{ minWidth: 0 }}>
+                                      <Typography variant="body2" sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>{option.label}</Typography>
+                                      {option.details?.map((detail, detailIndex) => (
+                                        <Typography key={`${option.key}-${detailIndex}`} variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{detail}</Typography>
+                                      ))}
+                                    </Box>
+                                  </ButtonBase>
+                                );
+                              })}
+                            </Stack>
+                            <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
+                              <Button size="small" variant="contained" disabled={!selected.length || loading} onClick={() => sendSelection(messageKey, frame)}>
+                                {selected.length ? `${selected.length}개 선택 보내기` : '항목을 선택하세요'}
+                              </Button>
+                              {frame.allowAll && (
+                                <Button size="small" variant="text" disabled={loading} onClick={() => sendSelection(messageKey, frame, true)}>전부 선택</Button>
+                              )}
+                            </Stack>
+                            {frame.totalCount > frame.options.length && (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                                화면에는 처음 {frame.options.length}개만 표시됩니다. 전체 {frame.totalCount}개 중 다른 항목은 검색어를 좁혀 다시 요청해 주세요.
+                              </Typography>
+                            )}
+                          </Box>
+                        );
+                      })()}
                       <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.25 }}>
                         <Tooltip title={copiedMessageKey === messageKey ? '복사됨' : '메시지 복사'}>
                           <IconButton

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { normalizeSelectionFrame } = require('./aiSelectionFrame');
 
 const DATA_ROOT = path.resolve(process.env.AI_AGENT_DATA_ROOT || path.join(__dirname, 'data', 'ai'));
 
@@ -56,7 +57,11 @@ const listMessages = (user, limit = 80) => {
 };
 
 const appendMessages = (user, messages = []) => {
-  const next = [...listMessages(user, 4980), ...messages].slice(-5000);
+  const safeMessages = messages.map((message) => ({
+    ...message,
+    ...(message.selectionFrame ? { selectionFrame: normalizeSelectionFrame(message.selectionFrame) } : {}),
+  }));
+  const next = [...listMessages(user, 4980), ...safeMessages].slice(-5000);
   writeJson(fileFor(user, 'messages.json'), next);
   return next;
 };

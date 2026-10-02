@@ -12,7 +12,7 @@ test('실제 action 없는 승인 카드 문구를 완료 응답으로 노출하
 });
 
 test('실제로 pause된 요청은 route의 승인 응답 생성을 방해하지 않는다', () => {
-  assert.deepEqual(finalizeAgentAnswer('파일 만들어줘', { paused: true, text: '' }), { answer: '', protocolWarning: null });
+  assert.deepEqual(finalizeAgentAnswer('파일 만들어줘', { paused: true, text: '' }), { answer: '', protocolWarning: null, selectionFrame: null });
 });
 
 test('모든 승인 작업을 거절하면 모델 문구와 무관하게 미실행을 확정한다', () => {
@@ -71,6 +71,28 @@ test('복원 대상을 다시 물을 때 휴지통 결과를 번호 목록으로
   assert.match(result.answer, /1\. 보고서\.pdf/);
   assert.match(result.answer, /2\. 사진\.png/);
   assert.doesNotMatch(result.answer, /secret-a|secret-b/);
+  assert.equal(result.selectionFrame.title, '복구할 항목 선택');
+  assert.equal(result.selectionFrame.options.length, 2);
+  assert.equal(result.selectionFrame.options[0].key, '1');
+  assert.equal(result.selectionFrame.options[0].label, '보고서.pdf');
+  assert.equal(result.selectionFrame.options[0].details[0], '/문서/보고서.pdf');
+  assert.match(result.selectionFrame.options[0].details[1], /^삭제 2026\. 10\. 2\./);
+  assert.equal(result.selectionFrame.options[0].reply, '1번 · 보고서.pdf');
+  assert.doesNotMatch(JSON.stringify(result.selectionFrame), /secret-a|secret-b/);
+});
+
+test('파일·사용자·노트 등 조회 결과에도 공통 선택 프레임을 만든다', () => {
+  const cases = [
+    ['search_files', [{ name: '시험.java', path: '/과제/시험.java', type: 'file' }], '검색 결과 선택'],
+    ['search_users', { results: [{ displayName: '홍길동', username: 'hong', userUid: 'secret-uid' }] }, '사용자 선택'],
+    ['list_notebooks', { notebooks: [{ title: '자바 공부', notebookId: 'secret-note' }] }, '노트북 선택'],
+  ];
+  cases.forEach(([name, result, title]) => {
+    const finalized = finalizeAgentAnswer('목록 보여줘', { text: '확인했습니다.', events: [{ name, ok: true, result }] });
+    assert.equal(finalized.selectionFrame.title, title);
+    assert.equal(finalized.selectionFrame.options.length, 1);
+    assert.doesNotMatch(JSON.stringify(finalized.selectionFrame), /secret-uid|secret-note/);
+  });
 });
 
 test('숫자만 요청은 답에 숫자가 하나일 때 군더더기를 제거한다', () => {
