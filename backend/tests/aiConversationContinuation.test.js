@@ -74,6 +74,19 @@ test('미완성 작업 중 금지·조회·새 명령은 이전 변경 권한을
   }).tools, ['send_chat_message']);
 });
 
+test('과거 삭제 내역 질문은 이전 복구 권한을 이어받지 않는다', () => {
+  const pending = {
+    status: 'collecting',
+    updatedAt: new Date().toISOString(),
+    originalRequest: '삭제한 파일을 복원해줘',
+    authorizedMutationTools: ['restore_trash_item'],
+  };
+  for (const message of ['나 오늘 뭐 삭제했어?', '아까 복구됐어?', '어떤 파일이 지워졌나요?']) {
+    const result = deriveAuthorizedMutationToolsFromConversation(message, [], pending);
+    assert.deepEqual(result, { tools: [], cancelled: false, carried: false }, message);
+  }
+});
+
 test('실행되지 않은 보충 질문만 미완성 작업으로 유지한다', () => {
   assert.equal(shouldKeepPendingTask('누구에게 보낼까요?', [], ['send_chat_message']), true);
   assert.equal(shouldKeepPendingTask('완료했습니다.', [{ name: 'send_chat_message', ok: true }], ['send_chat_message']), false);

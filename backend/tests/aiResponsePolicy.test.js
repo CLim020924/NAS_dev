@@ -91,18 +91,70 @@ test('복원 대상을 다시 물을 때 휴지통 결과를 번호 목록으로
   assert.doesNotMatch(JSON.stringify(result.selectionFrame), /secret-a|secret-b/);
 });
 
-test('파일·사용자·노트 등 조회 결과에도 공통 선택 프레임을 만든다', () => {
+test('삭제 내역 조회 질문에는 복구 선택 프레임을 붙이지 않는다', () => {
+  const trashEvent = {
+    name: 'list_trash',
+    ok: true,
+    result: { items: [
+      { trashId: 'secret-a', name: '보고서.pdf', originalPath: '/문서/보고서.pdf', deletedAt: '2026-10-02T01:02:03.000Z' },
+      { trashId: 'secret-b', name: '사진.png', originalPath: '/사진/사진.png', deletedAt: '2026-10-02T02:03:04.000Z' },
+    ] },
+  };
+  for (const prompt of ['나 오늘 뭐 삭제했어?', '오늘 삭제한 파일 알려줘', '휴지통 목록 보여줘', '복구 가능한 파일이 뭐야?']) {
+    const result = finalizeAgentAnswer(prompt, {
+      text: '오늘 삭제된 파일은 보고서.pdf와 사진.png입니다.',
+      events: [trashEvent],
+    });
+    assert.equal(result.selectionFrame, null, prompt);
+    assert.equal(result.answer, '오늘 삭제된 파일은 보고서.pdf와 사진.png입니다.', prompt);
+  }
+});
+
+test('사용자가 선택 UI를 명시하면 실행 요청이 없어도 목록 프레임을 제공한다', () => {
+  const result = finalizeAgentAnswer('삭제한 파일 복구 후보를 선택 가능한 목록으로 보여줘. 실제 복원은 하지 마.', {
+    text: '복구 후보를 확인했습니다.',
+    events: [{
+      name: 'list_trash',
+      ok: true,
+      result: { items: [
+        { trashId: 'secret-a', name: '보고서.pdf', originalPath: '/문서/보고서.pdf', deletedAt: '2026-10-02T01:02:03.000Z' },
+      ] },
+    }],
+  });
+  assert.equal(result.selectionFrame.sourceTool, 'list_trash');
+  assert.match(result.answer, /^복구할 항목을 번호로 선택해 주세요/);
+});
+
+test('파일·사용자·노트 등도 사용자가 선택 목록을 요청한 경우에만 공통 선택 프레임을 만든다', () => {
   const cases = [
     ['search_files', [{ name: '시험.java', path: '/과제/시험.java', type: 'file' }], '검색 결과 선택'],
     ['search_users', { results: [{ displayName: '홍길동', username: 'hong', userUid: 'secret-uid' }] }, '사용자 선택'],
     ['list_notebooks', { notebooks: [{ title: '자바 공부', notebookId: 'secret-note' }] }, '노트북 선택'],
   ];
   cases.forEach(([name, result, title]) => {
-    const finalized = finalizeAgentAnswer('목록 보여줘', { text: '확인했습니다.', events: [{ name, ok: true, result }] });
+    const finalized = finalizeAgentAnswer('선택 가능한 목록으로 보여줘', { text: '확인했습니다.', events: [{ name, ok: true, result }] });
     assert.equal(finalized.selectionFrame.title, title);
     assert.equal(finalized.selectionFrame.options.length, 1);
     assert.doesNotMatch(JSON.stringify(finalized.selectionFrame), /secret-uid|secret-note/);
   });
+});
+
+test('일반 목록 조회에는 다른 도구도 선택 프레임을 자동으로 붙이지 않는다', () => {
+  const finalized = finalizeAgentAnswer('최근 파일 목록 보여줘', {
+    text: '최근 파일은 시험.java입니다.',
+    events: [{ name: 'list_recent_files', ok: true, result: { files: [{ name: '시험.java', path: '/과제/시험.java' }] } }],
+  });
+  assert.equal(finalized.selectionFrame, null);
+  assert.equal(finalized.answer, '최근 파일은 시험.java입니다.');
+});
+
+test('변경 권한이 있어도 모델이 선택을 요청하지 않은 무관한 목록에는 프레임을 붙이지 않는다', () => {
+  const finalized = finalizeAgentAnswer('새 폴더 만들어줘', {
+    text: '현재 폴더를 확인했습니다.',
+    events: [{ name: 'list_files', ok: true, result: [{ name: '기존 폴더', path: '/기존 폴더' }] }],
+  }, ['create_folder']);
+  assert.equal(finalized.selectionFrame, null);
+  assert.equal(finalized.answer, '현재 폴더를 확인했습니다.');
 });
 
 test('모델이 후보 목록을 이미 썼어도 선택 질문은 서버의 한 목록으로 정규화한다', () => {

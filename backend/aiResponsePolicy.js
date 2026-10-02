@@ -4,8 +4,14 @@ const UNSUPPORTED_PROGRESS_CLAIM = /(?:(?:복원|복구|삭제|생성|저장|수
 const RECALL_REQUEST = /(?:과거|예전|이전|전에|맨\s*처음|기억|대화|말했던|말했|내\s*키)/i;
 const NUMERIC_ONLY_REQUEST = /(?:숫자(?:로)?만|번호(?:로)?만)/i;
 const PATH_ONLY_REQUEST = /(?:경로만\s*(?:답|말|알려)|(?:답|말).*(?:경로만))/i;
-const SELECTION_QUESTION = /(?:선택|고르|어떤|어느|무엇|뭐|번호|대상)/i;
+const EXPLICIT_SELECTION_REQUEST = /(?:선택\s*(?:가능한|할\s*수\s*있는)?\s*(?:목록|리스트|항목|화면)|번호(?:를|로)?\s*(?:매겨|나눠|보여|알려)|(?:목록|리스트|후보).{0,24}(?:골라|선택)|(?:골라|선택).{0,24}(?:목록|리스트|후보)|선택지(?:를|가)?\s*(?:보여|필요))/i;
+const ANSWER_REQUESTS_SELECTION = /(?:선택해\s*(?:줘|주세요|주시면)|골라\s*(?:줘|주세요|주시면)|번호(?:를|로)?\s*(?:알려|입력|선택)|(?:어떤|어느).{0,32}(?:고를|선택|복구|복원|원하시|할까요)|원하는.{0,24}(?:항목|파일|사용자|번호).{0,20}(?:알려|선택))/i;
 const { buildSelectionFrame, formatSelectionText } = require('./aiSelectionFrame');
+
+const shouldExposeSelectionFrame = (userMessage, answer, authorizedMutationTools = []) => (
+  EXPLICIT_SELECTION_REQUEST.test(String(userMessage || ''))
+  || (authorizedMutationTools.length > 0 && ANSWER_REQUESTS_SELECTION.test(String(answer || '')))
+);
 
 const formatTrashSelection = (items = []) => {
   const safeItems = items.slice(0, 50);
@@ -70,7 +76,11 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTo
       };
     }
   }
-  const selectionFrame = buildSelectionFrame(agentResult.events || []);
+  const candidateSelectionFrame = buildSelectionFrame(agentResult.events || []);
+  const selectionFrame = candidateSelectionFrame
+    && shouldExposeSelectionFrame(userMessage, answer, authorizedMutationTools)
+    ? candidateSelectionFrame
+    : null;
   if (authorizedMutationTools.includes('restore_trash_item')) {
     const restoreEvent = (agentResult.events || []).some((event) => event.name === 'restore_trash_item' && event.ok === true);
     const trashEvent = [...(agentResult.events || [])].reverse().find((event) => event.name === 'list_trash' && event.ok === true);
@@ -79,7 +89,7 @@ const finalizeAgentAnswer = (userMessage, agentResult = {}, authorizedMutationTo
       answer = selectionFrame ? formatSelectionText(selectionFrame) : formatTrashSelection(items);
     }
   }
-  if (selectionFrame && SELECTION_QUESTION.test(answer) && !authorizedMutationTools.includes('restore_trash_item')) {
+  if (selectionFrame && !authorizedMutationTools.includes('restore_trash_item')) {
     answer = formatSelectionText(selectionFrame);
   }
   if (NUMERIC_ONLY_REQUEST.test(String(userMessage || ''))) answer = extractUniqueNumber(answer) || answer;
@@ -101,5 +111,5 @@ module.exports = {
   finalizeAgentAnswer,
   finalizeContinuationAnswer,
   needsConversationSearch,
-  _test: { extractUniqueNumber, extractUniquePath, formatTrashSelection, FALSE_APPROVAL_CLAIM, UNSUPPORTED_PROGRESS_CLAIM },
+  _test: { extractUniqueNumber, extractUniquePath, formatTrashSelection, shouldExposeSelectionFrame, FALSE_APPROVAL_CLAIM, UNSUPPORTED_PROGRESS_CLAIM },
 };
