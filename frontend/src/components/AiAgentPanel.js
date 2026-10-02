@@ -399,22 +399,80 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
         bgcolor: 'background.paper',
       }}
     >
-      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1, borderBottom: (theme) => `1px solid ${theme.palette.divider}` }}>
-          <SmartToyIcon color="primary" />
-          <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 900 }}>AI 에이전트</Typography>
-            <Typography variant="caption" color="text.secondary">
-              {status?.configured ? `${status.provider} · ${status.model} · ${status.toolCount || 0}개 작업 도구` : 'AI 설정 필요'}
-            </Typography>
+      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+        <Box
+          data-pinned={settingsOpen ? 'true' : 'false'}
+          sx={{
+            position: 'absolute',
+            inset: '0 0 auto 0',
+            height: 8,
+            zIndex: (theme) => theme.zIndex.appBar + 2,
+            pointerEvents: 'none',
+            '&:hover .AiAgentHeader, &:focus-within .AiAgentHeader, &[data-pinned="true"] .AiAgentHeader': {
+              opacity: 1,
+              transform: 'translateY(0)',
+              pointerEvents: 'auto',
+            },
+          }}
+        >
+          <ButtonBase
+            aria-label="AI 상단바 표시"
+            sx={{
+              position: 'absolute',
+              inset: '0 0 auto 0',
+              height: 8,
+              pointerEvents: 'auto',
+              cursor: 'default',
+              '&::after': {
+                content: '""',
+                position: 'absolute',
+                top: 1,
+                left: '50%',
+                width: 28,
+                height: 2,
+                transform: 'translateX(-50%)',
+                bgcolor: 'divider',
+                opacity: 0.55,
+              },
+            }}
+          />
+          <Box
+            className="AiAgentHeader"
+            sx={{
+              position: 'absolute',
+              inset: '0 0 auto 0',
+              minHeight: 52,
+              px: 1.5,
+              py: 0.75,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.75,
+              borderBottom: (theme) => `1px solid ${theme.palette.divider}`,
+              bgcolor: 'background.paper',
+              boxShadow: 3,
+              opacity: 0,
+              transform: 'translateY(calc(-100% - 1px))',
+              pointerEvents: 'none',
+              transition: (theme) => theme.transitions.create(['opacity', 'transform'], {
+                duration: theme.transitions.duration.shortest,
+              }),
+            }}
+          >
+            <SmartToyIcon color="primary" fontSize="small" />
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>AI 에이전트</Typography>
+              <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                {status?.configured ? `${status.provider} · ${status.model} · ${status.toolCount || 0}개 작업 도구` : 'AI 설정 필요'}
+              </Typography>
+            </Box>
+            <Chip size="small" color={status?.enabled ? 'success' : 'default'} label={status?.enabled ? '활성' : '비활성'} />
+            <Tooltip title="AI 설정">
+              <IconButton size="small" aria-label="AI 설정" aria-pressed={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}>
+                <SettingsIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <IconButton size="small" aria-label="AI 에이전트 닫기" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
           </Box>
-          <Chip size="small" color={status?.enabled ? 'success' : 'default'} label={status?.enabled ? '활성' : '비활성'} />
-          <Tooltip title="AI 설정">
-            <IconButton size="small" aria-label="AI 설정" aria-pressed={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}>
-              <SettingsIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <IconButton size="small" aria-label="AI 에이전트 닫기" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
         </Box>
         {activity && (
           <Box aria-live="polite" sx={{ borderBottom: (theme) => `1px solid ${theme.palette.divider}`, bgcolor: 'background.default' }}>
@@ -443,7 +501,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
         {error && <Alert severity="error" sx={{ borderRadius: 0 }}>{error}</Alert>}
 
         <Collapse in={settingsOpen} unmountOnExit>
-          <Box sx={{ p: 2, borderBottom: (theme) => `1px solid ${theme.palette.divider}`, bgcolor: 'background.default' }}>
+          <Box sx={{ px: 2, pb: 2, pt: 8, borderBottom: (theme) => `1px solid ${theme.palette.divider}`, bgcolor: 'background.default' }}>
             <Stack spacing={1.25}>
               <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>AI 설정</Typography>
               <Alert severity="info">자동 승인도 현재 계정 권한 안에서만 동작합니다. 영구 삭제·계정 및 보안 설정·임의 코드 실행은 자동 승인되지 않습니다.</Alert>

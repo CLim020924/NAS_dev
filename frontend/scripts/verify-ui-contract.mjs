@@ -37,6 +37,10 @@ requireText('src/components/NAS/Window/NASWindow.js', 'className="nas-dynamic-la
 requireText('src/components/AiAgentPanel.js', 'item.selectionFrame?.options?.length > 0', 'AI selectable results must render through the shared selection frame');
 requireText('src/components/AiAgentPanel.js', 'aria-multiselectable={frame.multiple !== false}', 'AI selection frames must retain keyboard and assistive-technology semantics');
 requireText('src/components/AiAgentPanel.js', '선택 보내기', 'AI choices must require an explicit send step instead of executing on card click');
+requireText('src/components/AiAgentPanel.js', 'aria-label="AI 상단바 표시"', 'AI panel must keep a narrow top-edge reveal target');
+requireText('src/components/AiAgentPanel.js', '&:hover .AiAgentHeader, &:focus-within .AiAgentHeader', 'AI header must reveal for pointer and keyboard focus');
+requireText('src/components/AiAgentPanel.js', 'data-pinned={settingsOpen', 'AI header must remain operable while settings are open');
+requireText('src/components/AiAgentPanel.js', "transform: 'translateY(calc(-100% - 1px))'", 'AI header must stay outside the content area while idle');
 requireText('src/components/TopBar.js', "display: { xs: 'none', md: 'inline-flex' }", 'minimized-task chips must not overflow the mobile top bar');
 const topBar = read('src/components/TopBar.js');
 const fileButton = topBar.indexOf('aria-label="파일 관리자 열기"');
