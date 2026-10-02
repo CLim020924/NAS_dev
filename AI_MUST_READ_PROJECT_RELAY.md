@@ -1970,3 +1970,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 최종 검증: 집중 정책·선택 회귀 34/34, UI contract 121개 소스, Windows backend 전체 185건 중 177 pass·환경 의존 8 skip·0 fail, NAS backend 전체 185건 중 179 pass·런타임 의존 6 skip·0 fail, `git diff --check` 통과. 운영 NAS에서 `CI=false DISABLE_ESLINT_PLUGIN=true npm run build`가 성공했고 PDF.js API/Worker 4.8.69 일치를 확인했다. `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 active, `msp-backend`는 online, 내부와 공개 HTTP는 모두 200이다.
 - 운영 배포: commit `a39c93e`을 NAS에 fast-forward하고 정적 파일을 index 마지막 순서로 배포했다. build·`/var/www/html`·public의 `main.2ce32f2a.js` SHA-256은 모두 `c27ae3e26a23085d016b18f2b9a87c694e7f3140ca95d79f11e1a6bd45c7217b`로 일치한다.
 - 공개 실화면: Chrome의 기존 로그인 세션에서 `차단된 사용자 알려줘`, `연결 해제된 PC 알려줘`, `노트 목록 알려줘`를 연속 실행했다. 각각 정보 답변만 반환했으며 기존 복구 선택 카드 5개와 기존 승인 안내 2개가 세 요청 후에도 5개·2개로 유지되어 새 선택 UI나 변경 승인이 만들어지지 않았다. 실제 파일·계정 상태를 변경하는 작업은 실행하지 않았고 AI 조회 메시지 세 건만 추가했다.
+
+### 2026-10-02 Excel 중복 제거 결과 흰 화면 진단
+
+- 사용자 요청: NAS에서 `Excel_6개_전체시트_중복제거.xlsx`를 열었을 때 내용이 안 보이고 하얀 화면만 나오는 원인을 확인한다. 이번 요청은 진단 범위이며 파일 내용이나 운영 설정은 변경하지 않는다.
+- 실제 화면 재현: 공개 NAS의 로그인된 Chrome에서 해당 파일 창을 열었다. 파일명·저장·인쇄·창 제어가 있는 FileViewer 껍데기는 열렸지만 문서 내용과 OnlyOffice 편집기 UI는 전혀 생성되지 않았다. DOM에도 실제 문서 편집기 iframe이 없어서 파일이 단순히 빈 시트로 표시된 경우와 구분된다.
+- HTTP 교차검증: 공개 `/onlyoffice/web-apps/apps/api/documents/api.js`, `/onlyoffice/healthcheck`, 스프레드시트 편집기 리소스가 모두 HTTP 502였다. NAS backend의 `127.0.0.1:3030/onlyoffice/...` 프록시도 `OnlyOffice proxy failed` 502였고, 컨테이너 포트 `127.0.0.1:8080` 직접 요청은 연결이 리셋됐다.
+- 확정 원인: Docker의 `onlyoffice/documentserver` 컨테이너는 상태만 `running`이지만 실제로는 `/app/ds/run-document-server.sh`와 `sleep 1`만 남아 있고 nginx·supervisor·문서 서버 포트가 시작되지 않았다. 로그는 빈 호스트·포트에 대해 `nc: port number invalid`와 `Waiting for connection to the  host on port `를 반복한다. 컨테이너 내부 `/etc/onlyoffice/documentserver/local.json`이 2026-09-14 시각의 0바이트 파일이며 별도 영구 마운트도 아니다. 시작 스크립트가 여기서 DB·RabbitMQ 주소를 읽지 못해 빈 연결 정보를 기다리는 단계에서 멈춘 것이 흰 화면의 직접 원인이다.
+- 결론/안전 경계: 현재 증상은 중복 제거 결과 파일의 내용이나 확장자 때문에 발생한 것으로 볼 근거가 없고, 파일을 가져오기 전 문서 뷰어 SDK 자체가 죽어 발생한다. 이번 진단에서는 사용자 파일, OnlyOffice 컨테이너, DB, nginx를 수정하거나 재시작하지 않았다. 후속 복구에서는 기존 데이터 볼륨을 보존한 채 `local.json`의 정상 설정을 복구하고, OnlyOffice healthcheck·SDK 200·해당 XLSX 실화면 렌더링까지 순서대로 검증해야 한다.
