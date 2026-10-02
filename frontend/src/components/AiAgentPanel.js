@@ -408,7 +408,7 @@ const AiAgentPanel = ({ open, onClose, context = {}, draftRequest = null }) => {
             height: 8,
             zIndex: (theme) => theme.zIndex.appBar + 2,
             pointerEvents: 'none',
-            '&:hover .AiAgentHeader, &:focus-within .AiAgentHeader, &[data-pinned="true"] .AiAgentHeader': {
+            '&:hover .AiAgentHeader, &:has(.AiAgentHeader :focus-visible) .AiAgentHeader, &:has(> [aria-label="AI 상단바 표시"]:focus-visible) .AiAgentHeader, &[data-pinned="true"] .AiAgentHeader': {
               opacity: 1,
               transform: 'translateY(0)',
               pointerEvents: 'auto',
