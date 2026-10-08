@@ -1985,3 +1985,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 진행: 기존 OnlyOffice 데이터 볼륨을 보존하고 0바이트 `local.json`을 백업한 뒤 동일 이미지의 정상 기본 설정과 현재 컨테이너 환경을 대조하는 최소 복구 절차를 시작했다. 첫 읽기 직전에 NAS 접속이 끊겨 운영 파일·컨테이너에는 아직 어떤 변경도 하지 않았다.
 - 현재 장애 근거: Windows Tailscale 상태는 NAS `100.80.39.112`를 `offline, last seen 21d ago` 및 `peer's node key has expired`로 표시한다. LAN `192.168.45.30`과 Tailscale 주소의 22·80·3030·8080 TCP가 모두 닫혀 있고 공개 `https://filemanager-nas.com`은 Cloudflare 530이다. 따라서 SSH·웹·backend·OnlyOffice 모두 현재 접근 불가다.
 - 미완료/다음 행동: NAS 본체와 네트워크가 다시 온라인이 되어 SSH가 복구되어야 작업을 계속할 수 있다. 복구 후에는 컨테이너 inspect 백업, 정상 이미지의 `local.json` 추출·비밀값 비노출 대조, 손상 파일 백업, 최소 교체, 컨테이너 재시작, healthcheck와 SDK HTTP 200, 대상 XLSX 실화면 렌더링을 순서대로 검증한다. 서버 checkout 동기화도 접속 복구 뒤 수행해야 한다.
+
+### 2026-10-08 OnlyOffice 설정 복구 및 대상 XLSX 렌더링 검증
+
+- 사용자 요청: NAS가 다시 켜진 상태에서 0바이트 OnlyOffice 설정을 복구하고 문서가 실제로 처리되는지 확인한다.
+- 복구: LAN SSH `192.168.45.30` 연결을 확인한 뒤 `/home/limchanyoung/onlyoffice-recovery-20261008`에 기존 0바이트 `local.json`과 사설망 허용 전 설정을 각각 백업했다. 현재 컨테이너와 동일한 `onlyoffice/documentserver` 이미지에서 유효한 993바이트 기본 `local.json`을 별도 임시 컨테이너로 추출해 JSON 유효성 및 내부 PostgreSQL·RabbitMQ localhost 구성을 확인하고, 사용자 데이터 볼륨을 유지한 채 손상 파일만 교체했다.
+- 내부 통신 정책: 기본 설정 복구 후 DocumentServer가 NAS backend 주소 `172.17.0.1:3030`을 사설 IP라는 이유로 차단하는 것을 실제 변환 오류로 확인했다. 기존 FileViewer 설계가 이 Docker bridge 주소를 사용하므로 `services.CoAuthoring.request-filtering-agent.allowPrivateIPAddress=true`만 적용했다. 메타데이터 IP 허용은 켜지 않았고 JWT 설정·사용자 파일·DB 데이터는 변경하지 않았다.
+- 서비스 검증: PostgreSQL, RabbitMQ, supervisor, nginx, `ds:docservice`, `ds:converter`가 정상 시작됐다. 컨테이너 재시작 시험 뒤 4번째 5초 주기 안에 healthcheck가 HTTP 200으로 복구됐고, `ds:docservice`와 `ds:converter`는 RUNNING이었다. 직접 `127.0.0.1:8080/healthcheck`, backend `/onlyoffice` SDK 프록시, 공개 `/onlyoffice/healthcheck`, 공개 SDK가 모두 HTTP 200이며 SDK 크기는 64,320바이트다.
+- 대상 파일 검증: `/mnt/nas/users/cksdudproject/Excel_6개_전체시트_중복제거.xlsx`는 207,022바이트이고 ZIP 무결성 검사에 통과했으며 worksheet XML 3개가 있다. 계정·경로 검증이 포함된 기존 내부 파일 endpoint로 OnlyOffice가 이 파일을 직접 읽어 PDF로 변환했고, 결과는 HTTP 200, 377,048바이트, `%PDF-` 시그니처와 SHA-256 `c9fabe3d1e71d001acc314f6f7e1a099951bd1c64a15d568684d5c2fe9b200d0`으로 확인됐다. 원본 XLSX는 수정하지 않았다.
+- 화면 검증 경계: 공개 Chrome 로그인과 NAS 파일 관리자는 정상 열렸지만 저장된 브라우저 세션은 대상 파일 소유 계정과 달라 해당 XLSX가 목록에 없었다. 계정 세션을 강제로 종료·전환하지 않았으며, 이번 복구는 서비스·공개 리소스·재시작·실제 대상 파일 렌더링까지 검증됐다. 소유 계정에서 파일을 다시 여는 최종 육안 확인만 사용자 세션에서 가능하다.
+- 기록 범위: 운영 설정 복구이며 추적 코드나 제품 기능 변경은 없어 `NAS_PROJECT_LOG.xlsx`는 수정하지 않고 이 릴레이에만 복구·검증·롤백 위치를 기록한다.
