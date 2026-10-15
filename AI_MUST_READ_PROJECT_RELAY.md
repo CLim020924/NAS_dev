@@ -2063,3 +2063,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 문서: `docs/NAS_PROJECT_LOG.xlsx`의 10개 관련 시트와 전용 `docs/programs/NAS_MAIL_SPEC.xlsx`를 artifact-tool로 갱신·생성했고, 재열기·수식 오류 0·신규 문자 깨짐 없음·주요 시트 렌더를 확인했다.
 - 보류: 실제 `@cresero.com` 송수신, 제공자 프로비저닝, SPF/DKIM/DMARC, NAS 웹메일, 특권 계정 WebAuthn/TOTP는 아직 미구현이다. 사용자가 메일 제공자 가입·요금제를 선택하고 Cloudflare OAuth에 DNS Edit 범위를 승인한 뒤 샌드박스 사서함 1개로 프로비저닝·정지·복구·외부 송수신을 검증해야 한다.
 - 운영 배포: 사전 데이터를 `/home/limchanyoung/msp-backups/org-mail-20261015-predeploy`에 보존하고 commit `826c502`를 NAS에 fast-forward했다. Linux backend 51개 test files·UI contract 122 source·production/PDF.js build가 통과했고 PM2와 6개 필수 서비스가 active다. 공개 policy·site·`main.4f405bb2.js`는 HTTP 200, 비인증 admin API는 403이며 25개 members와 25개 identities가 일치한다. build/staging/운영 bundle SHA-256은 `a2518f7c8d161587ec3260bba0ecc084eaa4493ac0d47b3093fc4f590667f8c5`로 일치한다. 브라우저에서 외부·내부 가입 분기와 `@cresero.com` 안내를 실제 확인했고 console error는 0건이다. 표준 Linux build의 유일한 실패는 기존 `copyTextToClipboard.js` ESLint의 `globalThis` 환경 설정 문제였으며 ESLint webpack plugin만 분리한 동일 production compile은 성공했다.
+
+### 2026-10-16 Cresero 메일과 기존 메시지 통합 구조 검토
+
+- 사용자 요청: 실제 `@cresero.com` 메일 연동을 구현하기 전에 기존 NAS 메시지와 완전히 합칠지, 별도 프로그램으로 둘지, 두 방식을 함께 지원할지 결정한다. 이번 단계는 설계 검토이며 실제 제공자 가입·DNS·사서함·송수신 상태는 변경하지 않는다.
+- 현재 코드 근거: 기존 채팅은 NAS 사용자 UID, 친구·그룹 대화, Socket.IO 실시간 이벤트, 읽음 상태, 첨부 번들, NAS 수신 파일 저장과 계정별 알림을 중심으로 동작한다. 조직·메일 제어면은 사용자 UID와 예정 메일 주소·직책·가입 정책을 연결하지만 제공자 상태는 계속 `UNCONFIGURED`, 사서함 상태는 `PLANNED`이고 실제 메일 원문·스레드·발송 원장은 없다.
+- 권장 결정안: 사용자 화면은 하나의 `커뮤니케이션` 허브로 통합하고 왼쪽 또는 상단에서 `메시지`, `메일`, `알림`을 명확히 전환한다. 기존 메시지 창을 없애지 않고 기존 진입 버튼은 이 허브의 메시지 탭으로 연결하며, 메일은 같은 앱의 별도 탭·별도 창으로도 열 수 있게 한다.
+- 분리해야 할 엔진: 내부 메시지 원장과 외부 메일 원장을 하나의 conversations/messages 구조로 합치지 않는다. 메일은 외부 수신자, MIME, Message-ID/References, 스팸·반송·DKIM·전달 상태와 제공자 장애를 다뤄야 하므로 제공자 API의 사서함을 원본으로 삼고 NAS에는 UID 매핑, 최소 색인·캐시, 사용자 설정, 감사 상태만 저장한다. 채팅 장애와 메일 장애가 서로 전파되지 않게 별도 adapter·queue·retry·health 상태를 둔다.
+- 공유 통합 지점: 조직 명부의 NAS UID와 검증된 Cresero 주소를 하나의 연락처 카드에서 보여주고, 전체 안 읽음 수와 운영 알림은 공통 알림 계층에서 집계한다. NAS 파일 선택기, 사용자 검색, 접근 권한 검사는 공유하되 `메일 첨부`, `만료 공유 링크`, `NAS 메시지 첨부`의 의미와 제한을 화면에서 구분한다.
+- 교차 동작: 메시지 내용을 메일로 보내기와 메일을 NAS 메시지로 공유하기는 자동 변환이 아니라 명시적 사용자 동작으로 제공한다. 외부 발송 전에는 받는 사람·제목·첨부/공유 링크·외부 공개 범위를 최종 확인하고, 메일 첨부를 NAS에 저장할 때는 계정 루트 경계·할당량·악성 파일 검사를 거친다. AI도 내부 메시지 전송과 외부 메일 발송을 서로 다른 도구·승인 범위로 취급한다.
+- 제공자 검토: Zoho Mail 공식 API는 조직 사용자 생성·조회·정지, TFA/수신/발신 상태, 별칭, 폴더·메시지·스레드·첨부를 지원하므로 현재 NAS 제어면과 연결하기 쉬운 1차 후보다. Stalwart는 JMAP·IMAP·SMTP를 제공하지만 인터넷 공개 SMTP와 지속 보안 운영 부담이 커 향후 자체 호스팅 이전 후보로 유지한다. Cloudflare Email Routing/Email Service는 라우팅·발송 구성 요소로는 쓸 수 있어도 현재 요구하는 사용자별 Gmail형 사서함의 단독 원본으로 확정하지 않는다.
+- 확정이 필요한 경계: 권장 UI·엔진 구조는 위 혼합형으로 제안한다. 실제 구현 전에는 메일 제공자와 요금제, 관리자 OAuth 연결, Cloudflare DNS 변경 승인, 테스트 사서함 1개를 확정해야 한다. 이 외부 선택 전에는 `providerReady`를 거짓으로 바꾸거나 사용자 주소를 ACTIVE로 표시하지 않는다.
