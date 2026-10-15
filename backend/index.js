@@ -26,7 +26,6 @@ const {
 const {
   DEFAULT_USER_QUOTA_BYTES,
   USER_QUOTA_POLICY_VERSION,
-  isSafeLoginId,
   normalizeQuotaFields,
   migrateDefaultQuotaPolicy,
   getUserStorageSummary,
@@ -509,6 +508,7 @@ loadData();
 
 const organizationDirectory = createOrganizationDirectory({ dataDir: path.join(__dirname, 'data') });
 organizationDirectory.ensureExistingUsers(approvedUsers);
+organizationDirectory.reconcileExistingUserMailboxes(approvedUsers, 'system-startup');
 
 const resourceControl = createResourceControlService({
   dataDir: path.join(__dirname, 'data'),
@@ -1040,11 +1040,10 @@ app.post('/api/login', (req, res) => {
 // [회원가입 요청]
 app.post('/api/signup-request', (req, res) => {
   const { id, password, passwordConfirm, displayName, nickname, realName, accountType, email, inviteToken, organizationName } = req.body;
-  const loginId = (id || '').trim();
+  const loginId = (id || '').trim().toLowerCase();
   const safeNickname = normalizeNickname(nickname);
 
   if (!loginId) return res.status(400).json({ error: '아이디가 필요합니다.' });
-  if (!isSafeLoginId(loginId)) return res.status(400).json({ error: '아이디는 2~64자의 문자, 숫자, _, -만 사용할 수 있습니다.' });
   if (!password) return res.status(400).json({ error: '비밀번호가 필요합니다.' });
   if (password.length < 10) return res.status(400).json({ error: '비밀번호는 최소 10자 이상이어야 합니다.' });
   if (passwordConfirm !== undefined && password !== passwordConfirm) return res.status(400).json({ error: '비밀번호 확인이 일치하지 않습니다.' });
@@ -1055,6 +1054,12 @@ app.post('/api/signup-request', (req, res) => {
   }
   if (isNicknameTaken(safeNickname)) {
     return res.status(409).json({ error: '이미 사용 중인 닉네임입니다.', field: 'nickname' });
+  }
+
+  try {
+    organizationDirectory.assertSignupAddressAvailable(loginId);
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message, code: err.code, field: err.field || 'id' });
   }
 
   const normalizedContactEmail = String(email || '').trim().toLowerCase();
@@ -1079,7 +1084,7 @@ app.post('/api/signup-request', (req, res) => {
     return res.status(err.status || 400).json({ error: err.message, code: err.code, field: err.field });
   }
 
-  signupRequests.push(normalizeSignupRequest({
+  const signupRequest = normalizeSignupRequest({
     id: loginId,
     loginId,
     password,
@@ -1094,7 +1099,13 @@ app.post('/api/signup-request', (req, res) => {
     organizationProfile: organizationSignup.organizationProfile,
     date: new Date().toISOString().split('T')[0],
     requestedAt: nowIso()
-  }));
+  });
+  try {
+    organizationDirectory.reserveSignupAddress(loginId, signupRequest.userUid);
+    signupRequests.push(signupRequest);
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '메일 주소를 예약하지 못했습니다.', code: err.code, field: err.field || 'id' });
+  }
 
   saveRequests();
   io.emit('membersChanged');
@@ -1113,12 +1124,24 @@ app.get('/api/signup-capacity', (req, res) => {
 });
 
 app.get('/api/users/check-identity', (req, res) => {
-  const loginId = String(req.query.id || '').trim();
+  const loginId = String(req.query.id || '').trim().toLowerCase();
   const nickname = normalizeNickname(req.query.nickname);
-  const idAvailable = !loginId || !approvedUsers.some((user) => getUserLoginId(user).toLowerCase() === loginId.toLowerCase())
-    && !signupRequests.some((user) => getUserLoginId(user).toLowerCase() === loginId.toLowerCase());
+  let mailAddress = loginId ? `${loginId}@${organizationDirectory.getPublicPolicy().domain}` : '';
+  let mailAddressAvailable = true;
+  let mailAddressError = '';
+  if (loginId) {
+    try {
+      const checked = organizationDirectory.assertSignupAddressAvailable(loginId);
+      mailAddress = checked.address;
+    } catch (err) {
+      mailAddressAvailable = false;
+      mailAddressError = err.message;
+    }
+  }
+  const idAvailable = (!loginId || !approvedUsers.some((user) => getUserLoginId(user).toLowerCase() === loginId)
+    && !signupRequests.some((user) => getUserLoginId(user).toLowerCase() === loginId)) && mailAddressAvailable;
   const nicknameAvailable = !nickname || !isNicknameTaken(nickname);
-  res.json({ idAvailable, nicknameAvailable });
+  res.json({ idAvailable, nicknameAvailable, mailAddress, mailAddressAvailable, mailAddressError });
 });
 
 // [유저 데이터 조회]
@@ -1433,6 +1456,7 @@ app.post('/api/users/reject', requireManager, (req, res) => {
   if (!target) return res.status(404).json({ error: '없음' });
 
   signupRequests = signupRequests.filter(r => r.userUid !== target.userUid);
+  organizationDirectory.releaseSignupAddress(target.userUid, req.authUser?.userUid || getUserLoginId(req.authUser || {}), 'SIGNUP_REJECTED');
   saveRequests();
   io.emit('membersChanged');
   res.json({ success: true });

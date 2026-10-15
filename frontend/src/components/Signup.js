@@ -26,6 +26,7 @@ function Signup() {
   const [organizationPolicy, setOrganizationPolicy] = useState(null);
   const [error, setError] = useState('');
   const [idAvailable, setIdAvailable] = useState(null);
+  const [reservedMailAddress, setReservedMailAddress] = useState('');
   const [nicknameAvailable, setNicknameAvailable] = useState(null);
   const [capacity, setCapacity] = useState(null);
   const [capacityLoading, setCapacityLoading] = useState(true);
@@ -63,7 +64,11 @@ function Signup() {
   const checkIdentity = async (field) => {
     try {
       const response = await axios.get('/api/users/check-identity', { params: { id, nickname } });
-      if (field === 'id') setIdAvailable(response.data.idAvailable);
+      if (field === 'id') {
+        setIdAvailable(response.data.idAvailable);
+        setReservedMailAddress(response.data.mailAddressAvailable ? response.data.mailAddress : '');
+        if (!response.data.mailAddressAvailable && response.data.mailAddressError) setError(response.data.mailAddressError);
+      }
       if (field === 'nickname') setNicknameAvailable(response.data.nicknameAvailable);
       return response.data;
     } catch (err) {
@@ -149,9 +154,7 @@ function Signup() {
           <MenuItem value="INTERNAL" disabled={organizationPolicy?.signup?.internalMode === 'DISABLED'}>Cresero 내부 임직원</MenuItem>
         </TextField>
         <Alert severity={accountType === 'INTERNAL' ? 'warning' : 'info'}>
-          {accountType === 'INTERNAL'
-            ? `내부 계정은 관리자 초대와 승인 후 @${organizationPolicy?.domain || 'cresero.com'} 메일 주소가 준비됩니다.`
-            : '외부 계정은 초대받은 본인 이메일로 가입하며 Cresero 사서함과 내부 권한이 자동 발급되지 않습니다.'}
+          {`승인 후 아이디와 같은 @${organizationPolicy?.domain || 'cresero.com'} 주소가 연결됩니다. 메일 제공자 연결 전에는 주소만 예약됩니다.`}
         </Alert>
         <TextField
           label="초대받은 이메일"
@@ -182,9 +185,9 @@ function Signup() {
         <TextField
           label="아이디"
           value={id}
-          onChange={(e) => { setId(e.target.value); setIdAvailable(null); }}
+          onChange={(e) => { setId(e.target.value.toLowerCase()); setIdAvailable(null); setReservedMailAddress(''); setError(''); }}
           fullWidth
-          helperText={idAvailable === true ? '사용 가능한 아이디입니다.' : idAvailable === false ? '이미 사용 중인 아이디입니다.' : '로그인에 사용할 고유 아이디입니다.'}
+          helperText={idAvailable === true ? `사용 가능 · ${reservedMailAddress}` : idAvailable === false ? 'NAS 계정 또는 Cresero 메일에서 이미 사용 중이거나 사용할 수 없는 아이디입니다.' : '소문자 영문, 숫자, 점만 사용할 수 있으며 같은 이름의 Cresero 메일 주소가 예약됩니다.'}
           error={idAvailable === false}
         />
         <Button variant="text" size="small" onClick={() => checkIdentity('id')} disabled={!id.trim()} sx={{ alignSelf: 'flex-end', mt: -1.5 }}>아이디 중복 확인</Button>

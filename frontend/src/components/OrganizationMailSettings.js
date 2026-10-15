@@ -237,7 +237,7 @@ function OrganizationMailSettings() {
           </Grid>
         </Grid>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 2 }}>
-          <FormControlLabel control={<Switch checked={!!policyDraft.autoIssueInternalMailbox} disabled={!isMaster} onChange={(e) => setPolicyDraft({ ...policyDraft, autoIssueInternalMailbox: e.target.checked })} />} label="승인된 내부 사용자 메일 주소 자동 준비" />
+          <FormControlLabel control={<Switch checked={!!policyDraft.autoIssueSignupMailbox} disabled={!isMaster} onChange={(e) => setPolicyDraft({ ...policyDraft, autoIssueSignupMailbox: e.target.checked })} />} label="승인된 사용자 Cresero 메일 주소 자동 준비" />
           <FormControlLabel control={<Switch checked={!!policyDraft.requireMfaForPrivileged} disabled={!isMaster} onChange={(e) => setPolicyDraft({ ...policyDraft, requireMfaForPrivileged: e.target.checked })} />} label="관리자 MFA 필수" />
         </Stack>
         {isMaster && <Button variant="contained" onClick={savePolicy} disabled={saving} sx={{ mt: 2 }}>정책 저장</Button>}

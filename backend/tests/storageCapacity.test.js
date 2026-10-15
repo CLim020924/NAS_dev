@@ -90,6 +90,10 @@ test('legacy account paths cannot place account storage at the NAS root', () => 
     assert.equal(path.resolve(getQuotaBasePath(user)), path.resolve(NAS_ROOT, 'users', 'cksdud'));
   }
   assert.equal(isSafeLoginId('찬영이형엉덩이'), true);
+  assert.equal(isSafeLoginId('first.last'), true);
+  assert.equal(isSafeLoginId('.hidden'), false);
+  assert.equal(isSafeLoginId('trailing.'), false);
+  assert.equal(isSafeLoginId('two..dots'), false);
   assert.equal(isSafeLoginId('../outside'), false);
   assert.equal(isSafeLoginId('a/b'), false);
 });

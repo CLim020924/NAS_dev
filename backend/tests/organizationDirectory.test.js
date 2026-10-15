@@ -11,6 +11,8 @@ try {
   const publicPolicy = directory.getPublicPolicy();
   assert.strictEqual(publicPolicy.domain, 'cresero.com');
   assert.strictEqual(publicPolicy.providerReady, false);
+  assert.strictEqual(publicPolicy.addressProvisioning.status, 'RESERVATION_ONLY');
+  assert.strictEqual(directory.getAdminState().signupPolicy.autoIssueSignupMailbox, true);
   assert.strictEqual(publicPolicy.signup.internalRequiresInvite, true);
   assert.strictEqual(publicPolicy.signup.externalRequiresInvite, true);
   assert.throws(() => directory.updatePolicy({
@@ -78,6 +80,23 @@ try {
   assert.strictEqual(legacyIdentity.accountType, 'UNCLASSIFIED');
   assert.strictEqual(legacyIdentity.mailboxStatus, 'REVIEW_REQUIRED');
 
+  const reconciled = directory.reconcileExistingUserMailboxes([
+    { userUid: 'usr_legacy', loginId: 'legacy.user' }
+  ], 'migration-test');
+  assert.strictEqual(reconciled.changed, 1);
+  assert.strictEqual(directory.getAdminState().identities.find((item) => item.userUid === 'usr_legacy').primaryAddress, 'legacy.user@cresero.com');
+
+  assert.deepStrictEqual(directory.assertSignupAddressAvailable('new.user'), {
+    localPart: 'new.user',
+    address: 'new.user@cresero.com'
+  });
+  assert.throws(() => directory.assertSignupAddressAvailable('Admin'), /소문자|예약/);
+  assert.throws(() => directory.assertSignupAddressAvailable('new_user'), /소문자/);
+  const reserved = directory.reserveSignupAddress('new.user', 'usr_pending');
+  assert.strictEqual(reserved.address, 'new.user@cresero.com');
+  assert.throws(() => directory.assertSignupAddressAvailable('new.user'), /사용 중/);
+  assert.strictEqual(directory.releaseSignupAddress('usr_pending', 'manager-user', 'test'), true);
+
   const approvedInternal = directory.approveUser({
     userUid: 'usr_internal',
     loginId: 'alice'
@@ -98,7 +117,7 @@ try {
     userUid: 'usr_external',
     loginId: 'guest'
   }, externalSignup, 'master-user');
-  assert.strictEqual(approvedExternal.primaryAddress, undefined);
+  assert.strictEqual(approvedExternal.primaryAddress, 'guest@cresero.com');
   assert.strictEqual(approvedExternal.accountType, 'EXTERNAL');
 
   directory.updatePolicy({

@@ -33,7 +33,11 @@ const writeJson = (filePath, value) => {
 };
 
 const getLoginId = (user = {}) => String(user.loginId || user.id || user.username || '').trim();
-const isSafeLoginId = (value) => /^[\p{L}\p{N}_-]{2,64}$/u.test(String(value || ''));
+const isSafeLoginId = (value) => {
+  const loginId = String(value || '');
+  return /^[\p{L}\p{N}_-](?:[\p{L}\p{N}_.-]{0,62}[\p{L}\p{N}_-])$/u.test(loginId)
+    && !loginId.includes('..');
+};
 const getCanonicalUserRoot = (user = {}) => {
   const loginId = getLoginId(user);
   if (!isSafeLoginId(loginId)) throw new Error('유효하지 않은 계정 아이디입니다.');

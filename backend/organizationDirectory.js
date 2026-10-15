@@ -81,7 +81,7 @@ const normalizeStructureId = (value) => String(value || '')
   .slice(0, 48);
 
 const buildDefaultState = () => ({
-  version: 1,
+  version: 2,
   updatedAt: nowIso(),
   domain: 'cresero.com',
   provider: {
@@ -93,6 +93,8 @@ const buildDefaultState = () => ({
   signupPolicy: {
     internalMode: 'INVITE_ONLY',
     externalMode: 'INVITE_ONLY',
+    autoIssueSignupMailbox: true,
+    // Kept for state-file compatibility with deployments created before v2.
     autoIssueInternalMailbox: true,
     allowedExternalDomains: [],
     blockedExternalDomains: [],
@@ -102,6 +104,7 @@ const buildDefaultState = () => ({
   departments: clone(DEFAULT_DEPARTMENTS),
   positions: clone(DEFAULT_POSITIONS),
   identities: [],
+  mailReservations: [],
   mailAddresses: DEFAULT_MAIL_ADDRESSES.map((item) => ({
     id: makeId('mail'),
     ...item,
@@ -147,11 +150,18 @@ const createOrganizationDirectory = ({ dataDir }) => {
       ...defaults,
       ...parsed,
       provider: { ...defaults.provider, ...(parsed.provider || {}) },
-      signupPolicy: { ...defaults.signupPolicy, ...(parsed.signupPolicy || {}) },
+      signupPolicy: {
+        ...defaults.signupPolicy,
+        ...(parsed.signupPolicy || {}),
+        autoIssueSignupMailbox: parsed.signupPolicy?.autoIssueSignupMailbox
+          ?? parsed.signupPolicy?.autoIssueInternalMailbox
+          ?? defaults.signupPolicy.autoIssueSignupMailbox
+      },
       reservedLocalParts: Array.isArray(parsed.reservedLocalParts) ? parsed.reservedLocalParts : defaults.reservedLocalParts,
       departments: Array.isArray(parsed.departments) ? parsed.departments : defaults.departments,
       positions: Array.isArray(parsed.positions) ? parsed.positions : defaults.positions,
       identities: Array.isArray(parsed.identities) ? parsed.identities : [],
+      mailReservations: Array.isArray(parsed.mailReservations) ? parsed.mailReservations : [],
       mailAddresses: Array.isArray(parsed.mailAddresses) ? parsed.mailAddresses : defaults.mailAddresses,
       invitations: Array.isArray(parsed.invitations) ? parsed.invitations : [],
       audit: Array.isArray(parsed.audit) ? parsed.audit : []
@@ -165,6 +175,11 @@ const createOrganizationDirectory = ({ dataDir }) => {
   const publicPolicy = () => ({
     domain: state.domain,
     providerReady: state.provider.mode === 'ACTIVE',
+    addressProvisioning: {
+      enabled: true,
+      source: 'LOGIN_ID',
+      status: state.provider.mode === 'ACTIVE' ? 'PROVIDER_READY' : 'RESERVATION_ONLY'
+    },
     signup: {
       internalMode: state.signupPolicy.internalMode,
       externalMode: state.signupPolicy.externalMode,
@@ -288,7 +303,13 @@ const createOrganizationDirectory = ({ dataDir }) => {
       }
       next.externalMode = input.externalMode;
     }
-    if (input.autoIssueInternalMailbox !== undefined) next.autoIssueInternalMailbox = !!input.autoIssueInternalMailbox;
+    if (input.autoIssueSignupMailbox !== undefined) {
+      next.autoIssueSignupMailbox = !!input.autoIssueSignupMailbox;
+      next.autoIssueInternalMailbox = next.autoIssueSignupMailbox;
+    } else if (input.autoIssueInternalMailbox !== undefined) {
+      next.autoIssueSignupMailbox = !!input.autoIssueInternalMailbox;
+      next.autoIssueInternalMailbox = next.autoIssueSignupMailbox;
+    }
     if (input.requireMfaForPrivileged !== undefined) next.requireMfaForPrivileged = !!input.requireMfaForPrivileged;
     if (input.allowedExternalDomains !== undefined) next.allowedExternalDomains = [...new Set((input.allowedExternalDomains || []).map(normalizeDomain).filter(Boolean))].slice(0, 200);
     if (input.blockedExternalDomains !== undefined) next.blockedExternalDomains = [...new Set((input.blockedExternalDomains || []).map(normalizeDomain).filter(Boolean))].slice(0, 200);
@@ -345,7 +366,66 @@ const createOrganizationDirectory = ({ dataDir }) => {
     return { departments: clone(state.departments), positions: clone(state.positions) };
   };
   const localPartInUse = (localPart, excludingUserUid = '') => state.mailAddresses.some((entry) => entry.localPart === localPart)
-    || state.identities.some((entry) => entry.userUid !== excludingUserUid && entry.mailLocalPart === localPart);
+    || state.identities.some((entry) => entry.userUid !== excludingUserUid && entry.mailLocalPart === localPart)
+    || state.mailReservations.some((entry) => entry.userUid !== excludingUserUid && entry.localPart === localPart);
+  const requestedLoginLocalPart = (loginId) => {
+    const requested = String(loginId || '').trim().toLowerCase();
+    const normalized = normalizeLocalPart(requested);
+    if (!isValidLocalPart(requested) || normalized !== requested) {
+      throw Object.assign(new Error('아이디는 이메일 주소에도 그대로 사용되므로 소문자 영문, 숫자, 점만 사용할 수 있습니다.'), {
+        status: 400,
+        code: 'MAIL_ID_INVALID',
+        field: 'id'
+      });
+    }
+    if (state.reservedLocalParts.includes(requested)) {
+      throw Object.assign(new Error('공용 또는 시스템 메일 주소로 예약된 아이디입니다.'), {
+        status: 409,
+        code: 'MAIL_ID_RESERVED',
+        field: 'id'
+      });
+    }
+    return requested;
+  };
+  const assertSignupAddressAvailable = (loginId, excludingUserUid = '') => {
+    const localPart = requestedLoginLocalPart(loginId);
+    if (localPartInUse(localPart, excludingUserUid)) {
+      throw Object.assign(new Error('이미 NAS 계정 또는 Cresero 메일 주소에서 사용 중인 아이디입니다.'), {
+        status: 409,
+        code: 'MAIL_ADDRESS_IN_USE',
+        field: 'id'
+      });
+    }
+    return { localPart, address: `${localPart}@${state.domain}` };
+  };
+  const reserveSignupAddress = (loginId, userUid, actor = 'public-signup') => {
+    const safeUserUid = String(userUid || '').trim();
+    if (!safeUserUid) throw new Error('signup userUid is required');
+    const existing = state.mailReservations.find((entry) => entry.userUid === safeUserUid);
+    if (existing) return clone(existing);
+    const requested = assertSignupAddressAvailable(loginId, safeUserUid);
+    const reservation = {
+      id: makeId('mail_reservation'),
+      userUid: safeUserUid,
+      loginId: requested.localPart,
+      localPart: requested.localPart,
+      address: requested.address,
+      createdAt: nowIso()
+    };
+    state.mailReservations.push(reservation);
+    audit(actor, 'MAIL_ADDRESS_RESERVED', safeUserUid, { address: reservation.address });
+    write();
+    return clone(reservation);
+  };
+  const releaseSignupAddress = (userUid, actor = 'system', reason = '') => {
+    const safeUserUid = String(userUid || '').trim();
+    const prior = state.mailReservations.find((entry) => entry.userUid === safeUserUid);
+    if (!prior) return false;
+    state.mailReservations = state.mailReservations.filter((entry) => entry.userUid !== safeUserUid);
+    audit(actor, 'MAIL_ADDRESS_RESERVATION_RELEASED', safeUserUid, { address: prior.address, reason: String(reason || '') });
+    write();
+    return true;
+  };
   const proposeUserLocalPart = (loginId, userUid) => {
     const base = normalizeLocalPart(loginId);
     if (!isValidLocalPart(base) || state.reservedLocalParts.includes(base)) return '';
@@ -372,13 +452,15 @@ const createOrganizationDirectory = ({ dataDir }) => {
     identity.positionId = String(signup.organizationProfile?.positionId || user.organizationProfile?.positionId || identity.positionId || '');
     identity.employmentStatus = type === 'INTERNAL' ? 'ACTIVE' : (type === 'EXTERNAL' ? 'EXTERNAL' : 'ACTIVE');
     identity.updatedAt = nowIso();
-    if (type === 'INTERNAL' && state.signupPolicy.autoIssueInternalMailbox && !identity.mailLocalPart) {
-      identity.mailLocalPart = proposeUserLocalPart(user.loginId || user.id || user.username, userUid);
+    const reservation = state.mailReservations.find((entry) => entry.userUid === userUid);
+    if (!identity.mailLocalPart && (reservation || state.signupPolicy.autoIssueSignupMailbox)) {
+      identity.mailLocalPart = reservation?.localPart || proposeUserLocalPart(user.loginId || user.id || user.username, userUid);
       identity.mailboxStatus = identity.mailLocalPart
         ? (state.provider.mode === 'ACTIVE' ? 'PENDING_PROVIDER' : 'PLANNED')
         : 'REVIEW_REQUIRED';
       identity.primaryAddress = identity.mailLocalPart ? `${identity.mailLocalPart}@${state.domain}` : '';
     }
+    if (reservation) state.mailReservations = state.mailReservations.filter((entry) => entry.userUid !== userUid);
     audit(actor, 'ORGANIZATION_IDENTITY_APPROVED', userUid, { accountType: type, mailboxStatus: identity.mailboxStatus || '' });
     write();
     return clone(identity);
@@ -461,6 +543,35 @@ const createOrganizationDirectory = ({ dataDir }) => {
     }
     return state.identities.length;
   };
+  const reconcileExistingUserMailboxes = (users = [], actor = 'system') => {
+    let changed = 0;
+    let reviewRequired = 0;
+    for (const user of users) {
+      const userUid = String(user?.userUid || '');
+      const identity = state.identities.find((item) => item.userUid === userUid);
+      if (!identity || identity.mailLocalPart || identity.primaryAddress) continue;
+      const loginId = String(user.loginId || user.id || user.username || '').trim().toLowerCase();
+      try {
+        const requested = assertSignupAddressAvailable(loginId, userUid);
+        identity.mailLocalPart = requested.localPart;
+        identity.primaryAddress = requested.address;
+        identity.mailboxStatus = state.provider.mode === 'ACTIVE' ? 'PENDING_PROVIDER' : 'PLANNED';
+        identity.updatedAt = nowIso();
+        changed += 1;
+      } catch (err) {
+        if (identity.mailboxStatus !== 'REVIEW_REQUIRED') {
+          identity.mailboxStatus = 'REVIEW_REQUIRED';
+          identity.updatedAt = nowIso();
+          reviewRequired += 1;
+        }
+      }
+    }
+    if (changed || reviewRequired) {
+      audit(actor, 'EXISTING_USER_MAILBOXES_RECONCILED', 'organization', { changed, reviewRequired });
+      write();
+    }
+    return { changed, reviewRequired };
+  };
 
   load();
   return {
@@ -475,6 +586,10 @@ const createOrganizationDirectory = ({ dataDir }) => {
     updateIdentity,
     suspendUser,
     ensureExistingUsers,
+    assertSignupAddressAvailable,
+    reserveSignupAddress,
+    releaseSignupAddress,
+    reconcileExistingUserMailboxes,
     constants: { ACCOUNT_TYPES, MAILBOX_KINDS, MAILBOX_STATUSES, SIGNUP_MODES }
   };
 };
