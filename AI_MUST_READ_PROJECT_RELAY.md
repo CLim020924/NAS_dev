@@ -2003,3 +2003,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 권장 구조: 소수 사용자 운영에서는 `사용자@filemanager-nas.com` 주소와 실제 송수신·스팸 차단·평판 관리를 전문 메일 제공자에 맡기고, NAS는 계정 연결 UI, 알림, 선택적 보관·검색만 담당하는 하이브리드 구성이 가장 안전하다. 수신 전달만 필요하면 Cloudflare Email Routing으로 기존 받은편지함에 전달할 수 있으나, 동일 도메인 주소로 정상 회신·발송하려면 별도 SMTP/메일 제공자와 SPF·DKIM·DMARC가 필요하다.
 - 완전 자체 호스팅 경계: NAS에 Stalwart/Mailcow류를 설치하는 것은 가능하지만 외부 SMTP 25번 포트, 고정 공인 IP, 해당 IP의 PTR/rDNS, TLS, MX·SPF·DKIM·DMARC, IP 평판·스팸·백업·24시간 장애 대응이 필요하다. 현재 Cloudflare 웹 터널만으로는 일반 인터넷 메일 서버의 직접 SMTP 수신 조건을 대신할 수 없으므로, 회선과 공인 IP 조건을 확인하기 전에는 NAS 자체 메일 서버를 운영안으로 확정하지 않는다.
 - 후속 결정 항목: (1) 주소만 필요해 기존 Gmail 등으로 전달, (2) 독립 받은편지함과 송수신, (3) NAS 플랫폼 안에 웹메일까지 통합 중 어느 범위를 원하는지 사용자 선택 후 제공자·비용·DNS·보관 정책을 확정한다.
+
+### 2026-10-15 `cresero.com` 메일 도메인 후보 점검
+
+- 사용자 보고: 사용자가 별도로 보유한 `cresero.com`을 NAS 관련 메일 도메인 후보로 검토한다. 소유권은 사용자 보고이며 이번 요청에서는 DNS·계정·웹서비스를 변경하지 않는다.
+- 실시간 확인: `https://cresero.com/`과 `https://www.cresero.com/`은 HTTP 200이며 제목은 `Cresero · 가능성을 심고, 가치를 키웁니다`로 기존 웹사이트가 운영 중이다. 권한 DNS는 `filemanager-nas.com`과 같은 Cloudflare nameserver 두 개를 사용한다.
+- 메일 충돌 여부: apex MX·TXT와 `_dmarc` TXT, `mail` A, `autodiscover` CNAME은 조회되지 않았다. 현재 DNS 기준으로 기존 메일 서비스가 연결된 흔적이 없어 새 MX·SPF·DKIM·DMARC를 추가하기 좋은 상태이며, 웹 A/AAAA 레코드는 그대로 두면 사이트 운영과 메일을 함께 유지할 수 있다.
+- 권장 주소/구조: 브랜드 대표 주소는 `admin@cresero.com`, `contact@cresero.com`, `support@cresero.com`처럼 apex 도메인을 사용한다. `mail.cresero.com`은 필요할 경우 메일 서버·웹메일 호스트 이름으로 예약하고, 실제 사용자 주소를 불필요하게 `사용자@mail.cresero.com`으로 길게 만들지 않는다. 송수신은 전문 제공자, NAS는 계정 연동·알림·선택적 보관을 담당하는 하이브리드 권장을 유지한다.
+- 다음 단계: 실제 변경 전에 원하는 계정 수, 기존 Gmail 전달만 필요한지 독립 받은편지함이 필요한지, NAS 플랫폼 웹메일 통합 범위를 확정하고 제공자별 비용·보관·API/IMAP·SMTP 조건을 비교한다.
