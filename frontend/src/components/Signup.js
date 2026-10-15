@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, Container, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Container, MenuItem, TextField, Typography } from '@mui/material';
 import axios from 'axios';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -18,6 +18,12 @@ function Signup() {
   const [nickname, setNickname] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
+  const requestedAccountType = String(searchParams.get('accountType') || '').toUpperCase();
+  const [accountType, setAccountType] = useState(requestedAccountType === 'INTERNAL' ? 'INTERNAL' : 'EXTERNAL');
+  const [email, setEmail] = useState('');
+  const [organizationName, setOrganizationName] = useState('');
+  const [inviteToken, setInviteToken] = useState(searchParams.get('invite') || '');
+  const [organizationPolicy, setOrganizationPolicy] = useState(null);
   const [error, setError] = useState('');
   const [idAvailable, setIdAvailable] = useState(null);
   const [nicknameAvailable, setNicknameAvailable] = useState(null);
@@ -43,8 +49,16 @@ function Signup() {
   };
 
   useEffect(() => {
+    if (searchParams.get('invite')) {
+      const sanitizedUrl = new URL(window.location.href);
+      sanitizedUrl.searchParams.delete('invite');
+      window.history.replaceState(window.history.state, '', `${sanitizedUrl.pathname}${sanitizedUrl.search}${sanitizedUrl.hash}`);
+    }
     refreshSignupCapacity();
-  }, []);
+    axios.get('/api/organization/signup-policy', { withCredentials: true })
+      .then((response) => setOrganizationPolicy(response.data || null))
+      .catch(() => setOrganizationPolicy(null));
+  }, []); // The one-time invite remains only in component memory after the URL is scrubbed.
 
   const checkIdentity = async (field) => {
     try {
@@ -65,8 +79,12 @@ function Signup() {
       setError(latestCapacity.reason || '현재 새 계정에 제공할 저장공간이 부족합니다.');
       return;
     }
-    if (!id.trim() || !nickname.trim() || !password || !passwordConfirm) {
-      setError('아이디, 닉네임, 비밀번호를 모두 입력해주세요.');
+    if (!id.trim() || !nickname.trim() || !email.trim() || !password || !passwordConfirm) {
+      setError('계정 유형, 이메일, 아이디, 닉네임, 비밀번호를 모두 입력해주세요.');
+      return;
+    }
+    if (accountType === 'INTERNAL' && !inviteToken.trim()) {
+      setError('회사 내부 계정은 관리자가 발급한 초대 코드가 필요합니다.');
       return;
     }
     if (password.length < 10) {
@@ -84,7 +102,16 @@ function Signup() {
       return;
     }
 
-    axios.post(`/api/signup-request`, { id: id.trim(), nickname: nickname.trim(), password, passwordConfirm })
+    axios.post(`/api/signup-request`, {
+      id: id.trim(),
+      nickname: nickname.trim(),
+      password,
+      passwordConfirm,
+      accountType,
+      email: email.trim(),
+      organizationName: organizationName.trim(),
+      inviteToken: inviteToken.trim()
+    })
       .then(response => {
         // alert 메시지 표시 후 로그인 페이지로 이동
         alert("회원가입 요청을 보냈습니다.");
@@ -111,6 +138,47 @@ function Signup() {
       )}
       {error && <Typography color="error" align="center">{error}</Typography>}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <TextField
+          select
+          label="계정 유형"
+          value={accountType}
+          onChange={(e) => setAccountType(e.target.value)}
+          fullWidth
+        >
+          <MenuItem value="EXTERNAL" disabled={organizationPolicy?.signup?.externalMode === 'DISABLED'}>회사 외부 사용자</MenuItem>
+          <MenuItem value="INTERNAL" disabled={organizationPolicy?.signup?.internalMode === 'DISABLED'}>Cresero 내부 임직원</MenuItem>
+        </TextField>
+        <Alert severity={accountType === 'INTERNAL' ? 'warning' : 'info'}>
+          {accountType === 'INTERNAL'
+            ? `내부 계정은 관리자 초대와 승인 후 @${organizationPolicy?.domain || 'cresero.com'} 메일 주소가 준비됩니다.`
+            : '외부 계정은 초대받은 본인 이메일로 가입하며 Cresero 사서함과 내부 권한이 자동 발급되지 않습니다.'}
+        </Alert>
+        <TextField
+          label="초대받은 이메일"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          fullWidth
+          autoComplete="email"
+        />
+        {(accountType === 'INTERNAL' || organizationPolicy?.signup?.externalRequiresInvite) && (
+          <TextField
+            label={`${accountType === 'INTERNAL' ? '내부 계정' : '외부 계정'} 초대 코드`}
+            value={inviteToken}
+            onChange={(e) => setInviteToken(e.target.value)}
+            fullWidth
+            helperText="초대 코드는 한 번만 사용할 수 있으며 만료 시간이 있습니다."
+            autoComplete="off"
+          />
+        )}
+        {accountType === 'EXTERNAL' && (
+          <TextField
+            label="회사·단체명 (선택)"
+            value={organizationName}
+            onChange={(e) => setOrganizationName(e.target.value)}
+            fullWidth
+          />
+        )}
         <TextField
           label="아이디"
           value={id}

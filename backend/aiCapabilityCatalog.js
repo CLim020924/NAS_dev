@@ -30,6 +30,8 @@ const classifyPlatformRoute = (routePath, method = 'GET') => {
   if (route.startsWith('/ai/')) return 'ai-control-plane';
   if (route.startsWith('/devices/agent/')) return 'driver-internal';
   if (route.startsWith('/public-shares/')) return 'public-guest';
+  if (route === '/organization/signup-policy') return 'authentication-ui';
+  if (route.startsWith('/organization/')) return 'organization-admin-ui';
   if (route.startsWith('/auth/') || ['/login', '/logout', '/signup-request', '/signup-capacity', '/users/check-identity'].includes(route)) return 'authentication-ui';
   if (route.startsWith('/onlyoffice/') || route.startsWith('/hwp/') || route.startsWith('/document-workspace/')) return 'editor-ui';
   if (route.startsWith('/file/pdf-annotations') || route.startsWith('/file/pdf-ocr-region')) return 'editor-ui';

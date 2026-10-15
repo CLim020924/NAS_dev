@@ -39,6 +39,7 @@ const { consumeDesktopWebSession } = require('./desktopWebSession');
 const { collectServerMetrics } = require('./serverMetrics');
 const { createResourceControlService } = require('./resourceControlService');
 const { connectedIdentitySets, isUserOnline } = require('./presence');
+const { createOrganizationDirectory } = require('./organizationDirectory');
 
 const app = express();
 const server = http.createServer(app);
@@ -506,6 +507,9 @@ function loadData() {
 }
 loadData();
 
+const organizationDirectory = createOrganizationDirectory({ dataDir: path.join(__dirname, 'data') });
+organizationDirectory.ensureExistingUsers(approvedUsers);
+
 const resourceControl = createResourceControlService({
   dataDir: path.join(__dirname, 'data'),
   collectMetrics: () => collectServerMetrics({ nasRoot: nasPath }),
@@ -540,6 +544,7 @@ const publicApiPaths = new Set([
   '/login',
   '/signup-request',
   '/signup-capacity',
+  '/organization/signup-policy',
   '/onlyoffice/callback',
   '/onlyoffice/file'
 ]);
@@ -733,7 +738,77 @@ app.post('/api/logout', (req, res) => {
   return res.json({ success: true });
 });
 
+app.get('/api/organization/signup-policy', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json(organizationDirectory.getPublicPolicy());
+});
+
 app.use('/api', enforceSingleActiveSession);
+
+app.get('/api/organization/admin', requireManager, (req, res) => {
+  organizationDirectory.ensureExistingUsers(approvedUsers);
+  return res.json(organizationDirectory.getAdminState());
+});
+
+app.put('/api/organization/policy', requireManager, (req, res) => {
+  try {
+    const role = getUserRole(req.authUser || {});
+    const actor = req.authUser?.userUid || getUserLoginId(req.authUser || {});
+    const policy = organizationDirectory.updatePolicy(req.body || {}, actor, { isMaster: role === 'MASTER' });
+    io.emit('organizationChanged');
+    return res.json({ success: true, policy });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '조직 가입 정책을 저장하지 못했습니다.' });
+  }
+});
+
+app.post('/api/organization/invitations', requireManager, (req, res) => {
+  try {
+    const role = getUserRole(req.authUser || {});
+    const actor = req.authUser?.userUid || getUserLoginId(req.authUser || {});
+    const result = organizationDirectory.createInvitation(req.body || {}, actor, { isMaster: role === 'MASTER' });
+    io.emit('organizationChanged');
+    return res.status(201).json({ success: true, ...result });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '초대 링크를 만들지 못했습니다.' });
+  }
+});
+
+app.delete('/api/organization/invitations/:invitationId', requireManager, (req, res) => {
+  try {
+    const role = getUserRole(req.authUser || {});
+    const actor = req.authUser?.userUid || getUserLoginId(req.authUser || {});
+    const invitation = organizationDirectory.revokeInvitation(req.params.invitationId, actor, { isMaster: role === 'MASTER' });
+    io.emit('organizationChanged');
+    return res.json({ success: true, invitation });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '초대를 취소하지 못했습니다.' });
+  }
+});
+
+app.put('/api/organization/structure', requireManager, (req, res) => {
+  try {
+    const role = getUserRole(req.authUser || {});
+    const actor = req.authUser?.userUid || getUserLoginId(req.authUser || {});
+    const structure = organizationDirectory.updateStructure(req.body || {}, actor, { isMaster: role === 'MASTER' });
+    io.emit('organizationChanged');
+    return res.json({ success: true, structure });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '조직 구조를 저장하지 못했습니다.' });
+  }
+});
+
+app.put('/api/organization/users/:userUid', requireManager, (req, res) => {
+  try {
+    const role = getUserRole(req.authUser || {});
+    const actor = req.authUser?.userUid || getUserLoginId(req.authUser || {});
+    const identity = organizationDirectory.updateIdentity(req.params.userUid, req.body || {}, actor, { isMaster: role === 'MASTER' });
+    io.emit('organizationChanged');
+    return res.json({ success: true, identity });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || '조직 사용자 정보를 저장하지 못했습니다.' });
+  }
+});
 
 app.get('/api/user/preferences', (req, res) => {
   try {
@@ -964,7 +1039,7 @@ app.post('/api/login', (req, res) => {
 
 // [회원가입 요청]
 app.post('/api/signup-request', (req, res) => {
-  const { id, password, passwordConfirm, displayName, nickname, realName } = req.body;
+  const { id, password, passwordConfirm, displayName, nickname, realName, accountType, email, inviteToken, organizationName } = req.body;
   const loginId = (id || '').trim();
   const safeNickname = normalizeNickname(nickname);
 
@@ -982,6 +1057,11 @@ app.post('/api/signup-request', (req, res) => {
     return res.status(409).json({ error: '이미 사용 중인 닉네임입니다.', field: 'nickname' });
   }
 
+  const normalizedContactEmail = String(email || '').trim().toLowerCase();
+  if (normalizedContactEmail && [...approvedUsers, ...signupRequests].some((user) => String(user.contactEmail || '').trim().toLowerCase() === normalizedContactEmail)) {
+    return res.status(409).json({ error: '이미 가입 또는 승인 대기 중인 이메일입니다.', field: 'email' });
+  }
+
   const capacity = getStorageCapacitySummary(approvedUsers, signupRequests);
   if (!capacity.signupAvailable) {
     return res.status(507).json({
@@ -992,6 +1072,13 @@ app.post('/api/signup-request', (req, res) => {
     });
   }
 
+  let organizationSignup;
+  try {
+    organizationSignup = organizationDirectory.validateSignup({ accountType, email, inviteToken });
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message, code: err.code, field: err.field });
+  }
+
   signupRequests.push(normalizeSignupRequest({
     id: loginId,
     loginId,
@@ -999,6 +1086,12 @@ app.post('/api/signup-request', (req, res) => {
     displayName: safeNickname,
     nickname: safeNickname,
     profile: realName ? { realName } : {},
+    accountType: organizationSignup.accountType,
+    contactEmail: organizationSignup.contactEmail,
+    emailVerified: organizationSignup.emailVerified,
+    invitationId: organizationSignup.invitationId,
+    organizationName: String(organizationName || '').trim().slice(0, 120),
+    organizationProfile: organizationSignup.organizationProfile,
     date: new Date().toISOString().split('T')[0],
     requestedAt: nowIso()
   }));
@@ -1031,12 +1124,17 @@ app.get('/api/users/check-identity', (req, res) => {
 // [유저 데이터 조회]
 app.get('/api/users/data', requireManager, (req, res) => {
   const connected = connectedIdentitySets(io.sockets.sockets);
+  organizationDirectory.ensureExistingUsers(approvedUsers);
+  const organizationIdentities = new Map(
+    organizationDirectory.getAdminState().identities.map((item) => [item.userUid, item])
+  );
 
   const users = approvedUsers.map(u => {
     const loginId = getUserLoginId(u);
     const normalizedUser = normalizeQuotaFields(u);
     try { ensurePersonalStorageRoot(normalizedUser); } catch (err) {}
     const storage = getUserStorageSummary(normalizedUser);
+    const organizationIdentity = organizationIdentities.get(u.userUid) || null;
     return {
       userUid: u.userUid,
       id: loginId,
@@ -1056,7 +1154,8 @@ app.get('/api/users/data', requireManager, (req, res) => {
       storageFileBytes: storage.fileBytes,
       storageChatAttachmentBytes: storage.chatAttachmentBytes,
       storageTotalBytes: storage.totalBytes,
-      storageFreeBytes: storage.freeBytes
+      storageFreeBytes: storage.freeBytes,
+      organizationIdentity
     };
   });
 
@@ -1069,7 +1168,11 @@ app.get('/api/users/data', requireManager, (req, res) => {
       username: loginId,
       displayName: u.displayName || loginId,
       nickname: u.nickname || '',
-      requestedAt: u.requestedAt || u.date || ''
+      requestedAt: u.requestedAt || u.date || '',
+      accountType: u.accountType || 'EXTERNAL',
+      contactEmail: u.contactEmail || '',
+      organizationName: u.organizationName || '',
+      organizationProfile: u.organizationProfile || {}
     };
   });
 
@@ -1239,6 +1342,7 @@ app.post('/api/users/delete', requireManager, (req, res) => {
     fs.renameSync(userPath, path.join(backupDir, `${targetLoginId}_${ts}`));
   }
 
+  organizationDirectory.suspendUser(targetUser.userUid, admin.userUid || getUserLoginId(admin));
   approvedUsers = approvedUsers.filter(u => u.userUid !== targetUser.userUid);
   saveMembers();
   io.emit('force_logout_target', { targetId: targetLoginId });
@@ -1349,7 +1453,7 @@ app.post('/api/users/approve', requireManager, (req, res) => {
     });
   }
 
-  approvedUsers.push(normalizeApprovedUser({
+  const approvedUser = normalizeApprovedUser({
     ...reqUser,
     id: loginId,
     loginId,
@@ -1366,7 +1470,9 @@ app.post('/api/users/approve', requireManager, (req, res) => {
     storageQuotaBytes: DEFAULT_USER_QUOTA_BYTES,
     storageQuotaPolicyVersion: USER_QUOTA_POLICY_VERSION,
     personalRootPath: `/users/${loginId}`
-  }));
+  });
+  approvedUsers.push(approvedUser);
+  organizationDirectory.approveUser(approvedUser, reqUser, req.authUser?.userUid || getUserLoginId(req.authUser || {}));
 
   signupRequests = signupRequests.filter(r => r.userUid !== reqUser.userUid);
 

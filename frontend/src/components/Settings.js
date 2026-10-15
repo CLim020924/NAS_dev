@@ -7,6 +7,7 @@ import { useCustomTheme } from '../contexts/ThemeContext';
 import { useWindows } from '../contexts/WindowContext';
 import ServerSettingsPanel from './ServerSettingsPanel';
 import StorageCapacityOverview from './StorageCapacityOverview';
+import OrganizationMailSettings from './OrganizationMailSettings';
 import socket from '../socket';
 
 const Settings = () => {
@@ -372,7 +373,7 @@ const Settings = () => {
       <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={isManager ? activeTab : Math.min(activeTab, 1)} onChange={(e, v) => setActiveTab(v)} textColor="primary" indicatorColor="primary" sx={{ px: 2 }}>
-            <Tab label="전역 설정" /><Tab label="파일 설정" />{isManager && <Tab label="사용자 관리" />}{isManager && <Tab label="서버 설정" />}
+            <Tab label="전역 설정" /><Tab label="파일 설정" />{isManager && <Tab label="사용자 관리" />}{isManager && <Tab label="서버 설정" />}{isManager && <Tab label="조직·메일" />}
           </Tabs>
         </Box>
         <Box sx={{ p: { xs: 2, md: 4 }, minHeight: '400px' }}>
@@ -486,6 +487,7 @@ const Settings = () => {
             </Box>
           )}
           {activeTab === 3 && isManager && <ServerSettingsPanel />}
+          {activeTab === 4 && isManager && <OrganizationMailSettings />}
         </Box>
       </Paper>
 

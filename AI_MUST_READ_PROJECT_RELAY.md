@@ -2049,3 +2049,16 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 보안 기본값: MFA와 가능하면 패스키를 지원하고 관리자·메일 관리자 계정에는 강제한다. 세션은 기기별 조회·원격 해제, 유휴·전체 만료, 중요 변경 재인증을 적용한다. 비밀번호나 메일 제공자 자격정보를 복제·평문 저장하지 않고 서버 비밀 저장소에 둔다. 가입·직책·별칭·전달·공유·관리자 작업을 감사 로그에 남기고 첨부 악성코드 검사, 발송 속도 제한, 스팸·피싱 신고, 백업·보존·퇴사자 정지 및 복구 절차를 둔다.
 - 조직 명단 공개 범위: 내부 사용자는 필요한 조직·연락처를 보되 외부 사용자는 초대 관계와 공유된 최소 프로필만 본다. 전화번호·복구 주소·개인 식별정보는 명단 검색 결과에 기본 노출하지 않는다.
 - 구현 순서: 조직·계정 유형과 가입 정책 데이터 모델→내부 관리자 초대와 외부 이메일 인증→개인 사서함·별칭·공유 사서함 프로비저닝→조직 명단·검색 범위→MFA·세션·감사·퇴사/인계→테스트 도메인 송수신 순서로 진행한다. 실제 DNS와 운영 메일 계정은 각 단계의 회귀·복구 시험 전에는 변경하지 않는다.
+
+### 2026-10-15 Cresero 조직·메일 제어면 1차 구현
+
+- 사용자 요청: `cresero.com` 조직 명부, 직책·부서, 내부/외부 회원가입, 계정별 메일 주소와 보안 정책을 NAS 플랫폼에 안전하게 구성한다.
+- 구현: `backend/organizationDirectory.js`의 Git 제외 JSON 원장에 INTERNAL/EXTERNAL/SERVICE/UNCLASSIFIED, 부서·직책, 기본 `contact/support/admin/security/postmaster/abuse@cresero.com` 주소, 제공자 상태, 가입 정책, 명부, 감사 이력을 원자적으로 저장한다.
+- 보안·권한: 내부 계정은 MASTER 일회용 초대만 허용하고 외부도 기본 초대제다. 32-byte token의 SHA-256 해시만 저장하고 이메일 일치·만료·일회용·취소를 검증한다. NAS 역할과 회사 직책을 분리했고, 사용 중인 부서·직책 ID 삭제는 거부한다.
+- 기존 계정: 임직원으로 자동 승격하지 않고 `UNCLASSIFIED` + `REVIEW_REQUIRED`로 등록한다. MASTER 분류 후에만 예정 개인 주소를 만들며 외부 계정에는 기본 Cresero 사서함을 발급하지 않는다.
+- API/UI: 가입 정책·관리 상태·정책·구조·초대·취소·계정 수정 API와 설정의 `조직·메일` 화면을 추가했다. `organizationChanged` socket으로 다른 관리 화면도 즉시 갱신한다.
+- fail-closed: 제공자는 `UNCONFIGURED`, 주소는 `PLANNED`로 표시한다. 제공자 ACTIVE 전에는 외부 이메일 본인 확인을 전제로 한 `ADMIN_APPROVAL`을 켤 수 없으며 실제 송수신 완료로 표시하지 않는다.
+- 현장 근거: NAS 8 CPU, 약 21GiB RAM, 시스템 디스크 약 1.6TiB 여유, NAS 디스크 약 1.7TiB 여유다. outbound TCP 25는 열려 있지만 공인 IP `1.234.92.152`의 PTR이 없고 메일 포트는 미구성이라 직접 SMTP보다 전문 제공자/relay가 안전하다.
+- 검증: Windows backend `*.test.js` 51개 파일 전체 0 fail, UI contract 122개 소스, React production bundle, react-pdf 9.2.1/PDF.js API+Worker 4.8.69, JavaScript 구문·diff 검사가 통과했다. Windows 일반 build는 기존 npm/pnpm ESLint plugin 경로 중복으로 실패해 `DISABLE_ESLINT_PLUGIN=true`로 코드 컴파일을 따로 성공시켰다. NAS Linux에서는 표준 build를 다시 검증해야 한다.
+- 문서: `docs/NAS_PROJECT_LOG.xlsx`의 10개 관련 시트와 전용 `docs/programs/NAS_MAIL_SPEC.xlsx`를 artifact-tool로 갱신·생성했고, 재열기·수식 오류 0·신규 문자 깨짐 없음·주요 시트 렌더를 확인했다.
+- 보류: 실제 `@cresero.com` 송수신, 제공자 프로비저닝, SPF/DKIM/DMARC, NAS 웹메일, 특권 계정 WebAuthn/TOTP는 아직 미구현이다. 사용자가 메일 제공자 가입·요금제를 선택하고 Cloudflare OAuth에 DNS Edit 범위를 승인한 뒤 샌드박스 사서함 1개로 프로비저닝·정지·복구·외부 송수신을 검증해야 한다.
