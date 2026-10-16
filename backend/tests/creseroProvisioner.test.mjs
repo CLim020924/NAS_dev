@@ -32,6 +32,13 @@ test('unconfigured bridge is dormant and offline server retries without deleting
  const s=setup();assert.equal(startCreseroProvisioner({...s.options,env:{}}).enabled,false);
  let requests=0;const bridge=startCreseroProvisioner({...s.options,env:{CRESERO_NAS_BRIDGE_TOKEN:'x'.repeat(64)},fetcher:async()=>{requests++;throw Error('offline');}});await new Promise(r=>setTimeout(r,5));await bridge.tick();bridge.stop();assert.ok(requests>=2);assert.equal(s.users.length,0);
 });
+test('directory failure at startup leaves NAS running and is retried in the background',async()=>{
+ const s=setup();let failures=true,calls=0,polls=0;
+ s.users.push({userUid:'usr_'+'a'.repeat(32),loginId:'123',creseroPersonId:personId,accountType:'INTERNAL',contactEmail:'123@cresero.com',status:'ACTIVE'});
+ s.options.directory.approveUser=()=>{calls++;if(failures)throw Error('directory unavailable');};
+ const bridge=startCreseroProvisioner({...s.options,env:{CRESERO_NAS_BRIDGE_TOKEN:'x'.repeat(64)},fetcher:async()=>{polls++;return Response.json({job:null});}});
+ await new Promise(r=>setTimeout(r,5));assert.equal(bridge.enabled,true);assert.ok(polls>0);const before=calls;failures=false;await bridge.tick();assert.equal(calls,before+1);await bridge.tick();assert.equal(calls,before+1);bridge.stop();
+});
 test('lost acknowledgement can retry without a duplicate NAS account',async()=>{
  const s=setup();let first=true,acks=0;const bridge=startCreseroProvisioner({...s.options,env:{CRESERO_NAS_BRIDGE_TOKEN:'x'.repeat(64)},fetcher:async url=>{if(url.endsWith('/claim'))return Response.json({job:acks<2?job:null});acks++;if(first){first=false;throw Error('lost response');}return Response.json({ok:true});}});await new Promise(r=>setTimeout(r,15));await bridge.tick();bridge.stop();assert.equal(s.users.length,1);assert.equal(acks,2);
 });

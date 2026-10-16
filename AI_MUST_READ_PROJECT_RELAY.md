@@ -2122,3 +2122,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 백업과 검증: `/home/limchanyoung/msp-backups/cresero-identity-20261016`에 기존 source·회원·조직 데이터와 환경을 제한 권한으로 보존했다. 25개 NAS 회원의 비밀번호·role·Masters/Managers·globalAccess·개인 root가 백업과 동일함을 검증했다. 지정 5개만 Cresero person ID를 가지며 중앙 identity API가 올바른 주소를 반환했다. 실제 직원 로그인에서 초기 변경 필수와 NAS job DONE, 일반 회원 로그인에서 이메일/NAS 작업 없음 확인 후 시험 세션을 로그아웃했다.
 - 배포 검사: 회사/NAS 연결 단위 검사 27개 통과(후속 모듈 정합성 검사 8개 추가 재실행), NAS backend 180 pass·6 skip, UI contract 122개, production build 및 PDF.js 호환 검사 통과. 기존 전역 ESLint 이슈 때문에 build는 이전 작업과 동일한 `DISABLE_ESLINT_PLUGIN=true`로 수행했다. NAS build/운영 index 해시 일치, 미인증 profile API 401 확인. 실제 사용자가 비밀번호 변경 후 NAS/Cresero 프로필과 SSO를 클릭하는 최종 사용 검증은 남아 있다.
 - 기록: 요청·변경·기능·관계·코드·보안 경계와 기존 메일 제공자 보류 행을 프로젝트 기록표에 반영했다. 기존 셀/수식·시트 순서·표/차트 수·freeze panes 보존과 문자 깨짐 검사, 변경 영역 렌더를 확인했다. 다음 안전 작업은 사용자 실제 프로필/SSO 확인 및 메일 도메인·제공자 선택이다.
+
+### 2026-10-16 Cresero·퀴즈·NAS 전체 회귀 점검과 수정
+
+- 사용자 요청: “ㄴ싹다 돌려봐 이상한점없는지 말이야.” 계정·직원 연결·역할 화면과 기존 퀴즈·NAS 회귀를 점검한다.
+- 수정: 회사 정상 로그인 성공 시 실패 제한 카운터를 해제한다. NAS의 직원 명부 초기화 오류를 사용자별로 격리하고 30초 폴링에서 재시도하여 서버 시작을 막지 않는다. 내부 관리자와 외부 고객 운영자 화면을 구분하고 직원 메일 진입을 추가했다. 퀴즈 참여자 계정 API가 외부 출처를 거절하기 전에 요청 본문을 정리하여 다음 요청의 스트림 오류를 해결했다.
+- 운영 환경: 앞선 환경 파일 교체 과정에서 .env 소유자가 root로 바뀌어 일반 개발 계정 테스트가 EACCES로 실패했다. limchanyoung 소유자와 0600 권한으로 복구했으며 비밀값은 변경하거나 출력하지 않았다. 이후 설치 helper도 파일 교체 시 기존 uid/gid를 보존하도록 수정했다.
+- 검증: 회사/NAS 단위 검사 29/29, NAS 전체 189 pass·6 skip·0 fail, 퀴즈 HTTP 로그인 65·계정 연결/복구 78·QR 98개 통과. 클라이언트/순수 로직 23개 검사 묶음, TypeScript·production build·회사 브라우저 번들, 6역할 메뉴·9페이지 권한 검사 통과. 실제 NAS 로그인 프로필에서 staff.admin@cresero.com과 메일 진입을 확인했다.
+- 불변 조건: 기존 25개 NAS 계정 비밀번호·role·Masters/Managers·globalAccess·개인 root가 백업과 동일하다. 지정 5개 직원만 공통 계정에 연결됐고 나머지 직원 연결은 0개다. 명부 API 5명 모두 200, 미인증 프로필 API 401, 운영 index와 build 일치.
+- 배포: 회사와 퀴즈 Cloudflare Worker 및 NAS 백엔드 반영 완료. 퀴즈 version 45f9c41a-06f3-484c-80cc-61d0ed4d5cef, 회사 version 81f46551-d9a3-4ea8-bbe5-cefc80e3e8a3. NAS 기존 프런트 번들은 유지한다.
+- 남은 한계: 기존 PC의 비공개 입력·암호화 백업·QR 이미지가 필요한 퀴즈 검사 4개는 미실행이다. Google/Meta 개발자 앱과 메일 제공자는 미설정이며 기존 보류 사항을 유지한다. NAS 전원을 실제로 끄지 않고 오프라인 큐·실패 재시도는 자동 검사로 검증했다. 사용자 직접 초기 비밀번호 변경 후 실제 직원 SSO 클릭은 다음 사용 확인 항목이다.

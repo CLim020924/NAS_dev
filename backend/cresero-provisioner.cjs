@@ -39,7 +39,7 @@ function createStaffProvisioner(options){
   try{saveMembers();}catch(e){const at=users.indexOf(user);if(at>=0)users.splice(at,1);throw e;}
   reconcile(user);emit(user,false);return {nasUid:userUid};
  }
- return {processJob,reconcileExisting(){for(const user of getUsers())if(personId(user.creseroPersonId)&&user.accountType==='INTERNAL'&&!user.disabled&&user.status==='ACTIVE'&&typeof user.contactEmail==='string'&&user.contactEmail.endsWith('@cresero.com')&&validId(user.contactEmail.slice(0,-12)))reconcile(user);}};
+ return {processJob,reconcileExisting(){let failed=false;for(const user of getUsers())if(personId(user.creseroPersonId)&&user.accountType==='INTERNAL'&&!user.disabled&&user.status==='ACTIVE'&&typeof user.contactEmail==='string'&&user.contactEmail.endsWith('@cresero.com')&&validId(user.contactEmail.slice(0,-12))){try{reconcile(user);}catch{failed=true;}}return !failed;}};
 }
 
 function startCreseroProvisioner(options){
@@ -47,10 +47,12 @@ function startCreseroProvisioner(options){
  if(typeof token!=='string'||token.length<32)return {enabled:false,stop(){},async tick(){}};
  const endpoint='https://cresero.com/api/company/';
  const fetcher=options.fetcher||fetch,provisioner=createStaffProvisioner(options);
- provisioner.reconcileExisting();
+ let needsReconcile=!provisioner.reconcileExisting();
  let busy=false,stopped=false;
  async function call(action,data){const r=await fetcher(endpoint+'nas/'+action,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(data),redirect:'error',signal:AbortSignal.timeout(10000)});if(!r.ok)throw Error('Cresero bridge unavailable');return r.json();}
- async function tick(){if(busy||stopped)return;busy=true;try{for(let count=0;count<8;count++){
+ async function tick(){if(busy||stopped)return;busy=true;try{
+ if(needsReconcile)needsReconcile=!provisioner.reconcileExisting();
+ for(let count=0;count<8;count++){
   const {job}=await call('claim',{});if(!job)break;
   let outcome;try{outcome={ok:true,...provisioner.processJob(job)};}catch(e){outcome={ok:false,reason:['ID_CONFLICT','OWNER_VERIFICATION','INVALID_ID','CAPACITY'].includes(e.reason)?e.reason:'RETRY'};}
   await call('complete',{personId:job.personId,lease:job.lease,...outcome});
