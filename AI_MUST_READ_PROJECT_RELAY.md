@@ -2109,3 +2109,16 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 복구 검증: NAS 장치 `chanyoung`이 기존 `100.80.39.112`로 Tailnet에 복귀했다. Windows `chan`에서 ping은 direct LAN 경로 약 1ms, TCP 22와 `ssh nas`는 성공했다. SSH에서 `whoami=limchanyoung`, `hostname=chanyoung`, `tailscale ip -4=100.80.39.112`, 기대 branch와 clean worktree를 확인했다. `tailscaled`는 enabled+active이며 backend와 공개 사이트는 HTTP 200, 필수 6개 서비스는 active다.
 - DNS 경고: Tailscale health에는 immutable `/etc/resolv.conf`를 변경하지 못한다는 경고가 남아 있다. 현재 파일은 NetworkManager가 만든 통신사 DNS를 사용하고 일반 DNS 조회가 정상이다. 이번 재인증 범위를 벗어나고 기존 네트워크 설정을 깨뜨릴 수 있어 immutable 속성이나 DNS 설정은 변경하지 않았다.
 - 문서 갱신: 루트 연결 bootstrap과 다른 PC handoff의 만료 상태를 성공 상태로 교체하고, DNS 경고를 비차단 잔여 항목으로 기록한다. 새 작업은 날짜가 있는 스냅샷을 그대로 믿지 않고 status·ping·TCP 22·SSH를 다시 검사한다.
+
+### 2026-10-16 Cresero 기존 NAS 회원 이전·직원 연결·프로필 이메일
+
+- 사용자 요청: NAS 재인증 후 기존 회원을 Cresero에 연결하고 초기 비밀번호 변경·회원정보 수정이 가능하게 한다. 직원은 `dntdlzz`, `admin`, `cksdudstudy`, `cksdudproject`, `cmoe` 다섯 계정으로 지정했다. NAS 프로필에서 연결 상태·직원 이메일·연결 버튼을 제공하고 Cresero 메일 프로젝트를 준비한다. 서비스 도메인은 추후 결정한다. 비밀번호 원문은 기록하지 않는다.
+- 접속 확인: 현재 Windows PC에서 Tailscale ping(DERP relay)과 SSH가 성공했다. NAS 사용자 `limchanyoung`, 호스트 `chanyoung`, 활성 branch와 작업 전 clean 상태를 확인하고 AGENTS·bootstrap·relay·handoff·메모리 정책·워크북의 관련 인증/조직 경계를 읽었다.
+- 이전 결과: 기존 승인 회원 25개를 NAS 고유 UID로 Cresero 일반 역할 계정에 이전했다. 아이디·닉네임 충돌은 0개였고 재실행은 25개 모두 기존 연결로 인식해 중복 생성하지 않았다. 기존 한글·예약어 아이디는 이전 경로에서만 보존한다. 임시 관리 키는 시간 제한으로 사용하고 작업 후 두 키 모두 삭제했다. 초기 비밀번호 변경 전 회사 서비스·권한·NAS 티켓 사용은 서버에서 차단한다.
+- 직원 연결: 지정 직원 5개만 회사 주소와 기존 NAS UID를 연결했다. NAS `admin`은 그대로 두고 시스템 공용 주소 충돌을 피하는 `staff.admin@cresero.com`을 사용한다. NAS MASTER/MANAGER를 회사 총관리자/관리자로 복사하지 않는다. 기타 20개는 회사 이메일·직원 NAS SSO를 부여하지 않는다.
+- NAS 구현: `backend/cresero-provisioner.cjs`와 index 초기화 hook을 추가했다. NAS 가동 시와 30초마다 영구 대기열을 확인하고 검증된 기존 UID 연결 또는 신규 직원 계정을 처리한다. 공통 비밀값은 Cloudflare secret과 NAS root의 `.env`에만 저장했다. 기존 NAS 회원가입·로그인·암호 변경은 유지한다.
+- 프로필/연결: TopBar의 내 정보 수정에서 현재 인증된 UID로 중앙 연결 상태를 조회하고 직원 이메일, Cresero 계정 연결/열기, 메일 진입을 표시한다. 연결은 회사 호스트 상태 쿠키에 결속된 2분·일회용 티켓으로 확인한다. 다른 Cresero 회원에 이미 연결된 UID는 닉네임이 같아도 합치지 않는다.
+- 메일: `https://cresero.com/mail`에 직원 메일 공간의 초기 화면을 배포했다. 주소는 예약된 상태이며 메일함 메뉴는 비활성이다. 실제 메일 제공자·서비스 도메인·외부 송수신·MFA·SPF/DKIM/DMARC 설정은 미완료다. 기존 메일 제공자 보류 항목을 같은 행에서 갱신했다.
+- 백업과 검증: `/home/limchanyoung/msp-backups/cresero-identity-20261016`에 기존 source·회원·조직 데이터와 환경을 제한 권한으로 보존했다. 25개 NAS 회원의 비밀번호·role·Masters/Managers·globalAccess·개인 root가 백업과 동일함을 검증했다. 지정 5개만 Cresero person ID를 가지며 중앙 identity API가 올바른 주소를 반환했다. 실제 직원 로그인에서 초기 변경 필수와 NAS job DONE, 일반 회원 로그인에서 이메일/NAS 작업 없음 확인 후 시험 세션을 로그아웃했다.
+- 배포 검사: 회사/NAS 연결 단위 검사 27개 통과(후속 모듈 정합성 검사 8개 추가 재실행), NAS backend 180 pass·6 skip, UI contract 122개, production build 및 PDF.js 호환 검사 통과. 기존 전역 ESLint 이슈 때문에 build는 이전 작업과 동일한 `DISABLE_ESLINT_PLUGIN=true`로 수행했다. NAS build/운영 index 해시 일치, 미인증 profile API 401 확인. 실제 사용자가 비밀번호 변경 후 NAS/Cresero 프로필과 SSO를 클릭하는 최종 사용 검증은 남아 있다.
+- 기록: 요청·변경·기능·관계·코드·보안 경계와 기존 메일 제공자 보류 행을 프로젝트 기록표에 반영했다. 기존 셀/수식·시트 순서·표/차트 수·freeze panes 보존과 문자 깨짐 검사, 변경 영역 렌더를 확인했다. 다음 안전 작업은 사용자 실제 프로필/SSO 확인 및 메일 도메인·제공자 선택이다.

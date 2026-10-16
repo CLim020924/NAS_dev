@@ -69,6 +69,17 @@ const TopBar = ({
   const taskSwitcherFlashTimerRef = useRef(null);
 
   const [profileOpen, setProfileOpen] = useState(false);
+  const [creseroProfile, setCreseroProfile] = useState(null);
+  const [creseroError, setCreseroError] = useState('');
+  useEffect(() => {
+    if (!profileOpen) return undefined;
+    let active = true; setCreseroProfile(null); setCreseroError('');
+    axios.get('/api/cresero/profile', { withCredentials: true }).then(({ data }) => {
+      if (active) setCreseroProfile(data);
+    }).catch(() => { if (active) setCreseroError('계정 연결 상태를 확인하지 못했습니다. 잠시 후 다시 열어 주세요.'); });
+    return () => { active = false; };
+  }, [profileOpen, user.userUid]);
+
   const [accessHistoryOpen, setAccessHistoryOpen] = useState(false);
   const [accessHistory, setAccessHistory] = useState([]);
   const [accessHistoryError, setAccessHistoryError] = useState('');
@@ -826,6 +837,15 @@ const TopBar = ({
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
             <TextField label="아이디" value={user.username} disabled size="small" fullWidth />
             <TextField label="현재 권한" value={user.role} disabled size="small" fullWidth />
+            <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 'bold', color: 'primary.main' }}>Cresero 계정·이메일</Typography>
+            {creseroError && <Typography color="error" variant="body2">{creseroError}</Typography>}
+            {!creseroProfile && !creseroError && <Typography variant="body2">연결 상태 확인 중…</Typography>}
+            {creseroProfile && <>
+              {creseroProfile.email ? <TextField label="직원 이메일" value={creseroProfile.email} size="small" fullWidth InputProps={{ readOnly: true }} helperText="예약된 회사 주소입니다. 실제 송수신은 메일 제공자 연결 후 이용할 수 있습니다." /> : <Typography variant="body2">{creseroProfile.linked ? 'Cresero 일반 계정 연결됨 · 직원 이메일은 직원 확인 후 부여됩니다.' : '연결된 Cresero 계정이 없습니다.'}</Typography>}
+              <Button variant="outlined" onClick={() => window.location.assign('https://cresero.com/api/company-nas/start')}>{creseroProfile.linked ? 'Cresero 계정 열기' : 'Cresero 계정 연결'}</Button>
+              {creseroProfile.email && <Button variant="outlined" href="https://cresero.com/mail" target="_blank" rel="noopener noreferrer">Cresero 메일</Button>}
+            </>}
+
 
             <Typography variant="subtitle2" sx={{ mt: 1, fontWeight: 'bold', color: 'primary.main' }}>닉네임</Typography>
             <TextField label="닉네임" value={profileNickname} onChange={(e) => setProfileNickname(e.target.value)} size="small" fullWidth helperText="친구, 채팅, 회의에 표시되는 이름입니다." />
