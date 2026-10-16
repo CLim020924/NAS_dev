@@ -49,12 +49,16 @@ ssh -o BatchMode=yes -o ConnectTimeout=8 `
 ## 2026-10-16 상태 스냅샷
 
 - 이 Windows PC: `chan`, Tailscale `100.88.246.29`
-- NAS의 Tailscale 항목: `offline, last seen 35d ago`
-- `tailscale ping 100.80.39.112`: `peer's node key has expired`
-- Tailscale IP의 TCP 22: 실패
-- 같은 LAN의 `192.168.45.30` SSH: 성공
-- LAN SSH 확인값: 사용자 `limchanyoung`, 호스트 `chanyoung`, 브랜치
+- NAS: `chanyoung`, Tailscale `100.80.39.112`
+- NAS node key 재인증: 완료
+- `tailscale ping 100.80.39.112`: 성공, 같은 LAN direct 경로 약 1ms
+- Tailscale IP의 TCP 22와 `ssh nas`: 성공
+- SSH 확인값: 사용자 `limchanyoung`, 호스트 `chanyoung`, 브랜치
   `cleanup/git-tracking-2026-06-08`, clean worktree
+- `tailscaled`: enabled + active
+- Tailscale DNS health 경고: `/etc/resolv.conf`가 immutable이라 Tailscale이
+  DNS 구성을 쓰지 못함. 현재 NetworkManager DNS와 외부 이름 해석,
+  backend/public HTTP는 정상이며 이번 재인증에서는 DNS 구성을 변경하지 않음.
 
 이 상태는 이후 부팅·재인증·키 갱신으로 바뀔 수 있습니다. 새 작업은 위 명령을
 다시 실행하고 실제 결과를 기준으로 판단합니다.

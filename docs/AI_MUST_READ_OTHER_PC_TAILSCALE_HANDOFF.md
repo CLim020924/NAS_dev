@@ -26,6 +26,16 @@
 새 PC에 접근 권한을 자동 복제하지 않습니다. 각 PC는 독립적으로 Tailscale에
 로그인하고 독립 SSH 키를 사용해야 합니다.
 
+2026-10-16 재검증에서는 NAS의 만료된 node key를 기존 Tailnet 계정으로
+재인증했고 기존 `100.80.39.112`를 유지했습니다. Windows `chan`에서 Tailscale
+ping, TCP 22, `ssh nas`가 성공했고 NAS의 `tailscaled`는 enabled+active입니다.
+이 결과는 상태 스냅샷이므로 새 PC에서는 아래 명령을 다시 실행합니다.
+
+NAS는 immutable `/etc/resolv.conf`와 NetworkManager DNS를 사용해 Tailscale이
+DNS 설정을 쓰지 못한다는 health 경고가 남아 있습니다. 현재 일반 DNS 조회와
+backend/public HTTP는 정상입니다. 이 경고만 보고 `/etc/resolv.conf`의 immutable
+속성을 제거하거나 DNS 구성을 바꾸지 말고 기존 네트워크 설계부터 확인합니다.
+
 ## 2. 새 PC에서 한 번만 할 초기 설정
 
 1. 새 PC에 Tailscale을 설치하고 위와 같은 Tailnet 계정으로 로그인합니다.

@@ -2100,3 +2100,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 반영: `AI_CONNECTION_BOOTSTRAP.md`에 외부 작업 환경의 필수 조건을 명시했다. GitHub 저장소 권한, 해당 PC의 Tailscale 로그인과 NAS 도달성, PC별 SSH 키 등록, 터미널·파일·Git 실행 권한이 모두 있어야 실제 수정할 수 있다.
 - 시작 방법: 외부 작업 환경이 저장소를 clone한 뒤 `AGENTS.md`와 루트 연결 문서를 먼저 읽고 Tailscale·TCP 22·SSH를 직접 검증하며, NAS live worktree의 branch·dirty 상태와 프로젝트 릴레이를 확인한 뒤 수정하도록 복사용 시작 요청을 추가했다.
 - 보안 경계: 일반 웹 채팅은 문서를 읽어도 PC 명령을 실행할 수 없으며 GitHub 권한은 Tailnet·SSH 권한을 자동 부여하지 않는다. 비밀번호·개인키·auth key·token은 계속 Git 밖의 각 도구 보안 저장소에만 둔다.
+
+### 2026-10-16 NAS Tailscale node key 재인증 및 접속 복구
+
+- 사용자 요청: NAS 본체 쪽 Tailscale 재인증이 필요하다는 상태를 확인하고 복구한다.
+- 원인 확인: `tailscaled`는 enabled+active였지만 장치 상태가 `Logged out`이고 기존 node key가 만료되어 있었다. NAS 시계와 NTP는 정상이므로 단순 시간 오차가 원인이 아니었다.
+- 재인증: LAN SSH로 서비스와 기존 사용자 프로필을 보존한 채 Tailscale 공식 장치 로그인 URL을 열었고, 사용자가 기존 Tailnet 계정 로그인을 완료했다. 비밀번호·쿠키·auth key는 채팅·로그·Git에 저장하지 않았다.
+- 복구 검증: NAS 장치 `chanyoung`이 기존 `100.80.39.112`로 Tailnet에 복귀했다. Windows `chan`에서 ping은 direct LAN 경로 약 1ms, TCP 22와 `ssh nas`는 성공했다. SSH에서 `whoami=limchanyoung`, `hostname=chanyoung`, `tailscale ip -4=100.80.39.112`, 기대 branch와 clean worktree를 확인했다. `tailscaled`는 enabled+active이며 backend와 공개 사이트는 HTTP 200, 필수 6개 서비스는 active다.
+- DNS 경고: Tailscale health에는 immutable `/etc/resolv.conf`를 변경하지 못한다는 경고가 남아 있다. 현재 파일은 NetworkManager가 만든 통신사 DNS를 사용하고 일반 DNS 조회가 정상이다. 이번 재인증 범위를 벗어나고 기존 네트워크 설정을 깨뜨릴 수 있어 immutable 속성이나 DNS 설정은 변경하지 않았다.
+- 문서 갱신: 루트 연결 bootstrap과 다른 PC handoff의 만료 상태를 성공 상태로 교체하고, DNS 경고를 비차단 잔여 항목으로 기록한다. 새 작업은 날짜가 있는 스냅샷을 그대로 믿지 않고 status·ping·TCP 22·SSH를 다시 검사한다.
