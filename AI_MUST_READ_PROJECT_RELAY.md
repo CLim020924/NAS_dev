@@ -2093,3 +2093,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 현재 검증: 이 Windows PC `chan`은 Tailscale `100.88.246.29`로 로그인되어 있다. NAS `chanyoung`(`100.80.39.112`)은 `offline, last seen 35d ago`이고 node key가 만료되어 Tailscale ping과 TCP 22가 실패했다. 같은 LAN `192.168.45.30`으로 host key 검증을 유지한 SSH는 성공했으며 `whoami=limchanyoung`, `hostname=chanyoung`, 기대 branch와 clean NAS worktree를 확인했다.
 - 프로젝트 기록: `docs/NAS_PROJECT_LOG.xlsx`의 `Do_Not_Break`, `Feature_Index`, `Relation_Map`, `Patch_Log`, `Request_Archive`, `Network_Config`에 같은 경계와 상태 스냅샷을 추가했다. artifact-tool 재계산·수식 오류 0·전체 문자열 모지바케 검사·신규 행 `??` 검사와 변경 영역 렌더를 통과했다.
 - 미완료: NAS Tailscale node key 재인증은 NAS 로컬 Tailscale 로그인 또는 별도 신뢰된 관리 경로가 필요하다. LAN SSH가 현재 작업 경로를 제공하지만 외부 PC의 Tailscale 접속을 대신하지 않는다. 날짜가 있는 상태는 매 작업에서 실제 명령으로 다시 확인한다.
+
+### 2026-10-16 외부 ChatGPT/Codex를 통한 NAS 수정 목적 확인
+
+- 사용자 설명: Git 루트 연결 정보를 둔 목적은 예전처럼 다른 PC의 외부 ChatGPT/Codex를 통해 NAS 서버를 직접 수정하기 위해서다.
+- 반영: `AI_CONNECTION_BOOTSTRAP.md`에 외부 작업 환경의 필수 조건을 명시했다. GitHub 저장소 권한, 해당 PC의 Tailscale 로그인과 NAS 도달성, PC별 SSH 키 등록, 터미널·파일·Git 실행 권한이 모두 있어야 실제 수정할 수 있다.
+- 시작 방법: 외부 작업 환경이 저장소를 clone한 뒤 `AGENTS.md`와 루트 연결 문서를 먼저 읽고 Tailscale·TCP 22·SSH를 직접 검증하며, NAS live worktree의 branch·dirty 상태와 프로젝트 릴레이를 확인한 뒤 수정하도록 복사용 시작 요청을 추가했다.
+- 보안 경계: 일반 웹 채팅은 문서를 읽어도 PC 명령을 실행할 수 없으며 GitHub 권한은 Tailnet·SSH 권한을 자동 부여하지 않는다. 비밀번호·개인키·auth key·token은 계속 Git 밖의 각 도구 보안 저장소에만 둔다.

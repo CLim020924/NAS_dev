@@ -101,3 +101,27 @@ Git 기록은 복제·백업·로그에 오래 남아 삭제가 어렵습니다.
 3. `AGENTS.md`의 필독 순서대로 릴레이와 프로젝트 기록표를 읽습니다.
 4. NAS live worktree의 branch와 dirty 상태를 확인한 뒤에만 수정합니다.
 5. 연결 정보가 바뀌면 이 파일, 상세 handoff, relay, workbook을 함께 갱신합니다.
+
+## 외부 ChatGPT/Codex에서 실제 수정할 때
+
+외부 ChatGPT가 설명만 하는 일반 채팅이 아니라 터미널·파일·Git을 사용할 수
+있는 Codex형 작업 환경이어야 합니다. 다음 네 조건이 모두 필요합니다.
+
+1. `CLim020924/NAS_dev` 저장소를 읽을 GitHub 권한
+2. 해당 PC의 Tailscale 로그인과 현재 NAS 도달 가능 상태
+3. 해당 PC 전용 SSH 개인키와 NAS에 등록된 공개키
+4. 로컬 명령과 저장소 파일을 직접 다룰 수 있는 도구 권한
+
+저장소를 clone한 뒤 외부 ChatGPT/Codex에는 다음처럼 요청하면 됩니다.
+
+```text
+저장소 루트의 AGENTS.md와 AI_CONNECTION_BOOTSTRAP.md를 먼저 읽고,
+현재 Tailscale·TCP 22·SSH 상태를 실제 명령으로 확인해.
+연결되면 NAS live 프로젝트의 branch와 dirty 상태를 확인한 뒤
+프로젝트 릴레이와 기록표를 읽고 기존 변경을 보존하면서 작업해.
+비밀번호·개인키·auth key·token은 출력하거나 Git에 저장하지 마.
+```
+
+일반 웹 채팅처럼 사용자의 PC에서 명령을 실행할 수 없는 ChatGPT는 이 문서를
+읽더라도 NAS를 직접 수정할 수 없습니다. 또한 GitHub 권한만으로는 Tailnet과
+SSH 권한이 생기지 않습니다.
