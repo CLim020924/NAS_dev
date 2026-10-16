@@ -13,6 +13,7 @@ node_modules/
 *.key
 *.p12
 *secret*
+/AI_CONNECTION_LOCAL.private.md
 
 # Build outputs
 build/

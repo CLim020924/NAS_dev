@@ -22,10 +22,18 @@ project documents, say:
 
 Then actually check these files:
 
-1. `AI_MUST_READ_PROJECT_RELAY.md`
-2. `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md`
-3. `docs/NAS_PROJECT_MEMORY_POLICY.md`
-4. `docs/NAS_PROJECT_LOG.xlsx`
+1. `AI_CONNECTION_BOOTSTRAP.md`
+2. `AI_MUST_READ_PROJECT_RELAY.md`
+3. `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md`
+4. `docs/NAS_PROJECT_MEMORY_POLICY.md`
+5. `docs/NAS_PROJECT_LOG.xlsx`
+
+`AI_CONNECTION_BOOTSTRAP.md` is the root-level, non-secret connection index for
+new ChatGPT/Codex sessions. Treat its status section as a dated snapshot and
+run the listed checks before deciding that Tailscale, SSH, or the NAS is
+currently reachable. A local `AI_CONNECTION_LOCAL.private.md`, when present,
+is ignored by Git and may contain device-local aliases or paths only. Never put
+passwords, private keys, Tailscale auth keys, cookies, or tokens in either file.
 
 `AI_MUST_READ_PROJECT_RELAY.md` is the human-readable continuity document for
 new conversations. Keep it synchronized whenever authentication, storage
