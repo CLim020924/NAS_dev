@@ -2176,3 +2176,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 키 검증: 원격 릴레이에 기록된 G14 전용 ED25519 공개키를 `ssh-keygen`으로 검증했고 fingerprint가 G14 보고값 `SHA256:/yS8T5iWaLLUmMUAadIkUoTM8pUKh/EtcE5Hh5Fkfrw`와 정확히 일치했다. 개인키는 조회·복사·전송하지 않았다.
 - 서버 반영: 기존 `authorized_keys`를 제한 권한 백업으로 보존한 뒤 공개키 한 줄을 lock 안에서 중복 없이 추가했다. 등록 결과는 `added`, exact match 1개이며 키 수는 3개에서 4개가 됐다. `~/.ssh` 700과 `authorized_keys` 600을 유지했고 비밀번호 SSH·Tailscale SSH를 활성화하지 않았다.
 - 남은 검증: G14 자체에서 `ssh nas "whoami && hostname"`을 다시 실행해야 실제 개인키 서명 성공이 확정된다. 성공 후 외부 Codex는 NAS worktree의 원격 신규 커밋과 dirty 상태를 보존해 fast-forward·build·재시작·역할별 회귀를 이어간다.
+
+## 2026-10-30 G14 재접속 보장 범위와 새 PC 보안 경계 확인
+
+- 사용자 질문: Git에 다시는 같은 SSH 오류가 발생하지 않고 바로 작업할 수 있도록 남겼는지 확인했다.
+- G14 현재 보장: 원격 브랜치 `3475650`에는 루트 bootstrap, PC별 키 필요 조건, G14 등록 완료 기록과 재검증 명령이 있다. NAS `authorized_keys`의 G14 공개키 exact match는 1개이고 `~/.ssh` 700, `authorized_keys` 600, `ssh`·`tailscaled` active를 다시 확인했다. G14의 개인키와 SSH config가 유지되는 한 새 Codex 대화도 `AGENTS.md`와 bootstrap을 읽고 바로 `ssh nas`를 재검증할 수 있다.
+- 보장할 수 없는 경우: Windows 재설치, 사용자 프로필 삭제, G14 개인키 삭제·교체, Tailscale 로그아웃·node key 만료, NAS `authorized_keys` 삭제가 발생하면 다시 1회 등록이 필요하다. Git에 개인키를 넣어 이 경계를 없애는 것은 금지한다.
+- 새 PC 원칙: Git은 절차·주소·공개 상태만 전달하며 새 PC 인증 권한을 자동 발급하지 않는다. 새 PC마다 전용 키를 생성하고 신뢰된 기존 PC 또는 NAS 콘솔에서 공개키만 등록한다. 비밀번호 SSH나 host key 검증 해제로 자동화를 가장하지 않는다.
