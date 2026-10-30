@@ -48,6 +48,15 @@ import useShortcuts from '../hooks/useShortcuts';
 import { transferUrl } from '../transferBaseUrl';
 import { collectDroppedUploadItems } from './NAS/uploadDropCollector';
 import { moveKeyboardSelection, selectClickedPath, toggleFocusedPath } from './NAS/fileSelectionModel';
+import { getMasterPersonalStoragePath, isMasterFileManagerUser } from '../utils/fileManagerEntryPolicy';
+
+const readCurrentUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem('user') || '{}');
+  } catch (error) {
+    return {};
+  }
+};
 
 const NAS = ({ showWorkspace = true }) => {
   const theme = useTheme();
@@ -58,8 +67,18 @@ const NAS = ({ showWorkspace = true }) => {
   const desktopRef = useRef(null); 
   const uploadControllersRef = useRef({});
   
-  const currentUser = JSON.parse(localStorage.getItem('user')) || {};
-  const isAdmin = currentUser.Masters || currentUser.Managers;
+  const [currentUser, setCurrentUser] = useState(readCurrentUser);
+  useEffect(() => {
+    const refreshCurrentUser = () => setCurrentUser(readCurrentUser());
+    window.addEventListener('nas:user-updated', refreshCurrentUser);
+    window.addEventListener('storage', refreshCurrentUser);
+    return () => {
+      window.removeEventListener('nas:user-updated', refreshCurrentUser);
+      window.removeEventListener('storage', refreshCurrentUser);
+    };
+  }, []);
+  const isMaster = isMasterFileManagerUser(currentUser);
+  const isAdmin = isMaster || String(currentUser.role || '').toUpperCase() === 'MANAGER' || currentUser.Managers;
   const folderColor = 'var(--nas-folder)';
   const deviceColor = 'var(--nas-device)';
   const fileColor = 'var(--nas-file)';
@@ -94,6 +113,12 @@ const NAS = ({ showWorkspace = true }) => {
   const [quickDialog, setQuickDialog] = useState({ open: false, mode: 'recent', loading: false, items: [], limited: false });
   const [favoritePaths, setFavoritePaths] = useState(new Set());
   const [appOpenMode, setAppOpenMode] = useState(localStorage.getItem('platform_app_open_mode') || 'window');
+  const currentUserIdentity = String(currentUser.userUid || currentUser.loginId || currentUser.id || currentUser.username || 'anonymous');
+
+  useEffect(() => {
+    setStorageSummary(null);
+    setPathUsage(null);
+  }, [currentUserIdentity]);
 
   useEffect(() => {
     let active = true;
@@ -2227,6 +2252,23 @@ const NAS = ({ showWorkspace = true }) => {
     setInlineEdit(null);
   };
 
+  const masterPersonalStoragePath = getMasterPersonalStoragePath(currentUser);
+  const navigateStorageLocation = (path, label) => {
+    if (!isMaster || !path) return;
+    const safePath = ensureSlash(path);
+    if (folderInlineMode) {
+      navigateFileManagerPath(safePath);
+      return;
+    }
+    openFolderWindow({
+      id: safePath === '/' ? 'system_root' : `storage_shortcut_${safePath}`,
+      name: label,
+      path: safePath,
+      fullPath: safePath,
+      type: 'folder'
+    });
+  };
+
   const handleInlineBack = () => {
     if (currentFileManagerPath === '/') return;
     const segments = currentFileManagerPath.split('/').filter(Boolean);
@@ -2259,7 +2301,7 @@ const NAS = ({ showWorkspace = true }) => {
     } catch (err) {
       // Storage information is supplemental; file browsing should keep working.
     }
-  }, [activeTargetPath]);
+  }, [activeTargetPath, currentUserIdentity]);
 
   useEffect(() => {
     refreshStorageUsage(activeTargetPath);
@@ -2342,7 +2384,7 @@ const NAS = ({ showWorkspace = true }) => {
             <Box sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}` }}>
               <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900 }}>Storage</Typography>
               <Box sx={{ display: 'grid', gap: 1, mt: 1 }}>
-                <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.08) }}>
+                <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.08), display: 'flex', flexDirection: 'column' }}>
                   <Typography variant="caption" color="text.secondary">내 저장공간</Typography>
                   <Typography sx={{ fontWeight: 900 }}>
                     {formatBytes(storageSummary?.usedBytes)}
@@ -2350,10 +2392,33 @@ const NAS = ({ showWorkspace = true }) => {
                     {storageSummary?.quotaMode === 'limited' ? formatBytes(storageSummary?.quotaBytes) : formatBytes(storageSummary?.totalBytes)}
                   </Typography>
                   <LinearProgress variant="determinate" value={storagePercent} sx={{ mt: 0.75, height: 6, borderRadius: 999 }} />
+                  {isMaster && masterPersonalStoragePath && (
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={() => navigateStorageLocation(masterPersonalStoragePath, '내 저장공간')}
+                      disabled={ensureSlash(activeTargetPath) === ensureSlash(masterPersonalStoragePath)}
+                      sx={{ alignSelf: 'flex-end', minWidth: 0, mt: 0.65, px: 0.5, py: 0.2, fontSize: '0.72rem' }}
+                    >
+                      내 저장공간 이동
+                    </Button>
+                  )}
                 </Box>
-                <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.secondary.main, 0.08) }}>
+                <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.secondary.main, 0.08), display: 'flex', flexDirection: 'column' }}>
                   <Typography variant="caption" color="text.secondary">현재 경로 사용량</Typography>
                   <Typography sx={{ fontWeight: 900 }}>{pathUsage ? formatBytes(pathUsage.sizeBytes) : '계산 중'}</Typography>
+                  {isMaster && (
+                    <Button
+                      size="small"
+                      variant="text"
+                      color="secondary"
+                      onClick={() => navigateStorageLocation('/', '서버 전체 저장소')}
+                      disabled={ensureSlash(activeTargetPath) === '/'}
+                      sx={{ alignSelf: 'flex-end', minWidth: 0, mt: 0.65, px: 0.5, py: 0.2, fontSize: '0.72rem' }}
+                    >
+                      전체 경로로 이동
+                    </Button>
+                  )}
                 </Box>
               </Box>
             </Box>

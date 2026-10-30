@@ -48,6 +48,11 @@ requireText('src/components/AiAgentPanel.js', "transform: 'translateY(calc(-100%
 requireText('src/components/AiAgentPanel.js', 'item.billing?.estimatedUsd', 'AI assistant messages must retain their per-response token cost metadata');
 requireText('src/components/AiAgentPanel.js', ".toFixed(4)}$", 'AI token cost must render in compact four-decimal USD format');
 requireText('src/components/TopBar.js', "display: { xs: 'none', md: 'inline-flex' }", 'minimized-task chips must not overflow the mobile top bar');
+requireText('src/components/NAS.js', "window.addEventListener('nas:user-updated', refreshCurrentUser)", 'file manager role-gated controls must react to same-tab account changes');
+requireText('src/components/NAS.js', '{isMaster && masterPersonalStoragePath && (', 'personal-storage navigation must remain master-only');
+requireText('src/components/NAS.js', '{isMaster && (', 'full-root storage navigation must remain master-only');
+requireText('src/components/NAS.js', '내 저장공간 이동', 'master personal-storage shortcut must remain visible');
+requireText('src/components/NAS.js', '전체 경로로 이동', 'master full-root shortcut must remain visible');
 const topBar = read('src/components/TopBar.js');
 const fileButton = topBar.indexOf('aria-label="파일 관리자 열기"');
 const accessButton = topBar.indexOf('aria-label="접근 기록 열기"');
