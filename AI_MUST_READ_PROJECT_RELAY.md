@@ -2110,10 +2110,69 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - DNS 경고: Tailscale health에는 immutable `/etc/resolv.conf`를 변경하지 못한다는 경고가 남아 있다. 현재 파일은 NetworkManager가 만든 통신사 DNS를 사용하고 일반 DNS 조회가 정상이다. 이번 재인증 범위를 벗어나고 기존 네트워크 설정을 깨뜨릴 수 있어 immutable 속성이나 DNS 설정은 변경하지 않았다.
 - 문서 갱신: 루트 연결 bootstrap과 다른 PC handoff의 만료 상태를 성공 상태로 교체하고, DNS 경고를 비차단 잔여 항목으로 기록한다. 새 작업은 날짜가 있는 스냅샷을 그대로 믿지 않고 status·ping·TCP 22·SSH를 다시 검사한다.
 
-### 2026-10-30 Zephyrus G14 Codex의 NAS SSH 공개키 등록 대기
+### 2026-10-16 Cresero 기존 NAS 회원 이전·직원 연결·프로필 이메일
 
-- 사용자 보고: Zephyrus G14에서 외부 Codex로 NAS 개발을 이어가려 했지만 새 PC의 SSH 공개키가 NAS에 없어 key-only SSH에서 차단되었다. 외부 Codex는 비밀번호 SSH·Tailscale SSH·기존 개인키·웹 authorized_keys 관리 경로가 없다고 진단했다.
-- 실시간 확인: 현재 Tailnet의 G14는 `zephyrus-g14-laptop` / `100.86.38.22`로 온라인이며 Tailscale ping은 DERP 이후 direct 약 11ms로 성공했다. 예전 `limchanyoung` / `100.72.86.10` 장치는 오프라인이므로 G14 주소로 혼동하지 않는다. G14의 TCP 22는 닫혀 있지만 이는 G14에서 NAS로 나가는 SSH에는 필요하지 않다.
-- 신뢰 경로: 현재 작업 PC에서는 `ssh nas`가 key-only로 성공하고 NAS `ssh`와 `tailscaled`가 active다. NAS `authorized_keys`에는 현재 3개 키가 있으며 기존 키를 노출하거나 교체하지 않고 G14 전용 공개키 한 줄만 중복 없이 추가할 수 있다.
-- 보안 경계: G14에서는 전용 ed25519 키를 생성하고 `.pub` 공개키와 fingerprint만 전달한다. 개인키 본문, 비밀번호, auth key, agent token은 출력·채팅·Git·릴레이에 저장하지 않는다. 공개키를 받기 전에는 인증 우회나 비밀번호 SSH 재활성화를 하지 않는다.
-- 다음 안전 작업: G14의 외부 Codex가 `%USERPROFILE%\.ssh\id_ed25519_g14_nas`를 생성하고 공개키 한 줄을 사용자에게 제공한다. 사용자가 이 대화에 공개키를 붙이면 현재 신뢰 PC에서 형식과 fingerprint를 검증한 뒤 NAS `authorized_keys`에 원자적으로 추가하고 권한 700/600, G14 `ssh nas`, branch·worktree를 검증한다.
+- 사용자 요청: NAS 재인증 후 기존 회원을 Cresero에 연결하고 초기 비밀번호 변경·회원정보 수정이 가능하게 한다. 직원은 `dntdlzz`, `admin`, `cksdudstudy`, `cksdudproject`, `cmoe` 다섯 계정으로 지정했다. NAS 프로필에서 연결 상태·직원 이메일·연결 버튼을 제공하고 Cresero 메일 프로젝트를 준비한다. 서비스 도메인은 추후 결정한다. 비밀번호 원문은 기록하지 않는다.
+- 접속 확인: 현재 Windows PC에서 Tailscale ping(DERP relay)과 SSH가 성공했다. NAS 사용자 `limchanyoung`, 호스트 `chanyoung`, 활성 branch와 작업 전 clean 상태를 확인하고 AGENTS·bootstrap·relay·handoff·메모리 정책·워크북의 관련 인증/조직 경계를 읽었다.
+- 이전 결과: 기존 승인 회원 25개를 NAS 고유 UID로 Cresero 일반 역할 계정에 이전했다. 아이디·닉네임 충돌은 0개였고 재실행은 25개 모두 기존 연결로 인식해 중복 생성하지 않았다. 기존 한글·예약어 아이디는 이전 경로에서만 보존한다. 임시 관리 키는 시간 제한으로 사용하고 작업 후 두 키 모두 삭제했다. 초기 비밀번호 변경 전 회사 서비스·권한·NAS 티켓 사용은 서버에서 차단한다.
+- 직원 연결: 지정 직원 5개만 회사 주소와 기존 NAS UID를 연결했다. NAS `admin`은 그대로 두고 시스템 공용 주소 충돌을 피하는 `staff.admin@cresero.com`을 사용한다. NAS MASTER/MANAGER를 회사 총관리자/관리자로 복사하지 않는다. 기타 20개는 회사 이메일·직원 NAS SSO를 부여하지 않는다.
+- NAS 구현: `backend/cresero-provisioner.cjs`와 index 초기화 hook을 추가했다. NAS 가동 시와 30초마다 영구 대기열을 확인하고 검증된 기존 UID 연결 또는 신규 직원 계정을 처리한다. 공통 비밀값은 Cloudflare secret과 NAS root의 `.env`에만 저장했다. 기존 NAS 회원가입·로그인·암호 변경은 유지한다.
+- 프로필/연결: TopBar의 내 정보 수정에서 현재 인증된 UID로 중앙 연결 상태를 조회하고 직원 이메일, Cresero 계정 연결/열기, 메일 진입을 표시한다. 연결은 회사 호스트 상태 쿠키에 결속된 2분·일회용 티켓으로 확인한다. 다른 Cresero 회원에 이미 연결된 UID는 닉네임이 같아도 합치지 않는다.
+- 메일: `https://cresero.com/mail`에 직원 메일 공간의 초기 화면을 배포했다. 주소는 예약된 상태이며 메일함 메뉴는 비활성이다. 실제 메일 제공자·서비스 도메인·외부 송수신·MFA·SPF/DKIM/DMARC 설정은 미완료다. 기존 메일 제공자 보류 항목을 같은 행에서 갱신했다.
+- 백업과 검증: `/home/limchanyoung/msp-backups/cresero-identity-20261016`에 기존 source·회원·조직 데이터와 환경을 제한 권한으로 보존했다. 25개 NAS 회원의 비밀번호·role·Masters/Managers·globalAccess·개인 root가 백업과 동일함을 검증했다. 지정 5개만 Cresero person ID를 가지며 중앙 identity API가 올바른 주소를 반환했다. 실제 직원 로그인에서 초기 변경 필수와 NAS job DONE, 일반 회원 로그인에서 이메일/NAS 작업 없음 확인 후 시험 세션을 로그아웃했다.
+- 배포 검사: 회사/NAS 연결 단위 검사 27개 통과(후속 모듈 정합성 검사 8개 추가 재실행), NAS backend 180 pass·6 skip, UI contract 122개, production build 및 PDF.js 호환 검사 통과. 기존 전역 ESLint 이슈 때문에 build는 이전 작업과 동일한 `DISABLE_ESLINT_PLUGIN=true`로 수행했다. NAS build/운영 index 해시 일치, 미인증 profile API 401 확인. 실제 사용자가 비밀번호 변경 후 NAS/Cresero 프로필과 SSO를 클릭하는 최종 사용 검증은 남아 있다.
+- 기록: 요청·변경·기능·관계·코드·보안 경계와 기존 메일 제공자 보류 행을 프로젝트 기록표에 반영했다. 기존 셀/수식·시트 순서·표/차트 수·freeze panes 보존과 문자 깨짐 검사, 변경 영역 렌더를 확인했다. 다음 안전 작업은 사용자 실제 프로필/SSO 확인 및 메일 도메인·제공자 선택이다.
+
+### 2026-10-16 Cresero·퀴즈·NAS 전체 회귀 점검과 수정
+
+- 사용자 요청: “ㄴ싹다 돌려봐 이상한점없는지 말이야.” 계정·직원 연결·역할 화면과 기존 퀴즈·NAS 회귀를 점검한다.
+- 수정: 회사 정상 로그인 성공 시 실패 제한 카운터를 해제한다. NAS의 직원 명부 초기화 오류를 사용자별로 격리하고 30초 폴링에서 재시도하여 서버 시작을 막지 않는다. 내부 관리자와 외부 고객 운영자 화면을 구분하고 직원 메일 진입을 추가했다. 퀴즈 참여자 계정 API가 외부 출처를 거절하기 전에 요청 본문을 정리하여 다음 요청의 스트림 오류를 해결했다.
+- 운영 환경: 앞선 환경 파일 교체 과정에서 .env 소유자가 root로 바뀌어 일반 개발 계정 테스트가 EACCES로 실패했다. limchanyoung 소유자와 0600 권한으로 복구했으며 비밀값은 변경하거나 출력하지 않았다. 이후 설치 helper도 파일 교체 시 기존 uid/gid를 보존하도록 수정했다.
+- 검증: 회사/NAS 단위 검사 29/29, NAS 전체 189 pass·6 skip·0 fail, 퀴즈 HTTP 로그인 65·계정 연결/복구 78·QR 98개 통과. 클라이언트/순수 로직 23개 검사 묶음, TypeScript·production build·회사 브라우저 번들, 6역할 메뉴·9페이지 권한 검사 통과. 실제 NAS 로그인 프로필에서 staff.admin@cresero.com과 메일 진입을 확인했다.
+- 불변 조건: 기존 25개 NAS 계정 비밀번호·role·Masters/Managers·globalAccess·개인 root가 백업과 동일하다. 지정 5개 직원만 공통 계정에 연결됐고 나머지 직원 연결은 0개다. 명부 API 5명 모두 200, 미인증 프로필 API 401, 운영 index와 build 일치.
+- 배포: 회사와 퀴즈 Cloudflare Worker 및 NAS 백엔드 반영 완료. 퀴즈 version 45f9c41a-06f3-484c-80cc-61d0ed4d5cef, 회사 version 81f46551-d9a3-4ea8-bbe5-cefc80e3e8a3. NAS 기존 프런트 번들은 유지한다.
+- 남은 한계: 기존 PC의 비공개 입력·암호화 백업·QR 이미지가 필요한 퀴즈 검사 4개는 미실행이다. Google/Meta 개발자 앱과 메일 제공자는 미설정이며 기존 보류 사항을 유지한다. NAS 전원을 실제로 끄지 않고 오프라인 큐·실패 재시도는 자동 검사로 검증했다. 사용자 직접 초기 비밀번호 변경 후 실제 직원 SSO 클릭은 다음 사용 확인 항목이다.
+## 2026-10-30 마스터 계정의 NAS 루트 접근 방식 확인
+
+- 사용자 질문: 현재 구조에서 마스터 계정이 NAS 루트 경로에 어떻게 접근하는지 확인했다.
+- 코드 기준: 로그인 세션의 JWT만 고정 신뢰하지 않고 요청마다 회원 저장소의 최신 계정을 다시 조회한 뒤 역할과 전체 접근 여부를 정규화한다. `MASTER`, `MANAGER`, `globalAccess` 계정의 웹 파일 API 기준 경로는 `NAS_ROOT`(현재 `/mnt/nas`)이고, 일반 계정은 `/mnt/nas/users/<loginId>`다.
+- UI 의미: 마스터가 웹 NAS 파일관리자에서 경로 `/`를 열면 서버의 `/mnt/nas`가 루트로 보인다. 별도의 Linux root 로그인이나 NAS 루트 비밀번호를 사용하는 방식이 아니며 로그인 세션과 서버 역할 검사를 통과한다.
+- 개인 공간 분리: 마스터도 개인 quota, 노트 소유권, Windows NAS Drive/PC 동기화는 `/mnt/nas/users/<마스터 loginId>`를 사용한다. 웹 전체 NAS 루트 가시성과 개인 드라이브 소유권·quota를 합치지 않는다.
+- 안전 경계: 모든 파일 경로는 선택된 base path 안에서 `resolveInside` 검사를 받고 `../` 탈출이 차단된다. 마스터의 웹 루트 권한을 개인 Drive Agent의 전체 NAS 동기화 권한으로 확대하지 않는다.
+
+## 2026-10-30 마스터 파일관리자 기본 진입 경로를 NAS 루트로 고정
+
+- 사용자 요청: “기본 경로가 루트로 들어가지게 해 그냥”.
+- 변경: 마스터가 플랫폼 또는 상단 메뉴의 `파일 관리자`를 열면 이전에 기억한 하위 경로 대신 웹 NAS 루트 `/`에서 시작한다. 브라우저 새로고침과 계정 전환 뒤 서버에 저장된 파일관리자 경로를 복원할 때도 마스터는 `/`를 기본값으로 사용한다.
+- 보존 동작: 일반 사용자와 매니저는 기존 계정별 마지막 경로 복원을 유지한다. 업로드 완료 알림, 최근 작업 복구, 특정 폴더 열기처럼 목적지가 명시된 이동은 마스터도 해당 경로를 그대로 연다.
+- 권한 경계: 웹 경로 `/`는 서버 권한 검사 뒤 마스터에게 `/mnt/nas`로 해석된다. 개인 quota와 Windows NAS Drive/PC 동기화 루트는 계속 `/mnt/nas/users/<loginId>`이며 전체 NAS 동기화로 확대하지 않는다.
+- 코드: `frontend/src/utils/fileManagerEntryPolicy.js`에 진입 정책을 분리하고 `WindowContext`, `ServicePlatform`, `TopBar`에서 공통 적용했다. 회귀 테스트는 마스터 루트 고정, 일반 사용자·매니저 경로 유지, 손상된 저장값의 루트 안전 복귀를 확인한다.
+- 검증: 신규 정책과 계정별 경로 테스트 6개가 통과했고 `DISABLE_ESLINT_PLUGIN=true` production build가 성공했다. `git diff --check`도 통과했다.
+- 운영 상태: 현재 작업 PC에서 SSH alias `nas`가 없고 `100.80.39.112:22` 직접 연결도 확인되지 않아 NAS 실배포·서비스 재시작은 아직 수행하지 못했다. GitHub 반영 후 NAS 연결 가능한 환경에서 fast-forward, build, `pm2-root` 재시작과 실제 마스터/일반 사용자 진입 회귀를 해야 한다.
+
+## 2026-10-30 Zephyrus G14 노트북 Tailscale 설치·등록
+
+- 사용자 요청: 이 PC에 Tailscale을 설치하고 로그인한 장비 이름을 “제피러스 g14 노트북”으로 설정한다.
+- 설치: Windows winget 공식 `Tailscale.Tailscale` 패키지 1.104.4를 설치했다. `Tailscale` Windows 서비스는 `Running`, 시작 유형은 `Automatic`이다.
+- 인증: 사용자가 공식 Tailscale 로그인 페이지에서 기존 Tailnet 계정 인증을 완료했다. 비밀번호·OTP·인증 토큰은 기록하거나 대신 입력하지 않았다.
+- 장비 이름: Tailscale hostname을 DNS 안전 형식인 `zephyrus-g14-laptop`으로 설정했다. 이 PC의 Tailscale IPv4는 `100.86.38.22`, DNSName은 `zephyrus-g14-laptop.tailf3e023.ts.net`, online 상태다. Windows 자체 컴퓨터 이름은 변경하지 않았다.
+- NAS 연결: `chanyoung`(`100.80.39.112`) Tailscale ping은 DERP(tok) 경유로 성공했다. direct 경로는 아직 성립하지 않았지만 Tailnet 도달성은 복구됐다.
+- SSH 상태: NAS TCP/SSH까지 접근했으나 이 새 PC의 known_hosts에 NAS host key가 없어 `Host key verification failed`로 중단했다. host key 검증을 끄지 않았으며, 실제 지문 확인·신뢰 등록과 SSH 공개키/alias 구성이 끝나기 전에는 배포하지 않는다.
+- 남은 작업: NAS host fingerprint를 신뢰된 기존 PC 또는 NAS 콘솔에서 대조해 등록한 뒤 `ssh nas`, NAS worktree 상태, 서비스 상태를 확인하고 `29021d1`을 fast-forward 배포한다.
+
+## 2026-10-30 Zephyrus G14 SSH 준비와 서버 공개키 등록 대기
+
+- 사용자 요청: 앞서 정리한 NAS SSH alias 구성, Git 반영, build·재시작·역할별 검증을 전부 진행한다.
+- 로컬 완료: NAS ED25519 지문 `SHA256:/Ao8GzMVi9U20b8TFJya2s9MMq3PUdln42KyPKXzJ2E`를 사용자의 승인에 따라 `known_hosts`에 등록했다. 이 노트북 전용 ED25519 키를 생성했고 fingerprint는 `SHA256:/yS8T5iWaLLUmMUAadIkUoTM8pUKh/EtcE5Hh5Fkfrw`다. 개인키 원문은 기록·Git·채팅에 노출하지 않는다.
+- alias: 사용자 로컬 `~/.ssh/config`에 `nas` → `100.80.39.112`, 사용자 `limchanyoung`, 전용 `id_ed25519`, `IdentitiesOnly yes`, `HostKeyAlias 100.80.39.112`를 구성했다.
+- 차단 확인: 일반 SSH는 `Permission denied (publickey)`, 비밀번호·keyboard-interactive도 서버가 허용하지 않는다. Tailscale SSH 서버도 활성화되어 있지 않아 조정 서버의 SSH host key를 찾지 못한다. SMB와 웹 파일 API는 `/home/limchanyoung/.ssh/authorized_keys`를 안전하게 수정할 경로가 아니다.
+- 필요한 1회 작업: NAS 로컬 콘솔 또는 이미 승인된 기존 PC에서 이 노트북 공개키 `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF4yPaJUmiUXQ9JEwciYG56xJr9pCJpn0lkr3XrkZ+ID zephyrus-g14-laptop`을 `~/.ssh/authorized_keys`에 중복 없이 추가해야 한다.
+- 다음 자동 작업: 공개키 등록 직후 `ssh nas` 연결, NAS worktree dirty 상태 보존 확인, `895e359` fast-forward, frontend build, `pm2-root` 재시작·save, 필수 서비스와 공개 HTTP, MASTER 루트·USER 개인 루트·명시적 폴더 이동 회귀를 수행한다.
+
+## 2026-10-30 Zephyrus G14 NAS SSH 공개키 등록 완료
+
+- 사용자 요청: G14의 외부 Codex가 보고한 key-only SSH 차단을 현재 신뢰 PC에서 해소한다.
+- 대상 확인: Tailnet에서 현재 G14는 `zephyrus-g14-laptop` / `100.86.38.22`로 온라인이며 ping은 DERP 이후 direct 약 11ms로 성공했다. 예전 `limchanyoung` / `100.72.86.10`은 오프라인이므로 대상에서 제외했다.
+- 키 검증: 원격 릴레이에 기록된 G14 전용 ED25519 공개키를 `ssh-keygen`으로 검증했고 fingerprint가 G14 보고값 `SHA256:/yS8T5iWaLLUmMUAadIkUoTM8pUKh/EtcE5Hh5Fkfrw`와 정확히 일치했다. 개인키는 조회·복사·전송하지 않았다.
+- 서버 반영: 기존 `authorized_keys`를 제한 권한 백업으로 보존한 뒤 공개키 한 줄을 lock 안에서 중복 없이 추가했다. 등록 결과는 `added`, exact match 1개이며 키 수는 3개에서 4개가 됐다. `~/.ssh` 700과 `authorized_keys` 600을 유지했고 비밀번호 SSH·Tailscale SSH를 활성화하지 않았다.
+- 남은 검증: G14 자체에서 `ssh nas "whoami && hostname"`을 다시 실행해야 실제 개인키 서명 성공이 확정된다. 성공 후 외부 Codex는 NAS worktree의 원격 신규 커밋과 dirty 상태를 보존해 fast-forward·build·재시작·역할별 회귀를 이어간다.

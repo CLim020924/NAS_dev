@@ -510,6 +510,44 @@ const organizationDirectory = createOrganizationDirectory({ dataDir: path.join(_
 organizationDirectory.ensureExistingUsers(approvedUsers);
 organizationDirectory.reconcileExistingUserMailboxes(approvedUsers, 'system-startup');
 
+// Cresero employee provisioning: default-disabled unless the bridge secret is configured.
+const creseroProvisioner = require('./cresero-provisioner.cjs').startCreseroProvisioner({
+  app,
+  authenticatedUser: (req) => getAuthenticatedUserFromRequest(req),
+  getUsers: () => approvedUsers,
+  getRequests: () => signupRequests,
+  saveMembers: () => {
+    const next = approvedUsers.map(normalizeApprovedUser);
+    const temporary = membersFilePath + '.cresero-' + process.pid + '.tmp';
+    try {
+      fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600 });
+      fs.renameSync(temporary, membersFilePath);
+    } catch (error) {
+      try { fs.unlinkSync(temporary); } catch {}
+      throw error;
+    }
+    approvedUsers = next;
+  },
+  normalizeUser: (user) => normalizeApprovedUser({ ...user, storageQuotaMode: 'limited', storageQuotaBytes: DEFAULT_USER_QUOTA_BYTES, storageQuotaPolicyVersion: USER_QUOTA_POLICY_VERSION }),
+  ensureStorage: ensurePersonalStorageRoot,
+  getCapacity: () => getStorageCapacitySummary(approvedUsers, signupRequests),
+  storageExists: (id) => fs.existsSync(path.join(nasPath, 'users', id)),
+  directory: organizationDirectory,
+  emit: (user, suspended) => {
+    if (suspended) for (const socket of io.sockets.sockets.values()) if (socket.userUid === user.userUid) socket.disconnect(true);
+    io.emit('membersChanged');
+  },
+  issueSession: (req, res, user) => {
+    const sessionId = generateSessionId(), loginId = getUserLoginId(user);
+    addUserActiveSession(user, { sessionId, deviceId: '', issuedAt: nowIso(), lastSeenAt: nowIso(), persistent: false, expiresAt: new Date(Date.now() + DAY_MS).toISOString(), source: 'cresero' });
+    saveMembers();
+    const token = jwt.sign({ userUid: user.userUid, sessionId, id: loginId, loginId, username: loginId, displayName: user.displayName || loginId, nickname: user.nickname || '', role: getUserRole(user), Masters: user.Masters, Managers: user.Managers, globalAccess: user.globalAccess, rootPath: user.rootPath, persistent: false }, JWT_SECRET, { expiresIn: '1d' });
+    res.cookie('token', token, getAuthCookieOptions(req, false));
+    return res.json({ success: true });
+  }
+});
+
+
 const resourceControl = createResourceControlService({
   dataDir: path.join(__dirname, 'data'),
   collectMetrics: () => collectServerMetrics({ nasRoot: nasPath }),
