@@ -2194,3 +2194,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 미완료: Tailnet 관리자 로그인 화면에서 현재 정책과 장치 승인 설정을 아직 확인하지 못했으므로 `tailscale set --ssh`를 실행하지 않았다. 정책보다 서버 기능을 먼저 켜면 현재 Tailscale IP의 SSH 연결이 중단될 수 있어 기존 접속을 보존했다.
 - 기록 동기화: 이 결정과 현재 확인 결과를 활성 브랜치에 커밋하고 GitHub 원격에 반영했다. 로컬과 원격 브랜치가 같은 커밋을 가리키는지 다시 확인했다.
 - 다음 안전 조치: 사용자가 Tailscale 관리자 로그인을 완료하면 현재 ACL/SSH 정책과 장치 승인 상태를 읽고, 대상과 OS 사용자를 최소 범위로 제한한 정책을 적용한 뒤 NAS에서 Tailscale SSH를 활성화한다. 이후 현재 PC와 G14에서 새 개인키 없이 접속 가능한지, 기존 공개키 SSH 복구 경로가 유지되는지 검증한다.
+
+## 2026-10-30 마스터 파일관리자 루트 기본 진입 운영 배포 완료
+
+- 사용자 요청: 다른 신뢰 PC에서 Git에 반영한 SSH 등록 기록을 자세히 읽고, G14에서 보류된 배포·검증을 재개한다.
+- SSH 복구: G14의 `ssh nas`가 공개키 인증으로 성공했다. 원격 사용자는 `limchanyoung`, 호스트는 `chanyoung`이며 NAS worktree는 작업 전 clean이었다.
+- Git 반영: NAS branch를 `8549065`에서 원격 `cc81a95`까지 `--ff-only`로 갱신했다. `29021d1`의 마스터 기본 루트 정책과 뒤따른 SSH relay 문서가 모두 포함됐다.
+- 검증: 프런트 `fileManagerEntryPolicy`·계정별 경로 테스트 6개, UI contract 124 source, `DISABLE_ESLINT_PLUGIN=true` production build와 react-pdf/PDF.js 9.2.1/4.8.69 호환 검사가 통과했다. backend 저장공간·hardlink 경계 테스트 7개도 통과했다.
+- 배포: 기존 `/var/www/html`과 새 build를 `/home/limchanyoung/msp-backups/master-root-entry-20261030-predeploy`에 보존한 뒤 새 build를 운영 정적 경로에 동기화했다. build와 운영 `index.html` SHA-256은 `4dc9ab63638cd9998a637b75099c88082b4dc4ee091887982e9d0638712325a2`로 일치하고 운영 bundle은 `main.1a342207.js`다.
+- 서비스: `msp-backend`를 재시작하고 `sudo pm2 save`를 실행했다. PM2 online, `ssh/tailscaled/nginx/docker/pm2-root/cloudflared` 6개 서비스 모두 enabled+active, localhost 3030과 공개 HTTPS 모두 200이다.
+- 실화면: 현재 로그인된 마스터 웹 NAS에서 `서버 전체 저장소 /`와 NAS 루트 항목을 확인했다. `users` 하위 폴더를 연 뒤 상단 `파일 관리자` 버튼을 누르면 다시 `/`로 돌아왔다. 일반 사용자·매니저의 기억 경로와 개인 quota·Windows Drive 루트는 정책과 서버 테스트로 그대로 유지된다.
+- 완료 상태: `PENDING-MASTER-ROOT-DEPLOY-20261030`은 운영 배포·실화면 검증 완료로 닫는다. Tailscale SSH 자동 연결 구조 검토는 별도 보안 작업이며 이번 기능 완료 조건이 아니다.
