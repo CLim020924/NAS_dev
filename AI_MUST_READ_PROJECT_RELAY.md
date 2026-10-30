@@ -2132,3 +2132,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 불변 조건: 기존 25개 NAS 계정 비밀번호·role·Masters/Managers·globalAccess·개인 root가 백업과 동일하다. 지정 5개 직원만 공통 계정에 연결됐고 나머지 직원 연결은 0개다. 명부 API 5명 모두 200, 미인증 프로필 API 401, 운영 index와 build 일치.
 - 배포: 회사와 퀴즈 Cloudflare Worker 및 NAS 백엔드 반영 완료. 퀴즈 version 45f9c41a-06f3-484c-80cc-61d0ed4d5cef, 회사 version 81f46551-d9a3-4ea8-bbe5-cefc80e3e8a3. NAS 기존 프런트 번들은 유지한다.
 - 남은 한계: 기존 PC의 비공개 입력·암호화 백업·QR 이미지가 필요한 퀴즈 검사 4개는 미실행이다. Google/Meta 개발자 앱과 메일 제공자는 미설정이며 기존 보류 사항을 유지한다. NAS 전원을 실제로 끄지 않고 오프라인 큐·실패 재시도는 자동 검사로 검증했다. 사용자 직접 초기 비밀번호 변경 후 실제 직원 SSO 클릭은 다음 사용 확인 항목이다.
+## 2026-10-30 마스터 계정의 NAS 루트 접근 방식 확인
+
+- 사용자 질문: 현재 구조에서 마스터 계정이 NAS 루트 경로에 어떻게 접근하는지 확인했다.
+- 코드 기준: 로그인 세션의 JWT만 고정 신뢰하지 않고 요청마다 회원 저장소의 최신 계정을 다시 조회한 뒤 역할과 전체 접근 여부를 정규화한다. `MASTER`, `MANAGER`, `globalAccess` 계정의 웹 파일 API 기준 경로는 `NAS_ROOT`(현재 `/mnt/nas`)이고, 일반 계정은 `/mnt/nas/users/<loginId>`다.
+- UI 의미: 마스터가 웹 NAS 파일관리자에서 경로 `/`를 열면 서버의 `/mnt/nas`가 루트로 보인다. 별도의 Linux root 로그인이나 NAS 루트 비밀번호를 사용하는 방식이 아니며 로그인 세션과 서버 역할 검사를 통과한다.
+- 개인 공간 분리: 마스터도 개인 quota, 노트 소유권, Windows NAS Drive/PC 동기화는 `/mnt/nas/users/<마스터 loginId>`를 사용한다. 웹 전체 NAS 루트 가시성과 개인 드라이브 소유권·quota를 합치지 않는다.
+- 안전 경계: 모든 파일 경로는 선택된 base path 안에서 `resolveInside` 검사를 받고 `../` 탈출이 차단된다. 마스터의 웹 루트 권한을 개인 Drive Agent의 전체 NAS 동기화 권한으로 확대하지 않는다.
