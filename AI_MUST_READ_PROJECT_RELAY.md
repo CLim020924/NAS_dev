@@ -2205,3 +2205,15 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 서비스: `msp-backend`를 재시작하고 `sudo pm2 save`를 실행했다. PM2 online, `ssh/tailscaled/nginx/docker/pm2-root/cloudflared` 6개 서비스 모두 enabled+active, localhost 3030과 공개 HTTPS 모두 200이다.
 - 실화면: 현재 로그인된 마스터 웹 NAS에서 `서버 전체 저장소 /`와 NAS 루트 항목을 확인했다. `users` 하위 폴더를 연 뒤 상단 `파일 관리자` 버튼을 누르면 다시 `/`로 돌아왔다. 일반 사용자·매니저의 기억 경로와 개인 quota·Windows Drive 루트는 정책과 서버 테스트로 그대로 유지된다.
 - 완료 상태: `PENDING-MASTER-ROOT-DEPLOY-20261030`은 운영 배포·실화면 검증 완료로 닫는다. Tailscale SSH 자동 연결 구조 검토는 별도 보안 작업이며 이번 기능 완료 조건이 아니다.
+
+## 2026-10-30 계정별 파일 작업공간 전환·저장공간 상태 운영 반영
+
+- 사용자 요청: 저장공간 바로가리가 새 창을 여는 방식이 아니라 중앙 `파일 작업공간`을 on/off 선택처럼 전환해야 한다. 마스터 외 계정도 `내 계정공간`과 `현재 경로 사용량`이 보이고 자기 계정공간이 기본값이어야 한다.
+- 선행 구현 정정: 직전 `16e3163`은 마스터용 `내 저장공간 이동`·`전체 경로로 이동`을 추가했지만 window 모드에서는 `openFolderWindow`로 부동 폴더 창을 열었다. 이번 요구와 달라 `02730b1`에서 별도 창 생성 분기를 제거하고 중앙 `fileManagerPath` 전환으로 통일했다.
+- UI 동작: 모든 역할의 Storage 블록에 `내 계정공간` 사용량과 선택 버튼을 표시한다. 현재 선택 중이면 `계정공간 표시 중`으로 보인다. `현재 경로 사용량`은 중앙 작업공간 경로와 실제 경로 문자열을 표시한다. MASTER만 `전체 경로 표시/표시 중` 버튼을 본다. 버튼은 폴더 창을 만들지 않고 중앙 항목 목록·검색 대상·업로드/드롭 대상·동기화 폴링·사용량 조회를 함께 전환한다.
+- 역할별 기본값: MASTER는 기존 사용자 요청대로 전체 NAS 웹 루트 `/`가 기본이다. MASTER도 `내 계정공간`을 누르면 `/users/<loginId>`로 전환할 수 있다. MANAGER 또는 `globalAccess` 계정은 전체 루트 권한이 있더라도 기본 파일 작업공간은 `/users/<loginId>`다. 일반 USER의 `/`는 서버에서 해당 사용자의 개인 root로 해석되므로 다른 계정 공간을 노출하지 않는다.
+- 계정 전환: `nas:user-updated`와 storage 변경을 구독해 현재 사용자, 역할별 버튼, 기본 경로, 저장공간 요약을 다시 평가한다. 다른 권한 계정으로 바뀌었을 때 이전 계정의 전체 경로 상태나 사용량을 유지하지 않는다.
+- 보안 경계: 서버 API·`resolveInside`·최신 계정 role 검사는 변경하지 않았다. 웹 파일 작업공간 전환을 개인 quota 또는 Windows NAS Drive 동기화 root의 전체 NAS 접근으로 확대하지 않는다. MASTER 전용 전체 경로 UI도 서버가 허용한 세션에서만 의미가 있다.
+- 검증: 로컬과 NAS에서 정책 검사 5개, UI contract 124 source, production build와 react-pdf/PDF.js 호환 검사가 통과했다. NAS는 clean worktree에서 `02730b1`로 `--ff-only` 갱신했다. build/운영 index SHA-256은 `ffcb70e9f51778cecd70107eaf93daa067117e1534076b66e01437712714d264`, 운영 bundle은 `main.4c0081c3.js`다. PM2 `msp-backend` online, 필수 6서비스 enabled+active, localhost 3030과 공개 HTTPS 모두 200이다.
+- 배포/복구: 기존 운영 정적 파일은 `/home/limchanyoung/msp-backups/file-workspace-toggle-20261030-predeploy/live`에 보존했다. backend 변경은 없어 PM2 재시작은 하지 않았다. 역할별 실제 브라우저 클릭 확인은 다음 사용자 세션에서 할 수 있으나 정책·UI 계약·build·운영 배포 검증은 완료했다.
+- 기록: `NAS_PROJECT_LOG.xlsx`의 Do_Not_Break, Feature_Index, Relation_Map, Code_Map을 최신 정책으로 갱신하고 Patch_Log, Request_Archive, Generated_Check에 요청·원인·수정·검증을 추가했다. 한글 교체문자와 수식 오류가 없고 변경 행 렌더를 확인했다.
