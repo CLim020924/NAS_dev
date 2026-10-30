@@ -16,6 +16,7 @@ import socket from '../socket';
 import MeetingApp from './MeetingApp';
 import DocumentStudio from './DocumentStudio/DocumentStudio';
 import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
+import { getDefaultFileManagerEntryPath } from '../utils/fileManagerEntryPolicy';
 
 const NoteStudio = React.lazy(() => import('./NoteStudio/NoteStudio'));
 
@@ -114,6 +115,7 @@ function ServicePlatform() {
     openAppWindow,
     showDesktop,
     fileManagerPath,
+    setFileManagerPath,
     recordLastWork,
     dismissRecoveryOffer,
   } = useWindows();
@@ -368,7 +370,11 @@ function ServicePlatform() {
   }, [pcConnectionState, refreshPcDevices]);
 
   const openApp = useCallback((app) => {
-    if (app.id === 'files') recordLastWork({ type: 'folder', path: fileManagerPath || '/', label: '파일 관리자' });
+    if (app.id === 'files') {
+      const entryPath = getDefaultFileManagerEntryPath(user, fileManagerPath);
+      setFileManagerPath(entryPath);
+      recordLastWork({ type: 'folder', path: entryPath, label: '파일 관리자' });
+    }
     else if (['note-studio', 'document-workspace', 'document-studio', 'meeting'].includes(app.id)) {
       recordLastWork({ type: 'app', appId: app.id, label: app.title });
     } else dismissRecoveryOffer();
@@ -397,7 +403,7 @@ function ServicePlatform() {
       return;
     }
     openAppWindow(app);
-  }, [navigate, openAppWindow, openLinkedDrive, pcLinkedHere, pcPairingActive, startPcSyncFlow, fileManagerPath, recordLastWork, dismissRecoveryOffer]);
+  }, [navigate, openAppWindow, openLinkedDrive, pcLinkedHere, pcPairingActive, startPcSyncFlow, fileManagerPath, recordLastWork, dismissRecoveryOffer, setFileManagerPath, user]);
 
   const apps = useMemo(() => {
     const pcStatus = getDeviceStatusUi(pcLiveState);

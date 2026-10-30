@@ -10,6 +10,7 @@ import {
 } from './windowWorkspaceIdentity';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../utils/workspaceViewState';
 import { RECOVERY_LOGIN_KEY, normalizeLastWork, recoveryOfferForAccount } from '../utils/lastWorkRecovery';
+import { readDefaultFileManagerEntryPath } from '../utils/fileManagerEntryPolicy';
 
 const WindowContext = createContext();
 
@@ -48,7 +49,10 @@ export const WindowProvider = ({ children }) => {
   const [workspaceIdentity, setWorkspaceIdentity] = useState(initialWorkspaceIdentity);
   const workspaceIdentityRef = useRef(initialWorkspaceIdentity);
   const [fileManagerPath, setFileManagerPath] = useState(() => (
-    readWorkspaceFileManagerPath(localStorage, initialWorkspaceIdentity)
+    readDefaultFileManagerEntryPath(
+      localStorage,
+      readWorkspaceFileManagerPath(localStorage, initialWorkspaceIdentity)
+    )
   ));
   const [fileManagerStateReady, setFileManagerStateReady] = useState(false);
   const [recoveryOffer, setRecoveryOffer] = useState(null);
@@ -105,7 +109,9 @@ export const WindowProvider = ({ children }) => {
     loadWorkspaceViewState({ kind: 'file-manager' }, controller.signal)
       .then((record) => {
         const restoredPath = record?.state?.currentPath;
-        if (typeof restoredPath === 'string' && restoredPath.startsWith('/')) setFileManagerPath(restoredPath);
+        if (typeof restoredPath === 'string' && restoredPath.startsWith('/')) {
+          setFileManagerPath(readDefaultFileManagerEntryPath(localStorage, restoredPath));
+        }
       })
       .catch(() => {})
       .finally(() => { if (!controller.signal.aborted) setFileManagerStateReady(true); });
@@ -188,7 +194,7 @@ export const WindowProvider = ({ children }) => {
       setAiSelectedPaths([]);
       setTopZIndex(transition.topZIndex);
       topZIndexRef.current = transition.topZIndex;
-      setFileManagerPath(transition.fileManagerPath);
+      setFileManagerPath(readDefaultFileManagerEntryPath(localStorage, transition.fileManagerPath));
     };
 
     window.addEventListener('storage', synchronizeWorkspaceIdentity);

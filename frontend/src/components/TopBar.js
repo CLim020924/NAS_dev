@@ -23,6 +23,7 @@ import {
   getTaskSwitcherWindows,
   moveTaskSwitcherIndex,
 } from './windowLayerPolicy';
+import { getDefaultFileManagerEntryPath } from '../utils/fileManagerEntryPolicy';
 
 const TopBar = ({
   onOpenFriends,
@@ -49,6 +50,7 @@ const TopBar = ({
     openFileWindowByPath,
     openFolderWindowByPath,
     fileManagerPath,
+    setFileManagerPath,
     recoveryOffer,
     dismissRecoveryOffer,
     recordLastWork,
@@ -260,10 +262,15 @@ const TopBar = ({
   const minimizedApps = taskWindows.filter((w) => w.winType === 'app');
   const minimizedChats = taskWindows.filter((w) => w.winType === 'chat');
   const canOpenBackup = user.role === 'MASTER' || user.Masters || user.globalAccess;
+  const openDefaultFileManager = useCallback(() => {
+    showDesktop();
+    setFileManagerPath(getDefaultFileManagerEntryPath(user, fileManagerPath));
+    navigate('/nas');
+  }, [fileManagerPath, navigate, setFileManagerPath, showDesktop, user]);
 
   const navigationItems = [
     { id: 'desktop', title: '바탕화면', icon: SpaceDashboardIcon, action: () => goDesktop() },
-    { id: 'files', title: '파일 관리자', icon: FolderIcon, action: () => { showDesktop(); navigate('/nas'); } },
+    { id: 'files', title: '파일 관리자', icon: FolderIcon, action: openDefaultFileManager },
     { id: 'pc-sync', title: 'PC 연동', icon: DesktopWindowsIcon, action: () => { showDesktop(); navigate('/nas'); } },
     {
       id: 'meeting',
@@ -767,7 +774,7 @@ const TopBar = ({
               <ManageAccountsIcon fontSize="small" />
             </IconButton>
 
-            <IconButton aria-label="파일 관리자 열기" title="파일 관리자" onClick={() => { showDesktop(); navigate('/nas'); }} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
+            <IconButton aria-label="파일 관리자 열기" title="파일 관리자" onClick={openDefaultFileManager} size="small" sx={{ color: 'text.primary' }}> <FolderIcon fontSize="small" /> </IconButton>
             <IconButton aria-label="접근 기록 열기" title="접근 기록" onClick={() => setAccessHistoryOpen(true)} size="small" sx={{ color: 'text.primary' }}> <HistoryIcon fontSize="small" /> </IconButton>
             <IconButton aria-label="설정 열기" title="설정" onClick={() => { showDesktop(); navigate('/settings'); }} size="small" sx={{ color: 'text.primary' }}> <SettingsIcon fontSize="small" /> </IconButton>
 
