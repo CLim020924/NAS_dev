@@ -2109,3 +2109,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 복구 검증: NAS 장치 `chanyoung`이 기존 `100.80.39.112`로 Tailnet에 복귀했다. Windows `chan`에서 ping은 direct LAN 경로 약 1ms, TCP 22와 `ssh nas`는 성공했다. SSH에서 `whoami=limchanyoung`, `hostname=chanyoung`, `tailscale ip -4=100.80.39.112`, 기대 branch와 clean worktree를 확인했다. `tailscaled`는 enabled+active이며 backend와 공개 사이트는 HTTP 200, 필수 6개 서비스는 active다.
 - DNS 경고: Tailscale health에는 immutable `/etc/resolv.conf`를 변경하지 못한다는 경고가 남아 있다. 현재 파일은 NetworkManager가 만든 통신사 DNS를 사용하고 일반 DNS 조회가 정상이다. 이번 재인증 범위를 벗어나고 기존 네트워크 설정을 깨뜨릴 수 있어 immutable 속성이나 DNS 설정은 변경하지 않았다.
 - 문서 갱신: 루트 연결 bootstrap과 다른 PC handoff의 만료 상태를 성공 상태로 교체하고, DNS 경고를 비차단 잔여 항목으로 기록한다. 새 작업은 날짜가 있는 스냅샷을 그대로 믿지 않고 status·ping·TCP 22·SSH를 다시 검사한다.
+
+### 2026-10-30 Zephyrus G14 Codex의 NAS SSH 공개키 등록 대기
+
+- 사용자 보고: Zephyrus G14에서 외부 Codex로 NAS 개발을 이어가려 했지만 새 PC의 SSH 공개키가 NAS에 없어 key-only SSH에서 차단되었다. 외부 Codex는 비밀번호 SSH·Tailscale SSH·기존 개인키·웹 authorized_keys 관리 경로가 없다고 진단했다.
+- 실시간 확인: 현재 Tailnet의 G14는 `zephyrus-g14-laptop` / `100.86.38.22`로 온라인이며 Tailscale ping은 DERP 이후 direct 약 11ms로 성공했다. 예전 `limchanyoung` / `100.72.86.10` 장치는 오프라인이므로 G14 주소로 혼동하지 않는다. G14의 TCP 22는 닫혀 있지만 이는 G14에서 NAS로 나가는 SSH에는 필요하지 않다.
+- 신뢰 경로: 현재 작업 PC에서는 `ssh nas`가 key-only로 성공하고 NAS `ssh`와 `tailscaled`가 active다. NAS `authorized_keys`에는 현재 3개 키가 있으며 기존 키를 노출하거나 교체하지 않고 G14 전용 공개키 한 줄만 중복 없이 추가할 수 있다.
+- 보안 경계: G14에서는 전용 ed25519 키를 생성하고 `.pub` 공개키와 fingerprint만 전달한다. 개인키 본문, 비밀번호, auth key, agent token은 출력·채팅·Git·릴레이에 저장하지 않는다. 공개키를 받기 전에는 인증 우회나 비밀번호 SSH 재활성화를 하지 않는다.
+- 다음 안전 작업: G14의 외부 Codex가 `%USERPROFILE%\.ssh\id_ed25519_g14_nas`를 생성하고 공개키 한 줄을 사용자에게 제공한다. 사용자가 이 대화에 공개키를 붙이면 현재 신뢰 PC에서 형식과 fingerprint를 검증한 뒤 NAS `authorized_keys`에 원자적으로 추가하고 권한 700/600, G14 `ssh nas`, branch·worktree를 검증한다.
