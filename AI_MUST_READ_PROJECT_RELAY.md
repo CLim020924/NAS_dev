@@ -2159,3 +2159,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - NAS 연결: `chanyoung`(`100.80.39.112`) Tailscale ping은 DERP(tok) 경유로 성공했다. direct 경로는 아직 성립하지 않았지만 Tailnet 도달성은 복구됐다.
 - SSH 상태: NAS TCP/SSH까지 접근했으나 이 새 PC의 known_hosts에 NAS host key가 없어 `Host key verification failed`로 중단했다. host key 검증을 끄지 않았으며, 실제 지문 확인·신뢰 등록과 SSH 공개키/alias 구성이 끝나기 전에는 배포하지 않는다.
 - 남은 작업: NAS host fingerprint를 신뢰된 기존 PC 또는 NAS 콘솔에서 대조해 등록한 뒤 `ssh nas`, NAS worktree 상태, 서비스 상태를 확인하고 `29021d1`을 fast-forward 배포한다.
+
+## 2026-10-30 Zephyrus G14 SSH 준비와 서버 공개키 등록 대기
+
+- 사용자 요청: 앞서 정리한 NAS SSH alias 구성, Git 반영, build·재시작·역할별 검증을 전부 진행한다.
+- 로컬 완료: NAS ED25519 지문 `SHA256:/Ao8GzMVi9U20b8TFJya2s9MMq3PUdln42KyPKXzJ2E`를 사용자의 승인에 따라 `known_hosts`에 등록했다. 이 노트북 전용 ED25519 키를 생성했고 fingerprint는 `SHA256:/yS8T5iWaLLUmMUAadIkUoTM8pUKh/EtcE5Hh5Fkfrw`다. 개인키 원문은 기록·Git·채팅에 노출하지 않는다.
+- alias: 사용자 로컬 `~/.ssh/config`에 `nas` → `100.80.39.112`, 사용자 `limchanyoung`, 전용 `id_ed25519`, `IdentitiesOnly yes`, `HostKeyAlias 100.80.39.112`를 구성했다.
+- 차단 확인: 일반 SSH는 `Permission denied (publickey)`, 비밀번호·keyboard-interactive도 서버가 허용하지 않는다. Tailscale SSH 서버도 활성화되어 있지 않아 조정 서버의 SSH host key를 찾지 못한다. SMB와 웹 파일 API는 `/home/limchanyoung/.ssh/authorized_keys`를 안전하게 수정할 경로가 아니다.
+- 필요한 1회 작업: NAS 로컬 콘솔 또는 이미 승인된 기존 PC에서 이 노트북 공개키 `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF4yPaJUmiUXQ9JEwciYG56xJr9pCJpn0lkr3XrkZ+ID zephyrus-g14-laptop`을 `~/.ssh/authorized_keys`에 중복 없이 추가해야 한다.
+- 다음 자동 작업: 공개키 등록 직후 `ssh nas` 연결, NAS worktree dirty 상태 보존 확인, `895e359` fast-forward, frontend build, `pm2-root` 재시작·save, 필수 서비스와 공개 HTTP, MASTER 루트·USER 개인 루트·명시적 폴더 이동 회귀를 수행한다.
