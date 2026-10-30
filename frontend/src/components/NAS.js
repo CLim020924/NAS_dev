@@ -48,7 +48,7 @@ import useShortcuts from '../hooks/useShortcuts';
 import { transferUrl } from '../transferBaseUrl';
 import { collectDroppedUploadItems } from './NAS/uploadDropCollector';
 import { moveKeyboardSelection, selectClickedPath, toggleFocusedPath } from './NAS/fileSelectionModel';
-import { getMasterPersonalStoragePath, isMasterFileManagerUser } from '../utils/fileManagerEntryPolicy';
+import { getAccountFileManagerPath, isMasterFileManagerUser } from '../utils/fileManagerEntryPolicy';
 
 const readCurrentUser = () => {
   try {
@@ -179,7 +179,7 @@ const NAS = ({ showWorkspace = true }) => {
   const { openWindows, setOpenWindows, focusedContext, setFocusedContext, focusWindow, closeWindow, toggleMinimize, toggleMaximize, fetchFiles, fileManagerPath, setFileManagerPath, recordLastWork } = useWindows();
   const { startUpload } = useTransfer();
   const folderInlineMode = appOpenMode === 'inline';
-  const currentFileManagerPath = folderInlineMode ? ensureSlash(fileManagerPath || '/') : '/';
+  const currentFileManagerPath = ensureSlash(fileManagerPath || '/');
   const pendingNavigationPathRef = useRef(currentFileManagerPath);
 
   const desktopItemsRef = useRef(desktopItems); desktopItemsRef.current = desktopItems;
@@ -485,7 +485,7 @@ const NAS = ({ showWorkspace = true }) => {
     let syncTimer;
     const syncFiles = async () => {
       if (inlineEditRef.current || contextMenuRef.current) return;
-      const listPath = ensureSlash(folderInlineMode ? (fileManagerPath || '/') : '/');
+      const listPath = currentFileManagerPath;
       try { const res = await axios.get(`/api/files?path=${encodeURIComponent(listPath)}&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(desktopItemsRef.current)) setDesktopItems(res.data || []); } catch(e) {}
       openWindowsRef.current.forEach(async (win) => {
         if (win.winType === 'folder') { try { const res = await axios.get(`/api/files?path=${encodeURIComponent(win.currentPath)}&t=${Date.now()}`, { withCredentials: true }); if (JSON.stringify(res.data || []) !== JSON.stringify(win.files)) setOpenWindows(prev => prev.map(w => w.id === win.id ? { ...w, files: res.data || [] } : w)); } catch(e) {} }
@@ -504,7 +504,7 @@ const NAS = ({ showWorkspace = true }) => {
       socket.off('files:changed', onFilesChanged);
       socket.off('connect', onFilesChanged);
     };
-  }, [setOpenWindows, folderInlineMode, fileManagerPath]);
+  }, [setOpenWindows, currentFileManagerPath]);
 
   useEffect(() => {
     if (desktopItems.length === 0) return; 
@@ -1830,7 +1830,7 @@ const NAS = ({ showWorkspace = true }) => {
       await axios.delete(`/api/trash/${encodeURIComponent(item.trashId)}`, { withCredentials: true });
       setSnackbar({ open: true, message: '영구 삭제했습니다.', severity: 'success' });
       await loadTrash();
-      refreshStorageUsage('/');
+      refreshStorageUsage(currentFileManagerPath);
     } catch (err) { showError('영구 삭제', err); }
   };
 
@@ -2252,21 +2252,10 @@ const NAS = ({ showWorkspace = true }) => {
     setInlineEdit(null);
   };
 
-  const masterPersonalStoragePath = getMasterPersonalStoragePath(currentUser);
-  const navigateStorageLocation = (path, label) => {
-    if (!isMaster || !path) return;
-    const safePath = ensureSlash(path);
-    if (folderInlineMode) {
-      navigateFileManagerPath(safePath);
-      return;
-    }
-    openFolderWindow({
-      id: safePath === '/' ? 'system_root' : `storage_shortcut_${safePath}`,
-      name: label,
-      path: safePath,
-      fullPath: safePath,
-      type: 'folder'
-    });
+  const accountWorkspacePath = getAccountFileManagerPath(currentUser);
+  const navigateStorageLocation = (path) => {
+    if (!path) return;
+    navigateFileManagerPath(path);
   };
 
   const handleInlineBack = () => {
@@ -2283,6 +2272,8 @@ const NAS = ({ showWorkspace = true }) => {
   const activeWindow = openWindows.find(w => w.id === focusedContext);
   const activeTargetPath = getActiveTargetPath();
   const rootLabel = isAdmin ? '서버 전체 저장소' : '내 클라우드';
+  const accountWorkspaceActive = ensureSlash(currentFileManagerPath) === ensureSlash(accountWorkspacePath);
+  const fullRootWorkspaceActive = isMaster && ensureSlash(currentFileManagerPath) === '/';
   const visibleDesktopItems = desktopItems;
   const activeSearchQuery = fileSearchQuery.trim();
   const showSearchResults = activeSearchQuery.length >= 2;
@@ -2290,7 +2281,7 @@ const NAS = ({ showWorkspace = true }) => {
     ? Math.min(100, Math.round((Number(storageSummary.usedBytes || 0) / Number(storageSummary.quotaBytes)) * 100))
     : (storageSummary?.totalBytes ? Math.min(100, Math.round((Number(storageSummary.usedBytes || 0) / Number(storageSummary.totalBytes)) * 100)) : 0);
 
-  const refreshStorageUsage = useCallback(async (targetPath = activeTargetPath) => {
+  const refreshStorageUsage = useCallback(async (targetPath = currentFileManagerPath) => {
     try {
       const [summaryRes, pathRes] = await Promise.all([
         axios.get('/api/storage/me', { withCredentials: true }),
@@ -2301,11 +2292,11 @@ const NAS = ({ showWorkspace = true }) => {
     } catch (err) {
       // Storage information is supplemental; file browsing should keep working.
     }
-  }, [activeTargetPath, currentUserIdentity]);
+  }, [currentFileManagerPath, currentUserIdentity]);
 
   useEffect(() => {
-    refreshStorageUsage(activeTargetPath);
-  }, [activeTargetPath, desktopItems.length, refreshStorageUsage]);
+    refreshStorageUsage(currentFileManagerPath);
+  }, [currentFileManagerPath, desktopItems.length, refreshStorageUsage]);
 
   const desktopCardStyle = isMobile
     ? { textAlign: 'center', cursor: 'pointer', width: '100%', minWidth: 0, zIndex: 10 }
@@ -2385,38 +2376,39 @@ const NAS = ({ showWorkspace = true }) => {
               <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 900 }}>Storage</Typography>
               <Box sx={{ display: 'grid', gap: 1, mt: 1 }}>
                 <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.primary.main, 0.08), display: 'flex', flexDirection: 'column' }}>
-                  <Typography variant="caption" color="text.secondary">내 저장공간</Typography>
+                  <Typography variant="caption" color="text.secondary">내 계정공간</Typography>
                   <Typography sx={{ fontWeight: 900 }}>
                     {formatBytes(storageSummary?.usedBytes)}
                     {' / '}
                     {storageSummary?.quotaMode === 'limited' ? formatBytes(storageSummary?.quotaBytes) : formatBytes(storageSummary?.totalBytes)}
                   </Typography>
                   <LinearProgress variant="determinate" value={storagePercent} sx={{ mt: 0.75, height: 6, borderRadius: 999 }} />
-                  {isMaster && masterPersonalStoragePath && (
-                    <Button
-                      size="small"
-                      variant="text"
-                      onClick={() => navigateStorageLocation(masterPersonalStoragePath, '내 저장공간')}
-                      disabled={ensureSlash(activeTargetPath) === ensureSlash(masterPersonalStoragePath)}
-                      sx={{ alignSelf: 'flex-end', minWidth: 0, mt: 0.65, px: 0.5, py: 0.2, fontSize: '0.72rem' }}
-                    >
-                      내 저장공간 이동
-                    </Button>
-                  )}
+                  <Button
+                    size="small"
+                    variant={accountWorkspaceActive ? 'contained' : 'text'}
+                    aria-pressed={accountWorkspaceActive}
+                    onClick={() => navigateStorageLocation(accountWorkspacePath)}
+                    sx={{ alignSelf: 'flex-end', minWidth: 0, mt: 0.65, px: 0.75, py: 0.25, fontSize: '0.72rem' }}
+                  >
+                    {accountWorkspaceActive ? '계정공간 표시 중' : '내 계정공간 표시'}
+                  </Button>
                 </Box>
                 <Box sx={{ p: 1.25, borderRadius: 1.5, bgcolor: alpha(theme.palette.secondary.main, 0.08), display: 'flex', flexDirection: 'column' }}>
                   <Typography variant="caption" color="text.secondary">현재 경로 사용량</Typography>
                   <Typography sx={{ fontWeight: 900 }}>{pathUsage ? formatBytes(pathUsage.sizeBytes) : '계산 중'}</Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap title={currentFileManagerPath} sx={{ mt: 0.25 }}>
+                    {currentFileManagerPath}
+                  </Typography>
                   {isMaster && (
                     <Button
                       size="small"
-                      variant="text"
+                      variant={fullRootWorkspaceActive ? 'contained' : 'text'}
                       color="secondary"
-                      onClick={() => navigateStorageLocation('/', '서버 전체 저장소')}
-                      disabled={ensureSlash(activeTargetPath) === '/'}
-                      sx={{ alignSelf: 'flex-end', minWidth: 0, mt: 0.65, px: 0.5, py: 0.2, fontSize: '0.72rem' }}
+                      aria-pressed={fullRootWorkspaceActive}
+                      onClick={() => navigateStorageLocation('/')}
+                      sx={{ alignSelf: 'flex-end', minWidth: 0, mt: 0.65, px: 0.75, py: 0.25, fontSize: '0.72rem' }}
                     >
-                      전체 경로로 이동
+                      {fullRootWorkspaceActive ? '전체 경로 표시 중' : '전체 경로 표시'}
                     </Button>
                   )}
                 </Box>

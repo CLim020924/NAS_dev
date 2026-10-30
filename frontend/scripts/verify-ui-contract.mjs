@@ -49,10 +49,11 @@ requireText('src/components/AiAgentPanel.js', 'item.billing?.estimatedUsd', 'AI 
 requireText('src/components/AiAgentPanel.js', ".toFixed(4)}$", 'AI token cost must render in compact four-decimal USD format');
 requireText('src/components/TopBar.js', "display: { xs: 'none', md: 'inline-flex' }", 'minimized-task chips must not overflow the mobile top bar');
 requireText('src/components/NAS.js', "window.addEventListener('nas:user-updated', refreshCurrentUser)", 'file manager role-gated controls must react to same-tab account changes');
-requireText('src/components/NAS.js', '{isMaster && masterPersonalStoragePath && (', 'personal-storage navigation must remain master-only');
-requireText('src/components/NAS.js', '{isMaster && (', 'full-root storage navigation must remain master-only');
-requireText('src/components/NAS.js', '내 저장공간 이동', 'master personal-storage shortcut must remain visible');
-requireText('src/components/NAS.js', '전체 경로로 이동', 'master full-root shortcut must remain visible');
+requireText('src/components/NAS.js', 'const currentFileManagerPath = ensureSlash(fileManagerPath', 'the central file workspace must follow its selected path in every open mode');
+requireText('src/components/NAS.js', 'variant={accountWorkspaceActive', 'every account must expose its personal workspace as an in-place selection');
+requireText('src/components/NAS.js', '계정공간 표시 중', 'the active personal workspace must have a clear selected state');
+requireText('src/components/NAS.js', '{isMaster && (', 'full-root workspace selection must remain master-only');
+requireText('src/components/NAS.js', '전체 경로 표시 중', 'the active master root workspace must have a clear selected state');
 const topBar = read('src/components/TopBar.js');
 const fileButton = topBar.indexOf('aria-label="파일 관리자 열기"');
 const accessButton = topBar.indexOf('aria-label="접근 기록 열기"');
