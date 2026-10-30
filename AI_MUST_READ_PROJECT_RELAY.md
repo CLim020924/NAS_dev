@@ -2183,3 +2183,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - G14 현재 보장: 원격 브랜치 `3475650`에는 루트 bootstrap, PC별 키 필요 조건, G14 등록 완료 기록과 재검증 명령이 있다. NAS `authorized_keys`의 G14 공개키 exact match는 1개이고 `~/.ssh` 700, `authorized_keys` 600, `ssh`·`tailscaled` active를 다시 확인했다. G14의 개인키와 SSH config가 유지되는 한 새 Codex 대화도 `AGENTS.md`와 bootstrap을 읽고 바로 `ssh nas`를 재검증할 수 있다.
 - 보장할 수 없는 경우: Windows 재설치, 사용자 프로필 삭제, G14 개인키 삭제·교체, Tailscale 로그아웃·node key 만료, NAS `authorized_keys` 삭제가 발생하면 다시 1회 등록이 필요하다. Git에 개인키를 넣어 이 경계를 없애는 것은 금지한다.
 - 새 PC 원칙: Git은 절차·주소·공개 상태만 전달하며 새 PC 인증 권한을 자동 발급하지 않는다. 새 PC마다 전용 키를 생성하고 신뢰된 기존 PC 또는 NAS 콘솔에서 공개키만 등록한다. 비밀번호 SSH나 host key 검증 해제로 자동화를 가장하지 않는다.
+
+## 2026-10-30 새 개발 PC의 SSH 자동 연결 구조 결정
+
+- 사용자 요청: 새 PC에서 Git과 Codex로 프로젝트를 열 때마다 기존 신뢰 PC에서 SSH 공개키를 대신 등록하지 않아도 자동으로 NAS 작업을 이어갈 수 있게 한다.
+- 현재 확인: NAS Tailscale `1.104.1`, `tailscaled`와 일반 `ssh` 서비스는 active이며 Tailscale 설정의 `RunSSH`는 `false`다. 따라서 현재는 기존 문서대로 PC별 공개키를 `authorized_keys`에 등록해야 한다.
+- 보안 판단: Git 저장소의 공개키 목록을 서버가 감시해 자동 등록하는 방식은 GitHub/저장소 권한 탈취가 곧 NAS 셸 권한 탈취로 이어지므로 채택하지 않는다. 개인키·auth key·장기 등록 토큰도 Git에 저장하지 않는다.
+- 채택 구조: NAS에서 Tailscale SSH를 활성화하고 Tailnet 정책에서 승인된 사용자 또는 개발 장치만 `chanyoung`의 `limchanyoung` 계정으로 접속하도록 제한한다. 새 PC는 Tailscale 로그인과 필요한 장치 승인 후 Git clone·Codex 실행만으로 `ssh nas`를 사용할 수 있게 한다. 기존 OpenSSH 공개키 경로는 장애 복구용으로 유지한다.
+- 공식 조건 확인: 대상 NAS의 `tailscale set --ssh`와 Tailnet의 네트워크 접근 정책 및 SSH 접근 규칙이 모두 필요하다. 고위험 접속은 `check` 규칙으로 재인증 주기를 적용할 수 있고, 장치 승인을 켜면 미승인 새 장치는 Tailnet 트래픽을 송수신할 수 없다.
+- 미완료: Tailnet 관리자 로그인 화면에서 현재 정책과 장치 승인 설정을 아직 확인하지 못했으므로 `tailscale set --ssh`를 실행하지 않았다. 정책보다 서버 기능을 먼저 켜면 현재 Tailscale IP의 SSH 연결이 중단될 수 있어 기존 접속을 보존했다.
+- 기록 동기화: 이 결정은 로컬 커밋으로 기록했으나 현재 PC의 GitHub HTTPS 자격 증명이 풀려 push는 인증 프롬프트 없이 완료하지 못했다. 원격 브랜치에는 아직 반영되지 않았으며 GitHub 재로그인 후 push해야 한다.
+- 다음 안전 조치: 사용자가 Tailscale 관리자 로그인을 완료하면 현재 ACL/SSH 정책과 장치 승인 상태를 읽고, 대상과 OS 사용자를 최소 범위로 제한한 정책을 적용한 뒤 NAS에서 Tailscale SSH를 활성화한다. 이후 현재 PC와 G14에서 새 개인키 없이 접속 가능한지, 기존 공개키 SSH 복구 경로가 유지되는지 검증한다.
