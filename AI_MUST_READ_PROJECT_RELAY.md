@@ -2149,3 +2149,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 코드: `frontend/src/utils/fileManagerEntryPolicy.js`에 진입 정책을 분리하고 `WindowContext`, `ServicePlatform`, `TopBar`에서 공통 적용했다. 회귀 테스트는 마스터 루트 고정, 일반 사용자·매니저 경로 유지, 손상된 저장값의 루트 안전 복귀를 확인한다.
 - 검증: 신규 정책과 계정별 경로 테스트 6개가 통과했고 `DISABLE_ESLINT_PLUGIN=true` production build가 성공했다. `git diff --check`도 통과했다.
 - 운영 상태: 현재 작업 PC에서 SSH alias `nas`가 없고 `100.80.39.112:22` 직접 연결도 확인되지 않아 NAS 실배포·서비스 재시작은 아직 수행하지 못했다. GitHub 반영 후 NAS 연결 가능한 환경에서 fast-forward, build, `pm2-root` 재시작과 실제 마스터/일반 사용자 진입 회귀를 해야 한다.
+
+## 2026-10-30 Zephyrus G14 노트북 Tailscale 설치·등록
+
+- 사용자 요청: 이 PC에 Tailscale을 설치하고 로그인한 장비 이름을 “제피러스 g14 노트북”으로 설정한다.
+- 설치: Windows winget 공식 `Tailscale.Tailscale` 패키지 1.104.4를 설치했다. `Tailscale` Windows 서비스는 `Running`, 시작 유형은 `Automatic`이다.
+- 인증: 사용자가 공식 Tailscale 로그인 페이지에서 기존 Tailnet 계정 인증을 완료했다. 비밀번호·OTP·인증 토큰은 기록하거나 대신 입력하지 않았다.
+- 장비 이름: Tailscale hostname을 DNS 안전 형식인 `zephyrus-g14-laptop`으로 설정했다. 이 PC의 Tailscale IPv4는 `100.86.38.22`, DNSName은 `zephyrus-g14-laptop.tailf3e023.ts.net`, online 상태다. Windows 자체 컴퓨터 이름은 변경하지 않았다.
+- NAS 연결: `chanyoung`(`100.80.39.112`) Tailscale ping은 DERP(tok) 경유로 성공했다. direct 경로는 아직 성립하지 않았지만 Tailnet 도달성은 복구됐다.
+- SSH 상태: NAS TCP/SSH까지 접근했으나 이 새 PC의 known_hosts에 NAS host key가 없어 `Host key verification failed`로 중단했다. host key 검증을 끄지 않았으며, 실제 지문 확인·신뢰 등록과 SSH 공개키/alias 구성이 끝나기 전에는 배포하지 않는다.
+- 남은 작업: NAS host fingerprint를 신뢰된 기존 PC 또는 NAS 콘솔에서 대조해 등록한 뒤 `ssh nas`, NAS worktree 상태, 서비스 상태를 확인하고 `29021d1`을 fast-forward 배포한다.
