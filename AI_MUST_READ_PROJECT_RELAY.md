@@ -2217,3 +2217,12 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 검증: 로컬과 NAS에서 정책 검사 5개, UI contract 124 source, production build와 react-pdf/PDF.js 호환 검사가 통과했다. NAS는 clean worktree에서 `02730b1`로 `--ff-only` 갱신했다. build/운영 index SHA-256은 `ffcb70e9f51778cecd70107eaf93daa067117e1534076b66e01437712714d264`, 운영 bundle은 `main.4c0081c3.js`다. PM2 `msp-backend` online, 필수 6서비스 enabled+active, localhost 3030과 공개 HTTPS 모두 200이다.
 - 배포/복구: 기존 운영 정적 파일은 `/home/limchanyoung/msp-backups/file-workspace-toggle-20261030-predeploy/live`에 보존했다. backend 변경은 없어 PM2 재시작은 하지 않았다. 역할별 실제 브라우저 클릭 확인은 다음 사용자 세션에서 할 수 있으나 정책·UI 계약·build·운영 배포 검증은 완료했다.
 - 기록: `NAS_PROJECT_LOG.xlsx`의 Do_Not_Break, Feature_Index, Relation_Map, Code_Map을 최신 정책으로 갱신하고 Patch_Log, Request_Archive, Generated_Check에 요청·원인·수정·검증을 추가했다. 한글 교체문자와 수식 오류가 없고 변경 행 렌더를 확인했다.
+## 2026-10-31 NAS의 `엄마` 폴더 검색
+
+- 사용자 요청: NAS 어딘가에 있는 `엄마` 폴더를 찾는다.
+- 연결 확인: 첫 `ssh nas`는 8초 타임아웃이었으나 Tailscale 상태에서 NAS `chanyoung`은 online/direct였고, Tailscale IP와 LAN IP의 TCP 22가 모두 성공했다. 재시도한 SSH에서 `limchanyoung@chanyoung` 연결이 정상화됐다.
+- 검색 범위: 실제 NAS 데이터 루트 `/mnt/nas` 전체에서 디렉터리명과 파일명을 Unicode NFC 정규화 후 `엄마`, `어머니`, `mom`, `mother`, `mama`로 검사했다. `.nas_trash`와 `.agent_trash`, `.nas_trash/*/meta.json`의 원래 경로 기록도 함께 확인했다.
+- 결과: 이름에 `엄마` 또는 `어머니`가 들어간 폴더와 삭제 메타데이터는 없었다. `mothermodspack`은 게임 Mods 경로라 요청 대상과 무관해 보인다. `cksdudbackup/아빠 노래` 아래에서 `엄마엄마`, `울 엄마`, `어머니`가 파일명에 포함된 음악 파일 6개를 확인했지만 상위 폴더 이름은 `엄마`가 아니다.
+- 변경 여부: 파일 이동·복구·삭제·이름 변경은 수행하지 않았다.
+- 다음 안전 조치: 사용자가 계정명, 파일 종류, 대략적인 시기 또는 폴더 안에 있던 파일 한 개를 알려주면 해당 단서로 내용·확장자·시간대 기준 검색을 좁힌다.
+
