@@ -2253,3 +2253,11 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 판단: 최근 기록의 OS 사용량 약 155GiB라면 1TB SSD의 실사용 용량 약 931GiB에 충분히 들어간다. NAS 사용자 데이터는 별도 `/dev/nvme0n1p1`의 `/mnt/nas`에 있으므로 OS 디스크만 교체하면 데이터 디스크 용량은 그대로다.
 - 중요한 제약: 현재 OS ext4 파티션 `/dev/nvme1n1p2` 자체는 약 1.8TiB이므로 사용 데이터가 적더라도 1TB 대상에 whole-disk 복제를 바로 할 수 없다. 오프라인 Live USB에서 파일시스템 검사 후 ext4와 파티션을 대상보다 작게 축소하거나, 새 1TB에 Debian을 설치한 뒤 파일 단위로 이전해야 한다.
 - 안전 절차: 복제 전 최신 `df/lsblk/findmnt/fstab` 확인과 별도 백업, 서비스 종료·오프라인 복제, 첫 부팅 시 원본 2TB 분리, EFI/GRUB 부팅 및 `/`, `/mnt/nas`, Docker, PM2, Tailscale, nginx, cloudflared 검증이 필요하다. 원본과 복제본을 같은 UUID 상태로 동시에 연결하지 않는다.
+
+## 2026-11-01 OS SSD와 사용자 데이터 SSD 경계 재확인
+
+- 사용자 요청: OS가 설치된 SSD에 사용자의 데이터가 들어 있지 않은지 확인하고 디스크 교체 판단으로 기억한다.
+- 확인된 정상 경계: 실제 업로드 파일, 계정별 파일 root, backup, upload/Agent incoming·임시 저장소는 Crucial 2TB 데이터 SSD `/dev/nvme0n1p1`의 `/mnt/nas`에 있다. `NAS_ROOT=/mnt/nas`이며 일반 계정 파일은 `/mnt/nas/users/<loginId>`를 기준으로 한다.
+- OS SSD 내용: Seagate 2TB `/dev/nvme1n1p2`의 `/`에는 Debian OS, 프로젝트 checkout, frontend 배포본, Docker, PM2, 시스템 로그가 있다. 또한 계정 원장·권한·채팅/알림·장치 관계 등 backend 메타데이터와 설정, 일부 Docker volume/cache가 있을 수 있으므로 “사용자와 관련된 정보가 전혀 없다”고 보아서는 안 된다.
+- 결론: 정상 운영 경로 기준으로 사용자가 업로드한 원본 파일은 OS SSD에 저장하지 않는다. 그러나 서비스와 계정 상태를 완전히 보존하려면 OS SSD도 전체 복제해야 하며, 복제 완료·부팅·서비스·`/mnt/nas` 마운트 검증 전에는 원본 OS SSD를 초기화하거나 폐기하지 않는다.
+- 교체 직전 재검증: NAS 전원을 켠 뒤 `findmnt`, `df`, `lsblk`, `NAS_ROOT`, backend data 위치, Docker volume·bind mount, `/mnt/nas` 밖의 대용량/사용자 파일과 symlink를 읽기 전용으로 감사한다.
