@@ -2239,3 +2239,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 실제 확인: 새 Windows PC 작업공간에 `NAS_dev` 저장소가 `cleanup/git-tracking-2026-06-08` 브랜치로 준비되어 있었고, GPT가 `AGENTS.md`와 `docs/AI_MUST_READ_OTHER_PC_TAILSCALE_HANDOFF.md`를 읽어 NAS 주소·SSH 사용자·live 경로·필독 절차를 파악했다.
 - Tailscale 확인: 새 PC `zephyrus-g14-laptop`은 같은 Tailnet에 `100.86.38.22`로 연결되어 있다. NAS `chanyoung`(`100.80.39.112`)은 확인 시점에 offline(last seen 약 10시간 전)이어서 SSH는 timeout이었다.
 - 결론: Codex가 저장소와 터미널에 접근할 수 있고 최초 시작 프롬프트를 전달받으면 Git의 필독 문서를 기준으로 자동 인수인계한다. 단, NAS 전원·Tailnet 로그인·새 장치 SSH 권한 같은 외부 상태와 권한은 Git 문서가 대신 부여하지 않는다.
+
+## 2026-11-01 Debian OS 저장장치 사용량 조회 시도
+
+- 사용자 요청: NAS 본체에서 Debian OS가 설치된 저장장치의 현재 사용 용량을 조회한다.
+- 실시간 확인 결과: Tailscale에서 NAS `chanyoung`(`100.80.39.112`)은 약 10시간 전부터 offline이었고 SSH TCP 22는 timeout, 공개 `https://filemanager-nas.com`도 Cloudflare 530을 반환했다. 따라서 현재 시점의 `df` 값을 실시간으로 확정하지 않았다.
+- 최근 기록 참고값: 2026-09-06 확인 당시 OS 디스크는 Seagate FireCuda 520 2TB의 `/dev/nvme1n1p2` ext4(`/`)였으며 `df -h` 기준 총 1.8TiB, 사용 155GiB, 여유 1.6TiB, 사용률 9%였다. EFI 512MiB와 swap 977MiB는 별도다.
+- 다음 안전 조치: NAS 전원을 켠 뒤 `df -hT /`, `findmnt /`, `lsblk`를 다시 실행해 최신 사용량을 보고한다. 과거 참고값을 현재값으로 표시하지 않는다.
