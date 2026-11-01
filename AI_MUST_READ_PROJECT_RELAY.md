@@ -2246,3 +2246,10 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 실시간 확인 결과: Tailscale에서 NAS `chanyoung`(`100.80.39.112`)은 약 10시간 전부터 offline이었고 SSH TCP 22는 timeout, 공개 `https://filemanager-nas.com`도 Cloudflare 530을 반환했다. 따라서 현재 시점의 `df` 값을 실시간으로 확정하지 않았다.
 - 최근 기록 참고값: 2026-09-06 확인 당시 OS 디스크는 Seagate FireCuda 520 2TB의 `/dev/nvme1n1p2` ext4(`/`)였으며 `df -h` 기준 총 1.8TiB, 사용 155GiB, 여유 1.6TiB, 사용률 9%였다. EFI 512MiB와 swap 977MiB는 별도다.
 - 다음 안전 조치: NAS 전원을 켠 뒤 `df -hT /`, `findmnt /`, `lsblk`를 다시 실행해 최신 사용량을 보고한다. 과거 참고값을 현재값으로 표시하지 않는다.
+
+## 2026-11-01 Debian OS 디스크 2TB→1TB 축소 가능성
+
+- 사용자 질문: Debian OS가 설치된 2TB 저장장치를 1TB SSD로 낮춰도 괜찮은지 확인한다.
+- 판단: 최근 기록의 OS 사용량 약 155GiB라면 1TB SSD의 실사용 용량 약 931GiB에 충분히 들어간다. NAS 사용자 데이터는 별도 `/dev/nvme0n1p1`의 `/mnt/nas`에 있으므로 OS 디스크만 교체하면 데이터 디스크 용량은 그대로다.
+- 중요한 제약: 현재 OS ext4 파티션 `/dev/nvme1n1p2` 자체는 약 1.8TiB이므로 사용 데이터가 적더라도 1TB 대상에 whole-disk 복제를 바로 할 수 없다. 오프라인 Live USB에서 파일시스템 검사 후 ext4와 파티션을 대상보다 작게 축소하거나, 새 1TB에 Debian을 설치한 뒤 파일 단위로 이전해야 한다.
+- 안전 절차: 복제 전 최신 `df/lsblk/findmnt/fstab` 확인과 별도 백업, 서비스 종료·오프라인 복제, 첫 부팅 시 원본 2TB 분리, EFI/GRUB 부팅 및 `/`, `/mnt/nas`, Docker, PM2, Tailscale, nginx, cloudflared 검증이 필요하다. 원본과 복제본을 같은 UUID 상태로 동시에 연결하지 않는다.
