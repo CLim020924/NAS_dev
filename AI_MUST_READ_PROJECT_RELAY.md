@@ -2331,3 +2331,9 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 파일시스템·디스크 상태: root와 데이터 ext4는 clean이다. 두 NVMe 모두 SMART overall-health PASSED, Critical Warning 0, Media and Data Integrity Errors 0이다. OS SSD 사용 수명 지표는 7%, 데이터 SSD는 0%다. Crucial의 NVMe error log count는 403이나 무결성 오류는 0이므로 장애로 단정하지 않고 이후 증가 여부를 관찰한다.
 - 비차단 경고: BIOS에서 kvm_amd가 비활성화됐다는 부팅 로그와 기존 Tailscale DNS health 경고가 있다. NAS 서비스·DNS 조회·SSH·공개 사이트가 정상이라 이번 저장장치 작업에서는 BIOS나 DNS 설정을 변경하지 않았다.
 - 기록·다음 조치: `NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Feature_Index, Network_Config, Do_Not_Break, 보류 작업, Generated_Check를 실제 부팅 완료 상태로 갱신했다. 원본 Seagate OS SSD는 당분간 오프라인 롤백용으로 보존한다. 다음 계획된 재부팅 뒤 root/data UUID와 서비스 상태를 다시 표본 확인한다.
+
+## 2026-11-06 분리한 Seagate 2TB의 노트북 복제 대상 재사용 판단
+
+- 사용자 질문: NAS 원본 Seagate 2TB SSD를 포맷해야 노트북 내용을 복제할 수 있다고 지적했다.
+- 결론: 분리한 Seagate를 노트북 전체 디스크의 복제 대상으로 재사용할 수 있다. 다만 전체 디스크 복제 도구는 대상의 기존 파티션과 파일시스템을 지우고 새 파티션 구조를 기록하므로 사전 포맷은 필요하지 않다. 파일만 복사하는 용도일 때만 NTFS 같은 파일시스템으로 별도 포맷한다.
+- 안전 경계: 전체 복제를 시작하면 Seagate에 남은 NAS 원본 OS와 즉시 롤백할 수 있는 복구본이 사라진다. 복제 직전 Windows에서 모델 `Seagate FireCuda 520 SSD ZP2000GM30002`, serial `7QH00LKA`, 약 2TB를 다시 확인하고 노트북 내부 원본 SSD와 대상 Seagate의 방향을 바꾸지 않는다. NAS의 현재 GIGABYTE OS SSD와 Crucial 데이터 SSD는 작업 대상이 아니다.
