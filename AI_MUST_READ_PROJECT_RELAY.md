@@ -2269,3 +2269,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 설치형 파일 대조: `/mnt/nas` 안의 `.exe`, `.msi`, `.iso`는 총 14개였고 Adobe Acrobat ISO, 자체 제작 프로그램 설치기, NAS Drive 설치기, 게임 보조 도구 등이었다. 한컴오피스/한글 설치기로 식별되는 항목은 없었다.
 - 문서 구분: `.hwp`와 `.hwpx` 문서 파일은 여러 계정·백업·정리 폴더에 존재한다. 이는 한글 문서이며 프로그램 설치 파일이 아니다.
 - 변경 여부: 파일을 열어 실행하거나 이동·삭제·변경하지 않았다. 일반적인 확장자와 파일명 기준 결과이며, 무관한 이름의 암호화 압축 파일 내부까지 해제해 검사하지는 않았다.
+
+## 2026-11-05 512GB NVMe를 이용한 NAS 저장소 이주 계획 검토
+
+- 사용자 요청: 노트북에 인식시킨 512GB NVMe를 중간 저장장치로 사용할 때 무엇을 옮기는 편이 안전한지, NAS를 완전하게 이전할 수 있는지 판단한다.
+- Windows 실측: 노트북 내부 1TB NVMe의 C:는 953.66GiB 중 483.52GiB를 사용한다. USB JMicron 어댑터의 512GB급 NVMe는 Windows에서 465.76GiB 물리 용량, E: 464.30GiB로 인식되고 사용 0.11GiB·여유 464.19GiB다. EFI·복구 파티션이 있으나 E:에는 System Volume Information 외 사용자 파일이 보이지 않았다.
+- 용량 결론: 512GB NVMe는 현재 노트북 C:의 사용량보다 작아서 노트북 전체의 무압축 완전 복제본을 담을 수 없고, 노트북과 NAS를 동시에 담는 그릇으로 사용하면 안 된다. NAS 부팅 후 2026-11-05 실측값은 OS root 183,358,287,872바이트(약 170.8GiB), 데이터 `/mnt/nas` 96,333,647,872바이트(약 89.7GiB), 합계 약 260.5GiB다. E: 여유 약 464.2GiB보다 약 203.7GiB 작으므로 Clonezilla/partclone의 사용 블록 기반 이미지 두 개는 현재 용량상 저장 가능하다. 2TB 디스크 두 개의 섹터 단위 RAW 이미지는 들어가지 않는다.
+- 권장 역할: 512GB NVMe는 NAS 이주 전의 독립 복구본 저장소로만 사용한다. 기존 Crucial 2TB 데이터 SSD `/mnt/nas`는 이동하지 않고 그대로 보존하며, Seagate 2TB OS SSD만 새 1TB 대상으로 이전한다. 노트북 내부 SSD는 이번 NAS 이주와 분리한다.
+- 완전 이전 조건: 단순 파일 복사가 아니라 서비스 쓰기를 멈춘 오프라인 상태에서 Clonezilla/partclone 이미지 또는 `rsync -aHAX --numeric-ids`와 부트로더·파티션·UUID 기록을 함께 보존해야 한다. 기존 root ext4 파티션은 약 1.8TiB라 1TB 대상에 whole-disk 직복제할 수 없으므로 먼저 오프라인 축소하거나 새 1TB에 설치 후 메타데이터 보존 복원을 해야 한다.
+- 첫 부팅 안전선: 원본 OS SSD를 분리한 상태로 새 SSD만 부팅한다. 현재 `/etc/fstab`은 root, EFI, `/mnt/nas`를 모두 UUID로 지정해 장치명 의존 위험은 이미 줄어 있다. 그래도 `/mnt/nas`, GRUB, Docker/OnlyOffice, PM2, nginx, cloudflared, Tailscale, 계정·권한·업로드·Windows 동기화를 검증하기 전에는 원본 OS SSD를 지우지 않는다. 복제 UUID가 같은 두 OS SSD를 동시에 연결하지 않는다.
+- 운영 재확인: 두 ext4 마운트는 정상이며 `NAS_ROOT=/mnt/nas`다. Docker는 active container 1개, image 6.52GB, volume 106.7MB 수준이고, `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active, `msp-backend`는 online이었다. NAS Git worktree도 기대 브랜치에서 clean이었다.
+- 다음 안전 조치: 512GB NVMe의 기존 EFI·복구 파티션이 더 이상 필요 없는지 사용자가 확인한 뒤 백업 저장 형식과 파일시스템을 확정한다. 그 전에는 포맷하지 않는다. 실제 백업에서는 이미지 생성 후 무결성 검사와 SHA-256 manifest를 만들고, 새 1TB OS SSD 부팅 검증까지 원본 2TB OS SSD와 2TB 데이터 SSD를 보존한다.
