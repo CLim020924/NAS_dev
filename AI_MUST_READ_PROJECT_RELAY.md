@@ -2308,3 +2308,15 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 자동 후속: `nas-os-clone-finalize-wait.service`가 1차 복사 종료를 기다린다. 성공 후 cloudflared/nginx/pm2-root/docker를 잠시 정지하고 최종 rsync, EFI 복사, 새 root·EFI·swap UUID의 clone fstab 반영, GRUB removable UEFI 설치, initramfs/grub 갱신, e2fsck/fsck.vfat를 수행한 뒤 서비스를 다시 시작하도록 구성했다. 실패 또는 중단 시 trap이 서비스를 재가동한다.
 - 현재 검증: 512GB root에 약 18GiB가 복사됐고 두 작업 unit은 active다. 원본 서비스 6개는 active, backend는 HTTP 200이며 메모리 available 약 18GiB다. 자동 후속을 잘못 즉시 시작한 첫 시도는 바로 중단했고 cloudflared를 재시작해 내부·공개 HTTP 200을 복구했다.
 - 미완료/주의: 복사와 부팅 파일 생성은 아직 완료되지 않았다. SSD와 서버 전원을 분리하지 않는다. systemd unit 결과, 새 filesystem 검사, 서비스 재가동, target mount 검증이 끝난 뒤에만 종료하고 512GB 단독 실제 부팅은 별도 물리 검증한다.
+
+## 2026-11-05 512GB 부팅 가능 NAS OS 복제 정적 검증 완료
+
+- 사용자 요청: “언제 알려주려고”라는 확인을 포함해, NAS에 연결한 512GB SSD의 부팅 복제 작업을 끝까지 감시하고 완료 시점과 다음 행동을 즉시 알려 달라고 했다.
+- 대상 경계: 원본 OS는 Seagate FireCuda 520 2TB `/dev/nvme1n1` serial `7QH00LKA`, 사용자 데이터는 Crucial P3 2TB `/dev/nvme0n1p1` UUID `5d6f2c61-121b-4ce1-afdb-37d0daf49941`, 복제 대상은 JMicron USB by-id `usb-JMicron_Tech_DD56419883ACD-0:0`의 500,107,862,016바이트 `/dev/sda`다. 원본 두 SSD의 파티션과 파일시스템은 변경하지 않았다.
+- 복제 결과: 대상에 EFI 512MiB FAT32 UUID `A2AC-AA0C`, root 약 463.3GiB ext4 UUID `528bad20-a641-4d29-9e51-cddaaf73eabe`, swap 2GiB UUID `ac4ca915-d45b-472d-973b-4989a1e47eb9`를 구성했다. 1차 rsync와 서비스 정지 후 최종 rsync를 완료하고 clone fstab에 새 root/EFI/swap과 기존 데이터 UUID를 기록했다.
+- 부팅 구성: UEFI GRUB 일반 설치와 removable fallback 설치가 모두 성공했다. `EFI/BOOT/BOOTX64.EFI`는 960,080바이트이며 clone `grub.cfg`는 새 root UUID를 참조한다. 기존 잘못된 resume UUID는 새 swap UUID로 교체하고 커널 `6.1.0-31`, `6.1.0-28`, `6.1.0-27`의 initramfs와 GRUB를 다시 생성했다.
+- 마운트 교정: 첫 후속 검사에서 host shared mount 전파 때문에 장기 서비스별 mount namespace가 복제 ext4를 계속 보유하는 것을 발견했다. namespace별 clone mount를 제거하고 마지막 보유자인 NetworkManager를 안전하게 재시작해 `/sys/fs/ext4/sda2`가 사라진 것을 확인했다. 후속 chroot 작업은 `unshare --mount --propagation private` 안에서 수행했다. 이후 복제/chroot 작업은 반드시 private mount namespace를 사용한다.
+- 파일시스템 검증: 대상 ext4를 완전히 unmounted/released한 뒤 `e2fsck -f -y`로 카운트를 교정하고 `e2fsck -f -n`으로 다시 검사했다. 최종 두 검사 모두 2,774,766 files, 31,194,081 blocks로 일치했고 오류가 남지 않았다. FAT EFI도 `fsck.vfat -n`을 통과했다.
+- 운영 서비스 복구: `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 enabled+active, `msp-backend`는 online이다. `http://127.0.0.1:3030`과 `https://filemanager-nas.com`은 모두 HTTP 200이다. 정상 `/root/.pm2/dump.pm2`를 다시 저장했고 작업 중 잘못 생성된 빈 `/etc/.pm2`와 임시 helper 파일은 검증 후 제거했다.
+- 기록: `NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Network_Config, 보류 작업, Generated_Check를 갱신했다. 수식 오류 0건, replacement/모지바케 의심 문자열 0건이며 변경 행 렌더를 확인했다.
+- 남은 물리 검증: 소프트웨어 복제와 정적 검증은 완료했지만 512GB 단독 실제 UEFI 부팅은 아직 하지 않았다. 다음 단계는 NAS를 정상 종료한 뒤 원본 Seagate OS SSD만 분리하고 512GB 복제본과 Crucial 데이터 SSD로 부팅하는 것이다. 부팅 후 `/` UUID, `/mnt/nas`, 6개 서비스, PM2와 내부·외부 HTTP를 재검증한다. 성공 전 원본 OS SSD를 지우지 않으며 실패하면 원본 OS SSD를 다시 연결해 즉시 롤백한다.
