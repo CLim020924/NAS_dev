@@ -2337,3 +2337,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 사용자 질문: NAS 원본 Seagate 2TB SSD를 포맷해야 노트북 내용을 복제할 수 있다고 지적했다.
 - 결론: 분리한 Seagate를 노트북 전체 디스크의 복제 대상으로 재사용할 수 있다. 다만 전체 디스크 복제 도구는 대상의 기존 파티션과 파일시스템을 지우고 새 파티션 구조를 기록하므로 사전 포맷은 필요하지 않다. 파일만 복사하는 용도일 때만 NTFS 같은 파일시스템으로 별도 포맷한다.
 - 안전 경계: 전체 복제를 시작하면 Seagate에 남은 NAS 원본 OS와 즉시 롤백할 수 있는 복구본이 사라진다. 복제 직전 Windows에서 모델 `Seagate FireCuda 520 SSD ZP2000GM30002`, serial `7QH00LKA`, 약 2TB를 다시 확인하고 노트북 내부 원본 SSD와 대상 Seagate의 방향을 바꾸지 않는다. NAS의 현재 GIGABYTE OS SSD와 Crucial 데이터 SSD는 작업 대상이 아니다.
+
+## 2026-11-06 노트북 SSD 전체 복제 및 FireCuda 520 성능 확인
+
+- 사용자 요청: 노트북 내부 WD 1TB Windows SSD를 분리한 NAS 원본 Seagate FireCuda 520 2TB에 부팅 가능하게 전체 복제하고, 교체 후 장기간 NAS 사용으로 성능이 저하됐는지 확인했다.
+- 복제 전 식별: Windows 원본은 `WD PC SN560 SDDPNQE-1T00-1102` 약 953.9GiB, 대상은 USB JMicron bridge에 연결된 Seagate 약 1.82TiB였다. 58.9GiB Realtek 카드리더는 작업 대상에서 제외했다.
+- 도구 교정: Hasleo Backup Suite Free는 시스템 디스크 복제가 유료였고, Hasleo Disk Clone Free도 Windows 시스템 디스크를 USB 대상으로 복제하는 기능을 막아 사용하지 않았다. 최종적으로 기존 `CLONEZILLA` 59GiB USB의 Clonezilla Live `3.3.3-37-amd64`를 사용해 오프라인 전체 디스크 복제를 진행했다.
+- 실제 교체 결과: 노트북은 현재 `Seagate FireCuda 520 SSD ZP2000GM30002` 2TB NVMe에서 GPT system/boot로 정상 부팅한다. C:는 NTFS 약 1.82TiB 전체로 확장됐고 약 1.33TiB가 비어 있으며 Windows Storage 상태는 `Healthy/Online`이다.
+- 성능 검증: Microsoft DiskSpd 2.3, 8GiB 임시 파일, cache-disabled/writethrough 조건에서 1MiB QD8 순차 쓰기 4008.71MiB/s, 순차 읽기 3176.92MiB/s를 기록했다. 4KiB QD32x4 70/30 혼합은 207,043 IOPS, 평균 지연 0.113ms였다. 측정 당시 전원 계획은 `Silent`였고 테스트 파일은 종료 후 삭제했다.
+- 객관적 판단: Seagate 공식 2TB 사양은 최대 순차 읽기 5000MB/s, 쓰기 4400MB/s, 내구도 3600TBW다. 현재 쓰기는 정격에 근접하고 읽기는 Silent 전원 모드·직전 지속 쓰기 후 열 상태·시험 방식 차이를 고려하면 비정상 저하로 판단할 근거가 없다. NAS의 긴 가동 시간 자체보다 누적 쓰기량과 온도가 수명에 영향을 준다.
+- 추가 상태: TRIM은 NTFS와 ReFS 모두 활성이다. 최근 30일 저장장치 이벤트 3건은 당시 제거된 `Harddisk3` USB 장치에 관한 것이며 현재 system disk인 `Disk 0` FireCuda 오류는 확인되지 않았다. 관리자 권한이 필요한 NVMe SMART `Percentage Used/Data Units Written`은 이번 일반 권한 검사에서 읽지 못했으므로 정확한 잔여 수명 백분율은 별도 관리자 SMART 검사로 확인한다.
