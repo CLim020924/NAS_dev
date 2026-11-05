@@ -2280,3 +2280,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 첫 부팅 안전선: 원본 OS SSD를 분리한 상태로 새 SSD만 부팅한다. 현재 `/etc/fstab`은 root, EFI, `/mnt/nas`를 모두 UUID로 지정해 장치명 의존 위험은 이미 줄어 있다. 그래도 `/mnt/nas`, GRUB, Docker/OnlyOffice, PM2, nginx, cloudflared, Tailscale, 계정·권한·업로드·Windows 동기화를 검증하기 전에는 원본 OS SSD를 지우지 않는다. 복제 UUID가 같은 두 OS SSD를 동시에 연결하지 않는다.
 - 운영 재확인: 두 ext4 마운트는 정상이며 `NAS_ROOT=/mnt/nas`다. Docker는 active container 1개, image 6.52GB, volume 106.7MB 수준이고, `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 모두 active, `msp-backend`는 online이었다. NAS Git worktree도 기대 브랜치에서 clean이었다.
 - 다음 안전 조치: 512GB NVMe의 기존 EFI·복구 파티션이 더 이상 필요 없는지 사용자가 확인한 뒤 백업 저장 형식과 파일시스템을 확정한다. 그 전에는 포맷하지 않는다. 실제 백업에서는 이미지 생성 후 무결성 검사와 SHA-256 manifest를 만들고, 새 1TB OS SSD 부팅 검증까지 원본 2TB OS SSD와 2TB 데이터 SSD를 보존한다.
+
+## 2026-11-05 NAS 2TB OS SSD를 1TB로 이전하는 권장 순서
+
+- 사용자 질문: 512GB NVMe를 중간 저장소로 사용하는 NAS 이주의 구체적인 순서와 방법을 정한다.
+- 1단계 백업: 512GB NVMe의 E: 기존 자료 필요 여부를 먼저 확인한다. 포맷은 필수가 아니며 현재 NTFS E:를 Clonezilla `device-image/local_dev` 저장소로 사용할 수 있다. NAS를 Clonezilla Live로 부팅하고 모델·용량으로 디스크를 식별해 Seagate FireCuda 520 2TB OS 디스크와 Crucial P3 2TB 데이터 디스크를 각각 사용 블록 기반 `savedisk` 이미지로 저장한다. 두 이미지에 Clonezilla 내장 image check와 별도 SHA-256 manifest를 적용한다. 실행 중인 Debian에서 root를 통파일 복제하지 않는다.
+- 2단계 물리 보호: 백업 검증 후 NAS를 완전히 종료한다. Crucial 2TB 데이터 SSD는 분리해 오선택을 막는다. 새 1TB OS SSD, 기존 Seagate 2TB OS SSD, Live USB만 연결한다. 장치명 `nvme0n1/nvme1n1`은 슬롯에 따라 바뀔 수 있으므로 모델과 실제 용량으로만 원본·대상을 판별한다.
+- 3단계 대상 구성: Live 환경에서 새 1TB를 GPT로 초기화하고 EFI 512MiB FAT32, swap 약 2GiB, 나머지 ext4 root로 구성한다. 기존 OS root는 읽기 전용으로 mount하고 새 root는 별도 mount한다. `rsync -aHAXS --numeric-ids --one-file-system`으로 소유권, ACL, xattr, hardlink, sparse file을 보존해 새 root로 복사한다. `/dev`, `/proc`, `/sys`, `/run`, `/tmp`, `/mnt`, `/media` 같은 가상·외부 mount는 복사 대상에서 제외한다.
+- 4단계 부팅 구성: 새 EFI를 `/boot/efi`에 mount하고 bind mount 후 chroot에서 GRUB를 새 1TB 디스크에 설치한다. `update-initramfs`와 `update-grub`를 실행한다. 새 root·EFI·swap UUID를 `/etc/fstab`에 반영하고 데이터 SSD UUID `5d6f2c61-121b-4ce1-afdb-37d0daf49941`의 `/mnt/nas` 항목은 유지한다.
+- 5단계 첫 부팅: NAS를 종료하고 기존 2TB OS SSD를 분리한 뒤 새 1TB OS SSD와 원래 Crucial 2TB 데이터 SSD만 연결한다. 새 SSD로 부팅해 `/`, `/boot/efi`, `/mnt/nas`, swap, 네트워크, Docker/OnlyOffice, PM2, nginx, cloudflared, Tailscale과 공개 사이트를 확인한다.
+- 6단계 서비스 회귀: 계정 로그인·역할·quota, 사용자 파일 조회/검색/업로드/다운로드, 공유 링크, Office/HWP, Windows NAS Drive 동기화, 재부팅 후 자동 시작을 표본 계정으로 검증한다. 데이터 수량과 대표 파일 SHA-256도 이전 전 manifest와 대조한다.
+- 롤백: 하나라도 실패하면 새 SSD를 수정해 억지로 운영하지 않고 전원을 끈 뒤 원본 2TB OS SSD와 원래 데이터 SSD 조합으로 복귀한다. 새 환경이 여러 차례 재부팅과 실제 사용을 통과할 때까지 원본 OS SSD와 512GB 이미지 백업을 지우지 않는다. 같은 UUID를 가진 원본·복제 OS SSD를 동시에 연결하지 않는다.
