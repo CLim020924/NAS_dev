@@ -2298,3 +2298,13 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 직접 수행 가능: Windows와 NAS의 디스크 식별·용량 재검증, 512GB 백업 저장소 준비, NAS 설정·파일 백업과 hash 검증, 새 SSD 복원 명령, fstab·GRUB·서비스 설정, 부팅 후 마운트·Docker·PM2·네트워크·웹·계정·파일·동기화 검증과 릴레이 기록은 도구 접속이 유지되는 범위에서 Codex가 수행할 수 있다.
 - 사용자 물리 작업: SSD를 노트북/NAS에 장착·분리하거나 슬롯을 바꾸는 일, NAS 전원 조작, BIOS/UEFI에서 Live USB를 선택하는 일은 사용자가 직접 해야 한다. Live 환경에 SSH가 준비되지 않으면 그 구간의 화면 선택도 사용자가 안내에 따라 수행해야 한다.
 - 안전 경계: 대용량 백업·서비스 중지·디스크 포맷·파티션 작성은 단순 질문만으로 시작하지 않는다. 실제 시작 요청 후에도 원본·대상 모델과 용량을 다시 확인하고 원본 디스크를 쓰기 대상으로 선택하지 않는다.
+
+## 2026-11-05 512GB 부팅 가능 NAS OS 복제 진행 중
+
+- 사용자 승인: 사용자가 이주 시작을 요청하고 512GB NVMe를 USB 어댑터로 NAS에 직접 연결했다. 기존 Windows 복구·EFI·NTFS 파티션이 삭제된다는 경계를 앞서 확인했다.
+- 대상 식별: `/dev/disk/by-id/usb-JMicron_Tech_DD56419883ACD-0:0`이 `/dev/sda`, 500,107,862,016바이트, serial `DD56419883ACD`로 확인됐다. 기존 Seagate FireCuda 520 2TB OS와 Crucial P3 2TB 데이터 SSD는 별도 모델·serial·2TB 용량과 활성 mount로 재확인했다.
+- 대상 구성: 512GB에 GPT, EFI 512MiB FAT32(`A2AC-AA0C`), root 463.3GiB ext4(`528bad20-a641-4d29-9e51-cddaaf73eabe`), swap 2GiB(`ac4ca915-d45b-472d-973b-4989a1e47eb9`)를 생성했다. 기존 2TB 두 디스크의 파티션·파일시스템은 변경하지 않았다.
+- 진행 상태: live NAS의 root를 `rsync -aHAXS --numeric-ids --one-file-system`으로 대상 root에 1차 복사 중이다. `/mnt/nas`와 가상 mount는 제외해 사용자 데이터 SSD를 복제본 안으로 중복 복사하지 않는다. 중복으로 남은 rsync를 정리한 뒤 transient systemd 단일 작업 `nas-os-clone-rsync.service`로 재개했다.
+- 자동 후속: `nas-os-clone-finalize-wait.service`가 1차 복사 종료를 기다린다. 성공 후 cloudflared/nginx/pm2-root/docker를 잠시 정지하고 최종 rsync, EFI 복사, 새 root·EFI·swap UUID의 clone fstab 반영, GRUB removable UEFI 설치, initramfs/grub 갱신, e2fsck/fsck.vfat를 수행한 뒤 서비스를 다시 시작하도록 구성했다. 실패 또는 중단 시 trap이 서비스를 재가동한다.
+- 현재 검증: 512GB root에 약 18GiB가 복사됐고 두 작업 unit은 active다. 원본 서비스 6개는 active, backend는 HTTP 200이며 메모리 available 약 18GiB다. 자동 후속을 잘못 즉시 시작한 첫 시도는 바로 중단했고 cloudflared를 재시작해 내부·공개 HTTP 200을 복구했다.
+- 미완료/주의: 복사와 부팅 파일 생성은 아직 완료되지 않았다. SSD와 서버 전원을 분리하지 않는다. systemd unit 결과, 새 filesystem 검사, 서비스 재가동, target mount 검증이 끝난 뒤에만 종료하고 512GB 단독 실제 부팅은 별도 물리 검증한다.
