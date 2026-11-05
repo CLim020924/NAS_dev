@@ -2320,3 +2320,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 운영 서비스 복구: `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 enabled+active, `msp-backend`는 online이다. `http://127.0.0.1:3030`과 `https://filemanager-nas.com`은 모두 HTTP 200이다. 정상 `/root/.pm2/dump.pm2`를 다시 저장했고 작업 중 잘못 생성된 빈 `/etc/.pm2`와 임시 helper 파일은 검증 후 제거했다.
 - 기록: `NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Network_Config, 보류 작업, Generated_Check를 갱신했다. 수식 오류 0건, replacement/모지바케 의심 문자열 0건이며 변경 행 렌더를 확인했다.
 - 남은 물리 검증: 소프트웨어 복제와 정적 검증은 완료했지만 512GB 단독 실제 UEFI 부팅은 아직 하지 않았다. 다음 단계는 NAS를 정상 종료한 뒤 원본 Seagate OS SSD만 분리하고 512GB 복제본과 Crucial 데이터 SSD로 부팅하는 것이다. 부팅 후 `/` UUID, `/mnt/nas`, 6개 서비스, PM2와 내부·외부 HTTP를 재검증한다. 성공 전 원본 OS SSD를 지우지 않으며 실패하면 원본 OS SSD를 다시 연결해 즉시 롤백한다.
+
+## 2026-11-06 512GB 복제 OS 실제 부팅과 Crucial 데이터 SSD 검증 완료
+
+- 사용자 요청: 첫 전원 켜기 뒤 사이트가 열린다고 알려 실제 부팅 상태를 검사하도록 했고, 잘못 뺀 SSD가 Crucial P3인지 확인한 뒤 물리 구성을 교정해 다시 켠 NAS를 최종 검사하도록 요청했다.
+- 1차 시험 교정: 첫 시험에서는 GIGABYTE 512GB와 Seagate 원본 OS가 연결되고 Crucial P3가 빠져 있었다. 실제 kernel root와 EFI는 Seagate UUID였으며 `/mnt/nas`는 inactive였다. fstab의 데이터 항목이 `nofail`이라 사이트와 backend는 200으로 시작했지만, `/mnt/nas` 일반 디렉터리에 쓰기가 발생할 위험이 있어 파일 작업 중지를 즉시 안내했다. 사이트 접속 성공만으로 저장장치 구성을 정상 판정하지 않는다.
+- 최종 물리 구성: Seagate FireCuda 원본 OS SSD를 분리하고 GIGABYTE GP-AG4500G 512GB serial `SN204908903096`와 Crucial CT2000P3PSSD8 2TB serial `2345E8844090`만 연결했다. Seagate는 현재 장치 목록에 없다.
+- 실제 부팅 증거: `/proc/cmdline`의 root는 `528bad20-a641-4d29-9e51-cddaaf73eabe`, `/`는 GIGABYTE `/dev/nvme0n1p2`, `/boot/efi`는 `A2AC-AA0C`, swap은 `ac4ca915-d45b-472d-973b-4989a1e47eb9`다. `/mnt/nas`는 Crucial `/dev/nvme1n1p1` UUID `5d6f2c61-121b-4ce1-afdb-37d0daf49941`로 마운트됐다. root는 455G 중 111G, 데이터는 1.8T 중 90G 사용으로 확인됐다.
+- 서비스 검증: `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared`는 enabled+active이고 failed unit은 0개다. `msp-backend`는 online, Docker OnlyOffice는 running이며 `/healthcheck`는 true다. `nginx -t` 성공, localhost 3030·NAS 공개 HTTPS·현재 Windows PC의 공개 HTTPS가 모두 HTTP 200이다. cloudflared는 root systemd 인스턴스 1개다.
+- 파일시스템·디스크 상태: root와 데이터 ext4는 clean이다. 두 NVMe 모두 SMART overall-health PASSED, Critical Warning 0, Media and Data Integrity Errors 0이다. OS SSD 사용 수명 지표는 7%, 데이터 SSD는 0%다. Crucial의 NVMe error log count는 403이나 무결성 오류는 0이므로 장애로 단정하지 않고 이후 증가 여부를 관찰한다.
+- 비차단 경고: BIOS에서 kvm_amd가 비활성화됐다는 부팅 로그와 기존 Tailscale DNS health 경고가 있다. NAS 서비스·DNS 조회·SSH·공개 사이트가 정상이라 이번 저장장치 작업에서는 BIOS나 DNS 설정을 변경하지 않았다.
+- 기록·다음 조치: `NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Feature_Index, Network_Config, Do_Not_Break, 보류 작업, Generated_Check를 실제 부팅 완료 상태로 갱신했다. 원본 Seagate OS SSD는 당분간 오프라인 롤백용으로 보존한다. 다음 계획된 재부팅 뒤 root/data UUID와 서비스 상태를 다시 표본 확인한다.
