@@ -74,6 +74,8 @@ assert.match(windowsAgentSource, /post-registration provider setup deferred/);
 assert.match(windowsAgentSource, /IDLE_PULL_INTERVAL_MS = 15_000/);
 assert.match(windowsAgentSource, /LOCAL_AUDIT_INTERVAL_MS = 5 \* 60 \* 1000/);
 assert.match(windowsAgentSource, /HEARTBEAT_INTERVAL_MS = 15_000/);
+assert.match(windowsAgentSource, /LOCAL_DELETE_RETRY_MS = 5 \* 60 \* 1000/);
+assert.match(windowsAgentSource, /\[local delete deferred\]/);
 assert.match(nasRoutesSource, /stageLinkedDeviceHeartbeat/);
 assert.match(windowsAgentSource, /initialConnectionRetryDelayMs\(initialConnectionError\)/);
 assert.match(windowsAgentSource, /return isAgentAuthError\(error\) \? AUTH_RETRY_DELAY_MS : 0/);

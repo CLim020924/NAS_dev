@@ -33,5 +33,9 @@ test('persists an actual connection state transition immediately', () => {
   store.stage(connected, { previousDevice: connected });
   store.markPersisted([connected]);
   clock += 1_000;
-  assert.equal(store.stage({ ...connected, syncState: 'error', lastError: 'offline' }, { previousDevice: connected }).persist, true);
+  const failed = { ...connected, syncState: 'error', lastError: 'offline' };
+  assert.equal(store.stage(failed, { previousDevice: connected }).persist, true);
+  store.markPersisted([failed]);
+  clock += 1_000;
+  assert.equal(store.stage({ ...failed, lastError: 'offline at a newer timestamp' }, { previousDevice: failed }).persist, false);
 });

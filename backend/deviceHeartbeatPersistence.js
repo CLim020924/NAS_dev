@@ -11,7 +11,6 @@ const stateSignature = (device = {}) => JSON.stringify([
   device.status || '',
   durableSyncState(device),
   !!device.syncPaused,
-  device.lastError || '',
   device.revokedAt || '',
 ]);
 

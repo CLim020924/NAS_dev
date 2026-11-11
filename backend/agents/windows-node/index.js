@@ -24,7 +24,7 @@ const {
 } = require('./project-path-portability');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.11.6';
+const AGENT_VERSION = '1.11.7';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -37,6 +37,7 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 const LOCAL_AUDIT_INTERVAL_MS = 5 * 60 * 1000;
 const PROVIDER_HEALTH_INTERVAL_MS = 30_000;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const LOCAL_DELETE_RETRY_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 5_000;
 const AUTH_RETRY_DELAY_MS = 5 * 60 * 1000;
 const STATE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'NAS-Sync-Agent');
@@ -3323,7 +3324,9 @@ function moveToTrash(root, target, { allowOnlineOnlyPlaceholderDelete = false } 
 
 async function pullNasChanges(root, config, onDetectedChange = null) {
   const previous = readJson(stateFile(root), { remotePaths: [] });
-  if (previous.remoteRevision) {
+  const deferredDeletes = Array.isArray(previous.deferredDeletes) ? previous.deferredDeletes : [];
+  const deferredDeleteDue = deferredDeletes.some(item => Number(item?.retryAt || 0) <= Date.now());
+  if (previous.remoteRevision && !deferredDeleteDue) {
     const change = await request('GET', `/api/devices/agent/changes?deviceId=${encodeURIComponent(config.deviceId)}&syncRootId=${encodeURIComponent(root.syncRootId)}&revision=${encodeURIComponent(previous.remoteRevision)}`, {
       headers: { 'x-agent-token': config.agentToken }
     }).catch(error => { throw agentStageError(error, 'remote-change-check'); });
@@ -3367,10 +3370,30 @@ async function pullNasChanges(root, config, onDetectedChange = null) {
         }
       }
     }
-    for (const rel of previous.remotePaths || []) {
-      if (!remotePaths.has(rel)) moveToTrash(root, path.join(root.localPath, rel.split('/').join(path.sep)));
+    const deleteCandidates = new Set([
+      ...(previous.remotePaths || []).filter(rel => !remotePaths.has(rel)),
+      ...deferredDeletes.map(item => String(item?.relPath || '')).filter(rel => rel && !remotePaths.has(rel)),
+    ]);
+    const nextDeferredDeletes = [];
+    for (const rel of deleteCandidates) {
+      try {
+        moveToTrash(root, path.join(root.localPath, rel.split('/').join(path.sep)));
+      } catch (error) {
+        nextDeferredDeletes.push({
+          relPath: rel,
+          retryAt: Date.now() + LOCAL_DELETE_RETRY_MS,
+          lastError: String(error?.message || error).slice(0, 500),
+        });
+        log('[local delete deferred]', root.syncRootId, rel, error?.code || '', error?.message || error);
+      }
     }
-    writeJson(stateFile(root), { remotePaths: Array.from(remotePaths.keys()), remoteEntries, remoteRevision: manifest.revision || '', savedAt: new Date().toISOString() });
+    writeJson(stateFile(root), {
+      remotePaths: Array.from(remotePaths.keys()),
+      remoteEntries,
+      remoteRevision: manifest.revision || '',
+      deferredDeletes: nextDeferredDeletes,
+      savedAt: new Date().toISOString(),
+    });
   } finally {
     applyingRemoteChange = false;
   }
