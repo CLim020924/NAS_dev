@@ -246,6 +246,38 @@ const invalidateUsageCache = (changedPath) => {
   if (changed) writeUsageCache(cache);
 };
 
+// Upload checks populate the account-root cache before the mutation. Keep that
+// expensive result usable for the next file in the same batch by adding a
+// conservative byte delta. Overwrites retain the previous inode in version
+// history, so counting the complete incoming file is the safe quota boundary.
+const addUsageCacheBytes = (changedPath, addedBytes) => {
+  const bytes = Math.max(0, Number(addedBytes) || 0);
+  if (!changedPath || bytes <= 0) return false;
+  const target = path.resolve(changedPath);
+  const cache = readUsageCache();
+  let changed = false;
+  const calculatedAt = new Date().toISOString();
+
+  for (const [key, entry] of Object.entries(cache)) {
+    if (!isSameOrChild(key, target) || !Number.isFinite(Number(entry?.sizeBytes))) continue;
+    try {
+      if (!fs.existsSync(key) || !fs.statSync(key).isDirectory()) continue;
+    } catch (err) {
+      continue;
+    }
+    cache[key] = {
+      ...entry,
+      sizeBytes: Number(entry.sizeBytes) + bytes,
+      mtimeMs: getPathMtimeMs(key),
+      calculatedAt
+    };
+    changed = true;
+  }
+
+  if (changed) writeUsageCache(cache);
+  return changed;
+};
+
 const getQuotaInfo = (user = {}) => {
   const normalized = normalizeQuotaFields(user);
   return { mode: 'limited', quotaBytes: normalized.storageQuotaBytes || DEFAULT_USER_QUOTA_BYTES };
@@ -390,7 +422,6 @@ const assertQuotaAvailable = (user = {}, incomingBytes = 0, changedPath = '') =>
   const quotaBasePath = getQuotaBasePath(user);
   const targetIsPersonal = !changedPath || isSameOrChild(quotaBasePath, changedPath);
   if (!targetIsPersonal && isStorageAdmin(user)) {
-    if (changedPath) invalidateUsageCache(changedPath);
     return;
   }
 
@@ -407,8 +438,6 @@ const assertQuotaAvailable = (user = {}, incomingBytes = 0, changedPath = '') =>
     };
     throw err;
   }
-
-  if (changedPath) invalidateUsageCache(changedPath);
 };
 
 module.exports = {
@@ -436,6 +465,7 @@ module.exports = {
   getUserStorageSummary,
   getStorageCapacitySummary,
   invalidateUsageCache,
+  addUsageCacheBytes,
   assertQuotaAvailable,
   _test: { countPathSize, calculateCapacityLedger, normalizePersonalRelativeRoot }
 };

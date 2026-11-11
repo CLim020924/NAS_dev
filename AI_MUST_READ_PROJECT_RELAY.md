@@ -2374,3 +2374,14 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 변경 후 실측: 30초 표본에서 상시 프로세스 `write_bytes`는 0이었고 `linked_devices.json`과 당일 resource history의 mtime·size가 변하지 않았다. Crucial 데이터 SSD는 20초 표본에서 쓰기 0이었다. GIGABYTE OS SSD는 커널·ext4 housekeeping을 포함해 20초 1,672 sectors(약 856KiB)를 기록했으므로 “완전 무쓰기”로 과장하지 않는다.
 - 유지 경계: 실시간성을 되살린다는 이유로 짧은 polling과 전체 JSON 저장을 함께 복구하지 않는다. 이벤트가 즉시성, 긴 polling이 복구 안전망이다. 삭제 실패는 데이터 보호 때문에 강제 삭제하지 않는다. Tracker는 NAS 기능에 필요하지 않으므로 다시 활성화하지 않는다. 구형 Windows Agent는 배포된 `1.11.7` 자동 업데이트 경로를 사용한다.
 - Git/기록: 코드·바이너리 커밋 `25e0060`, `5ed7cd3`, `52138dc`, `3c2d228`, `d237cc6`을 원격과 운영 NAS에 반영했다. 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, Data_Files, Generated_Check를 갱신하고 수식 오류·의심 인코딩 0건과 변경 행 렌더를 확인했다.
+
+## 2026-11-11 일반 파일 전송·고비용 동작 효율 개선
+
+- 사용자 요청: 일반적인 파일 전송뿐 아니라 검색, 최근 파일, PC 동기화 목록, ZIP 다운로드, 관리 화면 조회 등 각종 동작에서 불필요한 CPU·메모리·SSD I/O·네트워크 사용을 전부 점검하고 안전하게 개선하도록 요청했다.
+- 확인된 핵심 원인: quota 사전 검사가 실제 변경 전에 사용량 캐시를 지우고 완료 뒤 다시 지워 다중 업로드에서 사용자 루트 전체 순회가 반복될 수 있었다. 대용량 웹 청크는 multer incoming 파일에 한 번 쓴 뒤 `.uploading` 파일로 다시 복사해 payload 쓰기량이 약 2배였다. Agent 조각은 해시와 조립 때 각 조각 전체를 메모리로 읽었다. 폴더/공유 ZIP은 zlib level 9, PC manifest와 검색·최근 파일은 동일 revision에도 전체 트리를 다시 순회할 수 있었다. 서버 설정 패널은 SMART/디스크를 포함한 metrics를 5초마다 요청했다.
+- 웹 대용량 업로드: 인증된 `POST /api/file/chunk/raw`를 추가했다. 브라우저는 `application/octet-stream`으로 조각을 보내고 backend는 소유권, upload ID, chunk index, 정확한 offset·Content-Length, 취소 상태, 동일 조각 동시 쓰기를 검증한 뒤 최종 임시파일의 해당 offset에 바로 스트리밍한다. 완료 marker는 임시 marker rename으로 원자적으로 남긴다. 구 `/api/file/chunk` multipart 경로는 이미 열린 구형 웹 bundle의 호환 fallback으로 유지한다.
+- quota 경계: `assertQuotaAvailable` 안의 선행 cache invalidate를 제거했다. 성공한 웹/청크/Agent 업로드는 버전 보존을 고려해 incoming 전체 byte를 보수적으로 캐시된 디렉터리 사용량에 더한다. 이에 따라 같은 batch의 다음 파일은 전체 계정 루트를 다시 스캔하지 않는다. 삭제·이동·복구처럼 정확한 delta가 다른 작업은 기존 invalidate 경계를 유지한다.
+- Agent 전송: 조각 SHA-256은 readFileSync 전체 버퍼 대신 read stream으로 계산하고, 조립도 각 part를 하나의 output stream에 순차 연결한다. 매 청크마다 바뀌지 않는 meta JSON을 다시 쓰던 동작도 제거했다. part 기반 resume 구조는 데이터 보호와 재시작 복구 때문에 유지한다.
+- 목록/압축/관리 조회: Agent manifest는 fs.watch monitor revision별로 캐시하고 파일 이벤트 burst의 watcher-tree 재구축은 1초 coalescing한다. 웹 검색과 최근 파일도 mutation activity revision별 결과를 재사용한다. 폴더 및 공유 ZIP은 level 9에서 level 4로 낮춰 이미 압축된 Office·미디어의 불필요한 CPU 사용을 줄였다. 서버 설정 metrics fallback은 5초에서 30초로 완화했다.
+- 검증 상태: 정적 문법과 diff 검사를 통과했고 backend 전체 205 tests는 197 pass·0 fail·8 환경성 skip이다. frontend production/PDF.js build도 성공했다. 운영 NAS에는 Git 반영 후 raw 청크 실전 업로드, 파일 hash/size, quota cache 연속 업로드, 서비스/HTTP, SSD write 차이를 최종 검증한다.
+- 유지 경계: raw endpoint를 JSON/body parser가 먼저 소비하게 만들지 않는다. offset·길이 검증이나 multipart 호환 경로를 성급히 제거하지 않는다. cache는 반드시 파일 mutation revision 또는 성공한 업로드 delta와 결속하며 권한·quota 정확성을 성능보다 우선한다. ZIP은 저장 내용이 아니라 전송 압축 강도만 변경한다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 이번 작업에서 변경하지 않는다.

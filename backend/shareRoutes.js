@@ -945,7 +945,7 @@ router.get('/public-shares/:token/download-folder', (req, res) => {
 
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(folderName)}.zip"`);
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = archiver('zip', { zlib: { level: 4 } });
     archive.on('entry', (entry) => {
       if (entry.type === 'directory') return;
       downloadDetail.fileCount += 1;
@@ -1024,7 +1024,7 @@ router.post('/public-shares/:token/download-selected', express.json(), (req, res
 
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(archiveName)}-selected.zip"`);
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = archiver('zip', { zlib: { level: 4 } });
     archive.on('entry', (entry) => {
       if (entry.type === 'directory') return;
       downloadDetail.fileCount += 1;

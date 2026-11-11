@@ -124,7 +124,7 @@ const ServerSettingsPanel = () => {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(() => refresh({ quiet: true }), 5000);
+    const interval = setInterval(() => refresh({ quiet: true }), 30000);
     return () => clearInterval(interval);
   }, [refresh]);
 
@@ -480,7 +480,7 @@ const ServerSettingsPanel = () => {
       )}
 
       <Typography variant="caption" color="text.secondary">
-        최근 수집: {metrics?.collectedAt ? new Date(metrics.collectedAt).toLocaleString() : '-'} · 5초마다 자동 갱신
+        최근 수집: {metrics?.collectedAt ? new Date(metrics.collectedAt).toLocaleString() : '-'} · 30초마다 자동 갱신
       </Typography>
     </Box>
   );

@@ -741,26 +741,21 @@ export const TransferProvider = ({ children }) => {
       for (let attempt = 0; attempt <= FILE_CHUNK_RETRY; attempt++) {
         throwIfTaskCanceled(taskId);
 
-        const formData = new FormData();
-        formData.append('uploadId', uploadId);
-        formData.append('chunkIndex', String(chunkIndex));
-        formData.append('startByte', String(startByte));
-        formData.append('chunk', chunkBlob, `${file.name}.part${chunkIndex}`);
-
         const controller = createAbortControllerForTask(taskId);
 
         try {
-          await axios.post(transferUrl('/api/file/chunk'), formData, {
+          await axios.post(transferUrl('/api/file/chunk/raw'), chunkBlob, {
             withCredentials: true,
             timeout: 0,
             maxContentLength: Infinity,
             maxBodyLength: Infinity,
             signal: controller.signal,
-            headers: buildMultipartUploadHeaders({
+            headers: {
+              'Content-Type': 'application/octet-stream',
               'x-upload-id': uploadId,
               'x-chunk-index': String(chunkIndex),
               'x-start-byte': String(startByte)
-            }),
+            },
             onUploadProgress: (evt) => {
               const loaded = Math.min(evt.loaded || 0, chunkBytes);
               const prevLoaded = chunkProgress.get(chunkIndex) || 0;

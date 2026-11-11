@@ -38,6 +38,7 @@ const {
   getCachedPathUsage,
   getUserStorageSummary,
   invalidateUsageCache,
+  addUsageCacheBytes,
   assertQuotaAvailable
 } = require('./storageQuota');
 const {
@@ -167,6 +168,19 @@ const getActivityActor = (user = {}) => String(user.userUid || user.loginId || u
 let fileChangeEmitter = null;
 const recentExternalVisits = new Map();
 const recentOwnerAlerts = new Map();
+const fileTreeRevisions = new Map();
+const fileTreeQueryCache = new Map();
+const getFileTreeRevision = (basePath) => fileTreeRevisions.get(path.resolve(basePath)) || 0;
+const bumpFileTreeRevision = (basePath) => {
+  const key = path.resolve(basePath);
+  fileTreeRevisions.set(key, getFileTreeRevision(key) + 1);
+};
+const rememberFileTreeQuery = (key, value) => {
+  fileTreeQueryCache.delete(key);
+  fileTreeQueryCache.set(key, value);
+  if (fileTreeQueryCache.size > 256) fileTreeQueryCache.delete(fileTreeQueryCache.keys().next().value);
+  return value;
+};
 let accessMembersCache = { stamp: '', rows: [] };
 const getAccessMembers = () => {
   const file = path.join(__dirname, 'data', 'members.json');
@@ -178,6 +192,7 @@ const getAccessMembers = () => {
 const appendActivity = (basePath, activity) => {
   const row = appendBaseActivity(basePath, activity);
   if (!MUTATION_TYPES.has(activity.type) || typeof activity.path !== 'string') return row;
+  bumpFileTreeRevision(basePath);
   try {
     const target = resolveInside(basePath, activity.path);
     const members = getAccessMembers();
@@ -1064,6 +1079,7 @@ const CHUNK_TMP_ROOT = path.join(nasPath, '.upload_tmp');
 const CHUNK_INCOMING_ROOT = path.join(CHUNK_TMP_ROOT, '_incoming');
 const CHUNK_CANCELED_ROOT = path.join(CHUNK_TMP_ROOT, '_canceled');
 const canceledChunkUploads = new Map();
+const activeRawChunkWrites = new Set();
 
 const ensureDirSync = (dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -1075,6 +1091,12 @@ const safeRmSync = (targetPath) => {
       fs.rmSync(targetPath, { recursive: true, force: true });
     }
   } catch (err) {}
+};
+
+const sha256File = async (filePath) => {
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
+  return hash.digest('hex');
 };
 
 const sanitizeUploadFileName = (name = 'upload.bin') => {
@@ -1218,6 +1240,26 @@ const chunkUpload = multer({
     fileSize: 96 * 1024 * 1024
   }
 });
+
+const getExpectedChunkSize = (meta, chunkIndex) => (
+  chunkIndex === Number(meta.totalChunks) - 1
+    ? Number(meta.fileSize) - (chunkIndex * Number(meta.chunkSize))
+    : Number(meta.chunkSize)
+);
+
+const writeChunkDoneMarker = (uploadId, chunkIndex, size, startByte) => {
+  const doneDir = getChunkDoneDir(uploadId);
+  ensureDirSync(doneDir);
+  const finalMarker = path.join(doneDir, `chunk_${chunkIndex}.done`);
+  const tempMarker = `${finalMarker}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempMarker, JSON.stringify({
+    chunkIndex,
+    size,
+    startByte,
+    receivedAt: new Date().toISOString()
+  }));
+  fs.renameSync(tempMarker, finalMarker);
+};
 
 
 const verifyToken = (req, res, next) => {
@@ -2142,7 +2184,8 @@ router.get('/files/search', verifyToken, (req, res) => {
     if (query.length < 2) return res.json({ results: [] });
 
     const { basePath } = getValidatedPath(req.user, '/');
-    const results = searchFilesRecursive(basePath, query);
+    const cacheKey = `search:${path.resolve(basePath)}:${getFileTreeRevision(basePath)}:${query.toLowerCase()}`;
+    const results = fileTreeQueryCache.get(cacheKey) || rememberFileTreeQuery(cacheKey, searchFilesRecursive(basePath, query));
     res.json({
       query,
       results,
@@ -2426,7 +2469,7 @@ router.post('/file', verifyToken, upload.single('file'), (req, res) => {
           : null;
         fs.mkdirSync(path.dirname(finalPath), { recursive: true });
         fs.renameSync(req.file.path, finalPath);
-        invalidateUsageCache(finalPath);
+        addUsageCacheBytes(finalPath, req.file.size);
         appendActivity(basePath, { type: previousVersion ? 'file-updated' : 'file-created', path: toNasRelativePath(basePath, finalPath), actor: getActivityActor(req.user), source: 'web-upload' });
         return res.json({ success: true, versionId: previousVersion?.versionId || null });
       } catch (e) {
@@ -2777,7 +2820,10 @@ router.get('/recent', verifyToken, (req, res) => {
     const basePath = getDeviceUserBasePath(req.user);
     fs.mkdirSync(basePath, { recursive: true });
     assertRealPathInside(basePath, basePath);
-    return res.json({ success: true, ...listRecentFiles(basePath, req.query.limit) });
+    const safeLimit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const cacheKey = `recent:${path.resolve(basePath)}:${getFileTreeRevision(basePath)}:${safeLimit}`;
+    const recent = fileTreeQueryCache.get(cacheKey) || rememberFileTreeQuery(cacheKey, listRecentFiles(basePath, safeLimit));
+    return res.json({ success: true, ...recent });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || '최근 파일을 불러오지 못했습니다.' });
   }
@@ -3060,7 +3106,7 @@ router.get('/file/download-folder', verifyToken, (req, res) => {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(folderName)}.zip"`);
 
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = archiver('zip', { zlib: { level: 4 } });
     archive.on('error', err => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
     archive.pipe(res);
     archive.directory(targetPath, folderName);
@@ -3353,6 +3399,57 @@ router.post('/file/chunk/status', verifyToken, (req, res) => {
   }
 });
 
+// 브라우저 청크를 중간 파일에 먼저 저장하지 않고 최종 임시파일의 정확한
+// offset으로 바로 기록한다. multipart 호환 경로는 구버전 클라이언트용으로 유지한다.
+router.post('/file/chunk/raw', verifyToken, precheckChunkCanceled, async (req, res) => {
+  let writeKey = '';
+  try {
+    const uploadId = normalizeUploadId(req.headers['x-upload-id']);
+    const chunkIndex = Number(req.headers['x-chunk-index']);
+    const startByte = Number(req.headers['x-start-byte']);
+    const contentLength = Number(req.headers['content-length']);
+    const meta = readChunkMeta(uploadId);
+
+    if (!meta) return res.status(404).json({ error: '업로드 세션을 찾을 수 없습니다.' });
+    assertChunkOwner(req, meta);
+    if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= meta.totalChunks) {
+      return res.status(400).json({ error: '청크 번호가 범위를 벗어났습니다.' });
+    }
+
+    const expectedStart = chunkIndex * meta.chunkSize;
+    const expectedSize = getExpectedChunkSize(meta, chunkIndex);
+    if (startByte !== expectedStart || contentLength !== expectedSize) {
+      return res.status(400).json({ error: '청크 offset 또는 크기가 올바르지 않습니다.' });
+    }
+    if (isChunkUploadCanceled(uploadId)) return res.status(409).json({ error: 'UPLOAD_CANCELED' });
+
+    writeKey = `${uploadId}:${chunkIndex}`;
+    if (activeRawChunkWrites.has(writeKey)) {
+      return res.status(409).json({ error: 'CHUNK_WRITE_IN_PROGRESS' });
+    }
+    activeRawChunkWrites.add(writeKey);
+
+    let receivedBytes = 0;
+    req.on('data', (chunk) => { receivedBytes += chunk.length; });
+    await pipeline(req, fs.createWriteStream(meta.tempPath, { flags: 'r+', start: expectedStart }));
+    if (receivedBytes !== expectedSize) {
+      return res.status(400).json({ error: '수신된 청크 크기가 일치하지 않습니다.' });
+    }
+    if (isChunkUploadCanceled(uploadId)) {
+      safeRmSync(meta.tempPath);
+      return res.status(409).json({ error: 'UPLOAD_CANCELED' });
+    }
+
+    writeChunkDoneMarker(uploadId, chunkIndex, receivedBytes, expectedStart);
+    return res.json({ success: true, uploadId, chunkIndex, totalChunks: meta.totalChunks });
+  } catch (err) {
+    if (err && err.message === 'UPLOAD_CANCELED') return res.status(409).json({ error: 'UPLOAD_CANCELED' });
+    return res.status(err.status || 500).json({ error: err.message || '청크 저장 실패' });
+  } finally {
+    if (writeKey) activeRawChunkWrites.delete(writeKey);
+  }
+});
+
 // [청크] 청크 하나 저장
 router.post('/file/chunk', verifyToken, precheckChunkCanceled, chunkUpload.single('chunk'), async (req, res) => {
   const incomingPath = req.file?.path;
@@ -3397,9 +3494,10 @@ router.post('/file/chunk', verifyToken, precheckChunkCanceled, chunkUpload.singl
       return res.status(400).json({ error: '청크 offset이 올바르지 않습니다.' });
     }
 
-    if (req.file.size > meta.chunkSize) {
+    const expectedSize = getExpectedChunkSize(meta, chunkIndex);
+    if (req.file.size !== expectedSize) {
       safeRmSync(incomingPath);
-      return res.status(400).json({ error: '청크 크기가 너무 큽니다.' });
+      return res.status(400).json({ error: '청크 크기가 일치하지 않습니다.' });
     }
 
     if (isChunkUploadCanceled(uploadId)) {
@@ -3419,18 +3517,7 @@ router.post('/file/chunk', verifyToken, precheckChunkCanceled, chunkUpload.singl
       return res.status(409).json({ error: 'UPLOAD_CANCELED' });
     }
 
-    const doneDir = getChunkDoneDir(uploadId);
-    ensureDirSync(doneDir);
-
-    fs.writeFileSync(
-      path.join(doneDir, 'chunk_' + chunkIndex + '.done'),
-      JSON.stringify({
-        chunkIndex,
-        size: req.file.size,
-        startByte: writeStart,
-        receivedAt: new Date().toISOString()
-      })
-    );
+    writeChunkDoneMarker(uploadId, chunkIndex, req.file.size, writeStart);
 
     return res.json({
       success: true,
@@ -3480,8 +3567,9 @@ router.post('/file/chunk/complete', verifyToken, (req, res) => {
       });
     }
 
+    const receivedSet = new Set(received);
     for (let i = 0; i < meta.totalChunks; i++) {
-      if (!received.includes(i)) {
+      if (!receivedSet.has(i)) {
         return res.status(400).json({ error: '누락된 청크가 있습니다: ' + i });
       }
     }
@@ -3515,7 +3603,7 @@ router.post('/file/chunk/complete', verifyToken, (req, res) => {
       ? captureFileVersion(basePath, meta.finalPath, { source: 'web-chunk-upload', actor: getActivityActor(req.user), reason: 'overwrite' })
       : null;
     fs.renameSync(meta.tempPath, meta.finalPath);
-    invalidateUsageCache(meta.finalPath);
+    addUsageCacheBytes(meta.finalPath, meta.fileSize);
     appendActivity(basePath, { type: previousVersion ? 'file-updated' : 'file-created', path: toNasRelativePath(basePath, meta.finalPath), actor: getActivityActor(req.user), source: 'web-chunk-upload' });
     safeRmSync(getChunkDir(uploadId));
 
@@ -5239,7 +5327,7 @@ const commitAgentIncomingFile = async ({ incomingPath, uploadedSize, deviceId, a
   if (Number.isFinite(safeClientMtime) && safeClientMtime > 0) {
     try { fs.utimesSync(destinationPath, new Date(), new Date(safeClientMtime)); } catch {}
   }
-  invalidateUsageCache(destinationPath);
+  addUsageCacheBytes(destinationPath, Number(uploadedSize || 0));
   appendActivity(ownerBasePath, {
     type: concurrent ? 'conflict-copy-created' : (previousVersion ? 'file-updated' : 'file-created'),
     path: `/${path.relative(linkedRoot, destinationPath).replace(/\\/g, '/')}`,
@@ -5315,7 +5403,7 @@ router.post('/devices/agent/chunk/init', express.json(), async (req, res) => {
   }
 });
 
-router.post('/devices/agent/chunk', agentChunkUpload.single('chunk'), (req, res) => {
+router.post('/devices/agent/chunk', agentChunkUpload.single('chunk'), async (req, res) => {
   const incomingPath = req.file?.path;
   try {
     const deviceId = String(req.body?.deviceId || '');
@@ -5336,7 +5424,7 @@ router.post('/devices/agent/chunk', agentChunkUpload.single('chunk'), (req, res)
       throw err;
     }
     const expectedHash = String(req.body?.chunkSha256 || '').toLowerCase();
-    const actualHash = crypto.createHash('sha256').update(fs.readFileSync(incomingPath)).digest('hex');
+    const actualHash = await sha256File(incomingPath);
     if (!/^[a-f0-9]{64}$/.test(expectedHash) || !secureHashEquals(expectedHash, actualHash)) {
       const err = new Error('Agent 파일 조각 무결성 검증에 실패했습니다.');
       err.status = 400;
@@ -5345,7 +5433,6 @@ router.post('/devices/agent/chunk', agentChunkUpload.single('chunk'), (req, res)
     const destination = getAgentChunkPartPath(uploadId, chunkIndex);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.renameSync(incomingPath, destination);
-    writeAgentChunkMeta(uploadId, meta);
     return res.json({ success: true, uploadId, chunkIndex });
   } catch (err) {
     if (incomingPath) safeRmSync(incomingPath);
@@ -5364,18 +5451,23 @@ router.post('/devices/agent/chunk/complete', express.json(), async (req, res) =>
       return res.status(409).json({ error: '아직 도착하지 않은 Agent 파일 조각이 있습니다.', receivedChunks: received });
     }
     assembledPath = path.join(AGENT_INCOMING_ROOT, `${uploadId}.assembling`);
-    const handle = await fsp.open(assembledPath, 'w');
+    const output = fs.createWriteStream(assembledPath, { flags: 'w' });
     try {
       for (let index = 0; index < meta.totalChunks; index += 1) {
         const part = getAgentChunkPartPath(uploadId, index);
         const stat = fs.statSync(part);
         const expectedSize = index === meta.totalChunks - 1 ? meta.fileSize - (index * meta.chunkSize) : meta.chunkSize;
         if (stat.size !== expectedSize) throw Object.assign(new Error('Agent 파일 조각 크기가 변경되었습니다.'), { status: 409 });
-        const buffer = await fsp.readFile(part);
-        await handle.write(buffer, 0, buffer.length, index * meta.chunkSize);
+        await pipeline(fs.createReadStream(part), output, { end: false });
       }
-    } finally {
-      await handle.close();
+      output.end();
+      await new Promise((resolve, reject) => {
+        output.once('finish', resolve);
+        output.once('error', reject);
+      });
+    } catch (err) {
+      output.destroy();
+      throw err;
     }
     if (fs.statSync(assembledPath).size !== meta.fileSize) {
       throw Object.assign(new Error('조립된 Agent 파일 크기가 일치하지 않습니다.'), { status: 409 });
@@ -5483,7 +5575,9 @@ const ensureAgentRootMonitor = (linkedRoot) => {
   monitor = {
     revision: nextAgentRootRevision(),
     watchers: new Map(),
-    refreshTimer: null
+    refreshTimer: null,
+    manifestRevision: '',
+    manifestEntries: []
   };
   const refresh = () => {
     if (!fs.existsSync(root)) return;
@@ -5509,7 +5603,9 @@ const ensureAgentRootMonitor = (linkedRoot) => {
         const watcher = fs.watch(dir, { persistent: false }, () => {
           monitor.revision = nextAgentRootRevision();
           clearTimeout(monitor.refreshTimer);
-          monitor.refreshTimer = setTimeout(refresh, 250);
+          // A directory copy can emit thousands of events. Coalesce watcher-tree
+          // rebuilding while exposing the changed revision immediately.
+          monitor.refreshTimer = setTimeout(refresh, 1000);
         });
         watcher.on('error', () => {
           try { watcher.close(); } catch {}
@@ -5523,6 +5619,15 @@ const ensureAgentRootMonitor = (linkedRoot) => {
   agentRootMonitors.set(root, monitor);
   refresh();
   return monitor;
+};
+
+const getCachedAgentManifestEntries = (linkedRoot) => {
+  const monitor = ensureAgentRootMonitor(linkedRoot);
+  if (monitor.manifestRevision !== monitor.revision) {
+    monitor.manifestEntries = listAgentManifestEntries(linkedRoot);
+    monitor.manifestRevision = monitor.revision;
+  }
+  return monitor.manifestEntries;
 };
 
 const getValidatedAgentRoot = (deviceId, agentToken, syncRootId) => {
@@ -5582,12 +5687,12 @@ router.get('/devices/agent/manifest', (req, res) => {
         try { return ensureAgentRootMonitor(getAccountShareSourceRoot(share)).revision; } catch { return 'unavailable'; }
       })
       : monitor.revision;
-    const manifestEntries = listAgentManifestEntries(linkedRoot);
+    const manifestEntries = getCachedAgentManifestEntries(linkedRoot);
     const localEntries = isPersonalDrive
       ? manifestEntries.filter(entry => entry.relPath !== SHARED_ROOT_NAME && !entry.relPath.startsWith(SHARED_ROOT_NAME + '/'))
       : manifestEntries;
     const sharedEntries = accountShares.flatMap(share => {
-      try { return buildSharedManifestEntries(share, getAccountShareSourceRoot(share), listAgentManifestEntries); } catch { return []; }
+      try { return buildSharedManifestEntries(share, getAccountShareSourceRoot(share), getCachedAgentManifestEntries); } catch { return []; }
     });
     const entriesByPath = new Map();
     for (const entry of [...localEntries, ...sharedEntries]) entriesByPath.set(entry.relPath, entry);
