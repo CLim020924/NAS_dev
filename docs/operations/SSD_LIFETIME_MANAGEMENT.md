@@ -32,7 +32,7 @@ CT2000P3PSSD8 2TB 데이터 SSD의 수명 관리 기준을 정의한다. SMART�
 ## 현재 모델 기준
 
 - GIGABYTE GP-AG4500G: 제조사 보증 내구도 850TBW.
-- Crucial CT2000P3SSD8: 제조사 보증 내구도 440TBW.
+- Crucial CT2000P3PSSD8: 제조사 보증 내구도 440TBW.
 - 보증 TBW 비율은 참고값이며 최종 건강 판정은 제조사 SMART Percentage Used를
   우선한다. 남은 연수를 임의로 예측해 표시하지 않는다.
 

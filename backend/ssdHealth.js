@@ -18,10 +18,18 @@ const finiteNumber = (value, fallback = 0) => (
     : Number.isFinite(Number(value)) ? Number(value) : fallback
 );
 
+const resolveEnduranceBytes = (model = '') => {
+  const normalizedModel = String(model || '').trim().toUpperCase();
+  for (const [modelToken, enduranceBytes] of ENDURANCE_BYTES_BY_MODEL) {
+    if (normalizedModel.includes(modelToken.toUpperCase())) return enduranceBytes;
+  }
+  return null;
+};
+
 const parseNvmeSmart = (payload = {}, { device = '', model = '' } = {}) => {
   const log = payload.nvme_smart_health_information_log || {};
   const dataWrittenBytes = finiteNumber(log.data_units_written) * NVME_DATA_UNIT_BYTES;
-  const enduranceBytes = ENDURANCE_BYTES_BY_MODEL.get(String(model || '').trim()) || null;
+  const enduranceBytes = resolveEnduranceBytes(model);
   const percentageUsed = Math.max(0, finiteNumber(log.percentage_used));
   const temperatureC = finiteNumber(log.temperature ?? payload.temperature?.current, null);
   const criticalWarning = finiteNumber(log.critical_warning);

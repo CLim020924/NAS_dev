@@ -32,3 +32,15 @@ test('classifies critical warning and media errors as critical', () => {
   }, { device: '/dev/nvme1n1', model: 'CT2000P3PSSD8' });
   assert.equal(summary.status, 'critical');
 });
+
+test('matches endurance inside a vendor-prefixed model name', () => {
+  const summary = _test.parseNvmeSmart({
+    smart_status: { passed: true },
+    nvme_smart_health_information_log: {
+      percentage_used: 7,
+      data_units_written: 1000,
+    },
+  }, { device: '/dev/nvme0n1', model: 'GIGABYTE GP-AG4500G' });
+
+  assert.equal(summary.enduranceBytes, 850 * 1000 ** 4);
+});
