@@ -171,6 +171,7 @@ const recentOwnerAlerts = new Map();
 const fileTreeRevisions = new Map();
 const fileTreeQueryCache = new Map();
 const getFileTreeRevision = (basePath) => fileTreeRevisions.get(path.resolve(basePath)) || 0;
+const getFileTreeCacheBucket = () => Math.floor(Date.now() / 30_000);
 const bumpFileTreeRevision = (basePath) => {
   const key = path.resolve(basePath);
   fileTreeRevisions.set(key, getFileTreeRevision(key) + 1);
@@ -2184,7 +2185,7 @@ router.get('/files/search', verifyToken, (req, res) => {
     if (query.length < 2) return res.json({ results: [] });
 
     const { basePath } = getValidatedPath(req.user, '/');
-    const cacheKey = `search:${path.resolve(basePath)}:${getFileTreeRevision(basePath)}:${query.toLowerCase()}`;
+    const cacheKey = `search:${path.resolve(basePath)}:${getFileTreeRevision(basePath)}:${getFileTreeCacheBucket()}:${query.toLowerCase()}`;
     const results = fileTreeQueryCache.get(cacheKey) || rememberFileTreeQuery(cacheKey, searchFilesRecursive(basePath, query));
     res.json({
       query,
@@ -2821,7 +2822,7 @@ router.get('/recent', verifyToken, (req, res) => {
     fs.mkdirSync(basePath, { recursive: true });
     assertRealPathInside(basePath, basePath);
     const safeLimit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-    const cacheKey = `recent:${path.resolve(basePath)}:${getFileTreeRevision(basePath)}:${safeLimit}`;
+    const cacheKey = `recent:${path.resolve(basePath)}:${getFileTreeRevision(basePath)}:${getFileTreeCacheBucket()}:${safeLimit}`;
     const recent = fileTreeQueryCache.get(cacheKey) || rememberFileTreeQuery(cacheKey, listRecentFiles(basePath, safeLimit));
     return res.json({ success: true, ...recent });
   } catch (err) {
