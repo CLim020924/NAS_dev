@@ -3,6 +3,9 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const config = require('./config/env');
+const { getNasRootMountStatus } = require('./storageMountGuard');
+const { enrichPhysicalDisks } = require('./ssdHealth');
 
 const execFileAsync = promisify(execFile);
 let previousCpuSample = null;
@@ -89,8 +92,23 @@ const getBlockDevices = async () => {
   }
 };
 
-const getFilesystemUsage = async (targetPath, purpose, flatDevices) => {
+const getFilesystemUsage = async (targetPath, purpose, flatDevices, mountStatus = null) => {
   const resolvedPath = path.resolve(targetPath);
+  if (mountStatus && !mountStatus.available) {
+    return {
+      purpose,
+      mountPath: resolvedPath,
+      device: '',
+      model: '',
+      filesystem: '',
+      totalBytes: 0,
+      usedBytes: 0,
+      freeBytes: 0,
+      usedPercent: 0,
+      mounted: false,
+      errorCode: mountStatus.code,
+    };
+  }
   try {
     const stats = await fs.promises.statfs(resolvedPath);
     const totalBytes = Number(stats.blocks) * Number(stats.bsize);
@@ -106,7 +124,8 @@ const getFilesystemUsage = async (targetPath, purpose, flatDevices) => {
       totalBytes,
       usedBytes,
       freeBytes,
-      usedPercent: totalBytes ? clampPercent((usedBytes / totalBytes) * 100) : 0
+      usedPercent: totalBytes ? clampPercent((usedBytes / totalBytes) * 100) : 0,
+      mounted: true
     };
   } catch (err) {
     return null;
@@ -169,12 +188,17 @@ const collectServerMetrics = async ({ nasRoot }) => {
   const availableBytes = mem.MemAvailable || os.freemem();
   const usedBytes = Math.max(0, totalBytes - availableBytes);
   const volumeTargets = [
-    { path: '/', purpose: '시스템' },
-    { path: nasRoot, purpose: 'NAS 데이터' }
+    { path: '/', purpose: '시스템', mountStatus: null },
+    { path: nasRoot, purpose: 'NAS 데이터', mountStatus: getNasRootMountStatus(nasRoot, { required: config.NAS_REQUIRE_DEDICATED_MOUNT }) }
   ];
   const seen = new Set();
-  const volumes = (await Promise.all(volumeTargets.map((item) => getFilesystemUsage(item.path, item.purpose, blockDevices.flat))))
+  const [volumesRaw, physical] = await Promise.all([
+    Promise.all(volumeTargets.map((item) => getFilesystemUsage(item.path, item.purpose, blockDevices.flat, item.mountStatus))),
+    enrichPhysicalDisks(blockDevices.physical),
+  ]);
+  const volumes = volumesRaw
     .filter((item) => item && !seen.has(item.mountPath) && seen.add(item.mountPath));
+  const nasMount = volumeTargets.find((item) => item.purpose === 'NAS 데이터').mountStatus;
 
   return {
     collectedAt: new Date().toISOString(),
@@ -200,7 +224,7 @@ const collectServerMetrics = async ({ nasRoot }) => {
       swapTotalBytes: mem.SwapTotal || 0,
       swapUsedBytes: Math.max(0, (mem.SwapTotal || 0) - (mem.SwapFree || 0))
     },
-    disks: { physical: blockDevices.physical, volumes },
+    disks: { physical, volumes, nasMount },
     temperatures: sensors.temperatures,
     fans: sensors.fans,
     power: sensors.power

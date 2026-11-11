@@ -552,7 +552,26 @@ const resourceControl = createResourceControlService({
   dataDir: path.join(__dirname, 'data'),
   collectMetrics: () => collectServerMetrics({ nasRoot: nasPath }),
   getUsers: () => approvedUsers,
-  getStorageSummary: (user) => getUserStorageSummary(normalizeQuotaFields(user))
+  getStorageSummary: (user) => getUserStorageSummary(normalizeQuotaFields(user)),
+  onSystemHealthTransition: ({ healthy, reasons }) => {
+    const reasonText = (reasons || []).map((reason) => ({
+      NAS_MOUNT_MISSING: 'NAS 데이터 SSD 연결 확인 실패',
+      SSD_HEALTH_CRITICAL: 'SSD SMART 위험 상태',
+      SSD_HEALTH_WARNING: 'SSD SMART 주의 상태',
+    }[reason] || reason)).join(' · ');
+    approvedUsers.filter((user) => getUserRole(user) === 'MASTER').forEach((user) => {
+      const userUid = String(user.userUid || '').trim();
+      if (!userUid) return;
+      const notification = createNotification({
+        userUid,
+        type: 'storage_health',
+        title: healthy ? 'NAS 저장장치 상태 복구' : 'NAS 저장장치 확인 필요',
+        message: healthy ? '데이터 SSD 마운트와 SMART 상태가 정상으로 돌아왔습니다.' : `${reasonText}. 파일 작업 보호 상태와 서버 설정의 SSD 건강 정보를 확인해주세요.`,
+        meta: { healthy, reasons: reasons || [] },
+      });
+      if (notification) io.to(`user:${userUid}`).emit('notification:new', notification);
+    });
+  }
 });
 resourceControl.start();
 app.set('resourceControl', resourceControl);

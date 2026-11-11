@@ -62,6 +62,44 @@ test('classifies soft pressure as queued and hard pressure as blocked', () => {
   assert.equal(evaluateSystemPressure(metrics({ memory: { totalBytes: 6 * GIB, usedBytes: 2 * GIB, availableBytes: 4 * GIB, swapTotalBytes: GIB, swapUsedBytes: GIB } }), policy).state, 'available');
 });
 
+test('blocks managed work when the NAS mount is missing or SSD SMART is critical', () => {
+  const policy = calculateAutomaticPolicy(metrics(), 1);
+  assert.equal(evaluateSystemPressure(metrics({ disks: { nasMount: { available: false }, volumes: [] } }), policy).state, 'blocked');
+  const result = evaluateSystemPressure(metrics({
+    disks: { nasMount: { available: true }, volumes: [{ purpose: 'NAS 데이터', totalBytes: 2 * 1024 * GIB, freeBytes: 1500 * GIB }], physical: [{ smart: { status: 'critical' } }] }
+  }), policy);
+  assert.equal(result.state, 'blocked');
+  assert.ok(result.hardReasons.includes('SSD_HEALTH_CRITICAL'));
+});
+
+test('emits one storage health transition and one recovery without repeating steady state', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msp-storage-health-'));
+  const transitions = [];
+  let current = metrics();
+  const service = createResourceControlService({
+    dataDir,
+    collectMetrics: async () => current,
+    getUsers: () => [],
+    getStorageSummary: () => ({ usedBytes: 0, quotaBytes: 0 }),
+    onSystemHealthTransition: (event) => transitions.push(event),
+    sampleIntervalMs: 5000,
+  });
+  try {
+    await service.capture();
+    current = metrics({ disks: { nasMount: { available: false }, volumes: [] } });
+    await service.capture();
+    await service.capture();
+    current = metrics();
+    await service.capture();
+    assert.equal(transitions.length, 2);
+    assert.deepEqual(transitions[0].reasons, ['NAS_MOUNT_MISSING']);
+    assert.equal(transitions[1].healthy, true);
+  } finally {
+    service.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('persists validated manager policy and rejects invalid threshold order', () => withService(async ({ service }) => {
   await service.dashboard(metrics());
   const saved = service.updatePolicy({

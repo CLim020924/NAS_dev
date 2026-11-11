@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config/env');
+const { assertNasRootMounted, getNasRootMountStatus } = require('./storageMountGuard');
 
 const NAS_ROOT = config.NAS_ROOT;
 const DATA_DIR = path.join(__dirname, 'data');
@@ -13,6 +14,8 @@ const DEFAULT_USER_QUOTA_BYTES = 20 * GIB;
 const USER_QUOTA_POLICY_VERSION = 2;
 const MIN_SYSTEM_RESERVE_BYTES = 10 * GIB;
 const SYSTEM_RESERVE_RATIO = 0.05;
+const assertStorageAvailable = () => assertNasRootMounted(NAS_ROOT, { required: config.NAS_REQUIRE_DEDICATED_MOUNT });
+const getStorageMountStatus = () => getNasRootMountStatus(NAS_ROOT, { required: config.NAS_REQUIRE_DEDICATED_MOUNT });
 
 const ensureDataDir = () => {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -77,12 +80,14 @@ const resolveInside = (basePath, requestedPath = '') => {
 };
 
 const getAccessBasePath = (user = {}) => {
+  assertStorageAvailable();
   return isStorageAdmin(user)
     ? NAS_ROOT
     : path.resolve(NAS_ROOT, normalizeRelativeRoot(user));
 };
 
 const getQuotaBasePath = (user = {}) => {
+  assertStorageAvailable();
   return path.resolve(NAS_ROOT, normalizePersonalRelativeRoot(user));
 };
 
@@ -248,6 +253,7 @@ const getQuotaInfo = (user = {}) => {
 
 const getFilesystemStats = () => {
   try {
+    assertStorageAvailable();
     const stat = fs.statfsSync(NAS_ROOT);
     const totalBytes = Number(stat.blocks) * Number(stat.bsize);
     const freeBytes = Number(stat.bavail) * Number(stat.bsize);
@@ -256,6 +262,7 @@ const getFilesystemStats = () => {
       freeBytes: Number.isFinite(freeBytes) ? freeBytes : 0
     };
   } catch (err) {
+    if (err.code === 'NAS_STORAGE_UNAVAILABLE') throw err;
     return { totalBytes: 0, freeBytes: 0 };
   }
 };
@@ -409,6 +416,8 @@ module.exports = {
   DEFAULT_USER_QUOTA_BYTES,
   USER_QUOTA_POLICY_VERSION,
   MIN_SYSTEM_RESERVE_BYTES,
+  assertStorageAvailable,
+  getStorageMountStatus,
   getLoginId,
   isSafeLoginId,
   getRole,

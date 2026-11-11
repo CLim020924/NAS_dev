@@ -57,6 +57,7 @@ const PUBLIC_BASE_URL = trimTrailingSlash(text('PUBLIC_BASE_URL', `https://${APP
 const UPLOAD_BASE_URL = trimTrailingSlash(text('UPLOAD_BASE_URL', `https://${UPLOAD_DOMAIN}`));
 const NAS_ROOT = path.resolve(text('NAS_ROOT', text('NAS_PATH', '/mnt/nas')));
 const CHAT_TEMP_ROOT = path.join(NAS_ROOT, text('CHAT_TEMP_DIR', 'chat_tmp'));
+const NAS_REQUIRE_DEDICATED_MOUNT = bool('NAS_REQUIRE_DEDICATED_MOUNT', NAS_ROOT === path.resolve('/mnt/nas'));
 
 module.exports = {
   PROJECT_ROOT,
@@ -69,6 +70,7 @@ module.exports = {
   BACKEND_PORT: number('BACKEND_PORT', 3030),
   FRONTEND_BUILD_PATH: text('FRONTEND_BUILD_PATH', '/var/www/html'),
   NAS_ROOT,
+  NAS_REQUIRE_DEDICATED_MOUNT,
   NAS_BACKUP_PATH: path.join(NAS_ROOT, text('NAS_BACKUP_DIR', 'backup')),
   CHATDATA_ROOT: path.join(NAS_ROOT, text('CHATDATA_DIR', 'chatdata')),
   CHAT_TEMP_ROOT,

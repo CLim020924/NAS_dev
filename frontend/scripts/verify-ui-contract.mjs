@@ -53,7 +53,11 @@ requireText('src/components/NAS.js', 'const currentFileManagerPath = ensureSlash
 requireText('src/components/NAS.js', 'variant={accountWorkspaceActive', 'every account must expose its personal workspace as an in-place selection');
 requireText('src/components/NAS.js', '계정공간 표시 중', 'the active personal workspace must have a clear selected state');
 requireText('src/components/NAS.js', '{isMaster && (', 'full-root workspace selection must remain master-only');
-requireText('src/components/NAS.js', '전체 경로 표시 중', 'the active master root workspace must have a clear selected state');
+requireText('src/components/NAS.js', '마스터 전용 · NAS 루트 (/)', 'the storage panel must explain that NAS root navigation is master-only');
+requireText('src/components/NAS.js', 'aria-label="NAS 루트 경로 보기"', 'the master root action must be explicitly identified for assistive technology');
+requireText('src/components/NAS.js', '루트 경로 표시 중', 'the active master root workspace must have a clear selected state');
+requireText('src/components/ServerSettingsPanel.js', 'SSD 수명·건강 관리', 'manager settings must expose SSD health without confusing power-on time with lifetime wear');
+requireText('src/components/ServerSettingsPanel.js', '파일 작업이 안전하게 차단되었습니다', 'missing NAS mounts must be explained as a fail-closed storage state');
 const topBar = read('src/components/TopBar.js');
 const fileButton = topBar.indexOf('aria-label="파일 관리자 열기"');
 const accessButton = topBar.indexOf('aria-label="접근 기록 열기"');

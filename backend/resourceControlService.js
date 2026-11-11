@@ -128,6 +128,10 @@ const evaluateSystemPressure = (metrics = {}, effective = {}) => {
   const free = Number(nasVolume?.freeBytes || 0);
   const hard = [];
   const soft = [];
+  if (metrics.disks?.nasMount?.available === false) hard.push('NAS_MOUNT_MISSING');
+  const diskHealth = (metrics.disks?.physical || []).map((disk) => disk.smart?.status);
+  if (diskHealth.includes('critical')) hard.push('SSD_HEALTH_CRITICAL');
+  else if (diskHealth.includes('warning')) soft.push('SSD_HEALTH_WARNING');
   if (cpu >= system.cpuHardPercent) hard.push('CPU_HARD'); else if (cpu >= system.cpuSoftPercent) soft.push('CPU_SOFT');
   if (load >= system.loadHard) hard.push('LOAD_HARD'); else if (load >= system.loadSoft) soft.push('LOAD_SOFT');
   if (availableMemory <= system.hardMinAvailableMemoryBytes) hard.push('MEMORY_HARD'); else if (availableMemory <= system.minAvailableMemoryBytes) soft.push('MEMORY_SOFT');
@@ -142,7 +146,7 @@ const evaluateSystemPressure = (metrics = {}, effective = {}) => {
   return { state: hard.length ? 'blocked' : soft.length ? 'queued' : 'available', hardReasons: hard, softReasons: soft, swapUsedPercent: swap, maxTemperatureC: maxTemperature };
 };
 
-const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getStorageSummary, sampleIntervalMs = DEFAULT_SAMPLE_INTERVAL_MS }) => {
+const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getStorageSummary, onSystemHealthTransition, sampleIntervalMs = DEFAULT_SAMPLE_INTERVAL_MS }) => {
   if (!dataDir || typeof collectMetrics !== 'function' || typeof getUsers !== 'function') throw new Error('resource control dependencies are required');
   const policyPath = path.join(dataDir, 'resource_policy.json');
   const historyRoot = path.join(dataDir, 'resource_usage_history');
@@ -152,6 +156,7 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
   let lastMetrics = null;
   let lastSampleAt = '';
   let sampling = false;
+  let lastStorageHealthSignature = null;
 
   const readPolicy = () => ({ ...defaultPolicy(), ...readJson(policyPath, {}) });
   const effectivePolicy = (metrics = lastMetrics || {}, users = getUsers()) => {
@@ -213,6 +218,17 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
     lastMetrics = metrics;
     const effective = effectivePolicy(metrics);
     const pressure = evaluateSystemPressure(metrics, effective);
+    const storageHealthReasons = [...pressure.hardReasons, ...pressure.softReasons]
+      .filter((reason) => ['NAS_MOUNT_MISSING', 'SSD_HEALTH_CRITICAL', 'SSD_HEALTH_WARNING'].includes(reason));
+    const storageHealthSignature = storageHealthReasons.slice().sort().join('|');
+    if (storageHealthSignature !== lastStorageHealthSignature) {
+      const previous = lastStorageHealthSignature;
+      lastStorageHealthSignature = storageHealthSignature;
+      if (typeof onSystemHealthTransition === 'function' && (previous !== null || storageHealthReasons.length > 0)) {
+        try { onSystemHealthTransition({ healthy: storageHealthReasons.length === 0, reasons: storageHealthReasons, previous }); }
+        catch (error) { console.error('[resource-control] health notification failed', error.message); }
+      }
+    }
     const record = {
       collectedAt: metrics.collectedAt || nowIso(),
       system: {

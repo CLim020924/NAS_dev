@@ -29,11 +29,19 @@ const reasonLabels = {
   MEMORY_HARD: '가용 메모리 차단 기준 미달', MEMORY_SOFT: '가용 메모리 주의 기준 미달',
   SWAP_HARD: '스왑 차단 기준 초과', SWAP_SOFT: '스왑 주의 기준 초과',
   TEMPERATURE_HARD: '온도 차단 기준 초과', TEMPERATURE_SOFT: '온도 주의 기준 초과',
-  DISK_RESERVE: 'NAS 최소 여유 공간 미달'
+  DISK_RESERVE: 'NAS 최소 여유 공간 미달',
+  NAS_MOUNT_MISSING: 'NAS 데이터 SSD 연결 확인 실패',
+  SSD_HEALTH_CRITICAL: 'SSD SMART 위험 상태', SSD_HEALTH_WARNING: 'SSD SMART 주의 상태'
 };
 const gateLabels = { available: '작업 허용', queued: '새 작업 대기', blocked: '새 작업 차단', 'monitor-only': '측정만 사용' };
 const gateColors = { available: 'success', queued: 'warning', blocked: 'error', 'monitor-only': 'info' };
 const numeric = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+const formatPowerOnHours = (hours) => {
+  const value = Math.max(0, Math.round(numeric(hours)));
+  return `${Math.floor(value / 24).toLocaleString()}일 · ${value.toLocaleString()}시간`;
+};
+const smartStatusLabel = { healthy: '정상', warning: '주의', critical: '위험', unavailable: '확인 불가', unsupported: '미지원' };
+const smartStatusColor = { healthy: 'success', warning: 'warning', critical: 'error', unavailable: 'default', unsupported: 'default' };
 
 const draftFromResource = (resource) => {
   const effective = resource?.effective || {};
@@ -221,6 +229,11 @@ const ServerSettingsPanel = () => {
       </Stack>
 
       {error && <Alert severity="warning" sx={{ mb: 2 }}>{error} 마지막으로 수집된 값이 있으면 그대로 표시합니다.</Alert>}
+      {metrics?.disks?.nasMount?.available === false && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          NAS 데이터 SSD 마운트를 확인할 수 없어 파일 작업이 안전하게 차단되었습니다. 저장장치를 복구하기 전에는 업로드·수정·삭제가 실행되지 않습니다.
+        </Alert>
+      )}
 
       <Grid container spacing={2} sx={{ mb: 4 }}>
         <Grid item xs={12} md={6}>
@@ -275,17 +288,47 @@ const ServerSettingsPanel = () => {
       </Grid>
 
       {(metrics?.disks?.physical || []).length > 0 && (
-        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 4 }}>
-          <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>설치된 물리 디스크</Typography>
-          <Stack spacing={1}>
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="h6" fontWeight={800} sx={{ mb: 2 }}>SSD 수명·건강 관리</Typography>
+          <Grid container spacing={2}>
             {metrics.disks.physical.map((disk) => (
-              <Stack key={disk.name} direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={0.5}>
-                <Typography variant="body2">{disk.model}</Typography>
-                <Typography variant="body2" color="text.secondary">{disk.type} · {formatStorage(disk.sizeBytes)}</Typography>
-              </Stack>
+              <Grid item xs={12} md={6} key={disk.name}>
+                <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, height: '100%' }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+                    <Box minWidth={0}>
+                      <Typography variant="subtitle2" fontWeight={800} noWrap title={disk.model}>{disk.model}</Typography>
+                      <Typography variant="caption" color="text.secondary">{disk.type} · {formatStorage(disk.sizeBytes)} · /dev/{disk.name}</Typography>
+                    </Box>
+                    <Chip size="small" color={smartStatusColor[disk.smart?.status] || 'default'} label={smartStatusLabel[disk.smart?.status] || '확인 불가'} />
+                  </Stack>
+                  {disk.smart?.available ? (
+                    <>
+                      <Stack direction="row" justifyContent="space-between" sx={{ mt: 1.75 }}>
+                        <Typography variant="body2" fontWeight={700}>SMART 수명 소모</Typography>
+                        <Typography variant="body2" fontWeight={800}>{disk.smart.percentageUsed}% · 잔여 약 {disk.smart.remainingPercent}%</Typography>
+                      </Stack>
+                      <LinearProgress variant="determinate" value={Math.min(100, disk.smart.percentageUsed)} color={disk.smart.percentageUsed >= 80 ? 'warning' : 'primary'} sx={{ mt: 0.75, height: 8, borderRadius: 4 }} />
+                      <Grid container spacing={1} sx={{ mt: 1 }}>
+                        <Grid item xs={6}><Typography variant="caption" color="text.secondary">누적 쓰기</Typography><Typography variant="body2" fontWeight={700}>{formatStorage(disk.smart.dataWrittenBytes)}</Typography></Grid>
+                        <Grid item xs={6}><Typography variant="caption" color="text.secondary">가동시간</Typography><Typography variant="body2" fontWeight={700}>{formatPowerOnHours(disk.smart.powerOnHours)}</Typography></Grid>
+                        <Grid item xs={6}><Typography variant="caption" color="text.secondary">온도</Typography><Typography variant="body2" fontWeight={700}>{disk.smart.temperatureC ?? '-'}°C</Typography></Grid>
+                        <Grid item xs={6}><Typography variant="caption" color="text.secondary">미디어 오류</Typography><Typography variant="body2" fontWeight={700}>{disk.smart.mediaErrors.toLocaleString()}건</Typography></Grid>
+                      </Grid>
+                      {disk.smart.enduranceBytes && (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.25 }}>
+                          제조사 보증 내구도 {formatStorage(disk.smart.enduranceBytes)} 대비 누적 쓰기 {disk.smart.enduranceUsedPercent}% · SMART 수명 소모율을 우선 기준으로 판단합니다.
+                        </Typography>
+                      )}
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                        비정상 종료 {disk.smart.unsafeShutdowns.toLocaleString()}회 · 오류 로그 {disk.smart.errorLogEntries.toLocaleString()}건은 미디어 손상 건수와 별도입니다.
+                      </Typography>
+                    </>
+                  ) : <Alert severity="warning" sx={{ mt: 1.5 }}>SMART 정보를 읽지 못했습니다. 디스크 연결과 smartctl 상태를 확인해주세요.</Alert>}
+                </Paper>
+              </Grid>
             ))}
-          </Stack>
-        </Paper>
+          </Grid>
+        </Box>
       )}
 
       {(metrics?.temperatures || []).length > 0 && (

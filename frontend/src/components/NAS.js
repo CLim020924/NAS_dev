@@ -2400,16 +2400,24 @@ const NAS = ({ showWorkspace = true }) => {
                     {currentFileManagerPath}
                   </Typography>
                   {isMaster && (
-                    <Button
-                      size="small"
-                      variant={fullRootWorkspaceActive ? 'contained' : 'text'}
-                      color="secondary"
-                      aria-pressed={fullRootWorkspaceActive}
-                      onClick={() => navigateStorageLocation('/')}
-                      sx={{ alignSelf: 'flex-end', minWidth: 0, mt: 0.65, px: 0.75, py: 0.25, fontSize: '0.72rem' }}
-                    >
-                      {fullRootWorkspaceActive ? '전체 경로 표시 중' : '전체 경로 표시'}
-                    </Button>
+                    <Box sx={{ mt: 1, pt: 0.9, borderTop: `1px solid ${alpha(theme.palette.secondary.main, 0.18)}` }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.45 }}>
+                        마스터 전용 · NAS 루트 (/)
+                      </Typography>
+                      <Button
+                        fullWidth
+                        size="small"
+                        variant={fullRootWorkspaceActive ? 'contained' : 'outlined'}
+                        color="secondary"
+                        aria-label="NAS 루트 경로 보기"
+                        aria-pressed={fullRootWorkspaceActive}
+                        onClick={() => navigateStorageLocation('/')}
+                        startIcon={<StorageIcon sx={{ fontSize: 16 }} />}
+                        sx={{ justifyContent: 'flex-start', minWidth: 0, px: 1, py: 0.45, fontSize: '0.72rem' }}
+                      >
+                        {fullRootWorkspaceActive ? '루트 경로 표시 중' : '루트 경로 보기'}
+                      </Button>
+                    </Box>
                   )}
                 </Box>
               </Box>
