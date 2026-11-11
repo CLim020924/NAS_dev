@@ -18,8 +18,12 @@ test('keeps heartbeat presence live while coalescing unchanged durable writes', 
   const syncing = { ...heartbeat, syncState: 'syncing', lastSeenAt: 'syncing' };
   assert.equal(store.stage(syncing, { previousDevice: heartbeat }).persist, false);
 
-  clock += 284_000;
-  assert.equal(store.stage({ ...syncing, lastSeenAt: 'third' }, { previousDevice: syncing }).persist, true);
+  clock += 1_000;
+  const emptyError = { ...syncing, syncState: 'error', lastError: '', lastSeenAt: 'empty-error' };
+  assert.equal(store.stage(emptyError, { previousDevice: syncing }).persist, false);
+
+  clock += 283_000;
+  assert.equal(store.stage({ ...emptyError, lastSeenAt: 'third' }, { previousDevice: emptyError }).persist, true);
 });
 
 test('persists an actual connection state transition immediately', () => {

@@ -2,7 +2,9 @@ const DEFAULT_PERSIST_INTERVAL_MS = 5 * 60 * 1000;
 
 const durableSyncState = (device = {}) => {
   const state = String(device.syncState || '');
-  return device.syncPaused || state === 'paused' ? 'paused' : (state === 'error' ? 'error' : 'active');
+  return device.syncPaused || state === 'paused'
+    ? 'paused'
+    : (state === 'error' && String(device.lastError || '').trim() ? 'error' : 'active');
 };
 
 const stateSignature = (device = {}) => JSON.stringify([
