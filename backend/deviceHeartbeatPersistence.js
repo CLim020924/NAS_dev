@@ -1,16 +1,8 @@
 const DEFAULT_PERSIST_INTERVAL_MS = 5 * 60 * 1000;
 
-const durableSyncState = (device = {}) => {
-  const state = String(device.syncState || '');
-  return device.syncPaused || state === 'paused'
-    ? 'paused'
-    : (state === 'error' && String(device.lastError || '').trim() ? 'error' : 'active');
-};
-
 const stateSignature = (device = {}) => JSON.stringify([
   device.status || '',
-  durableSyncState(device),
-  !!device.syncPaused,
+  !!device.syncPaused || device.syncState === 'paused',
   device.revokedAt || '',
 ]);
 
@@ -54,4 +46,4 @@ const createDeviceHeartbeatPersistence = ({
   return { overlay, stage, markPersisted };
 };
 
-module.exports = { createDeviceHeartbeatPersistence, _test: { stateSignature, durableSyncState, DEFAULT_PERSIST_INTERVAL_MS } };
+module.exports = { createDeviceHeartbeatPersistence, _test: { stateSignature, DEFAULT_PERSIST_INTERVAL_MS } };

@@ -26,7 +26,7 @@ test('keeps heartbeat presence live while coalescing unchanged durable writes', 
   assert.equal(store.stage({ ...emptyError, lastSeenAt: 'third' }, { previousDevice: emptyError }).persist, true);
 });
 
-test('persists an actual connection state transition immediately', () => {
+test('persists a durable pause transition immediately while keeping transient errors live', () => {
   let clock = 2_000_000;
   const store = createDeviceHeartbeatPersistence({ persistIntervalMs: 300_000, now: () => clock });
   const connected = { deviceId: 'dev-1', status: 'connected', syncState: 'up-to-date', lastSeenAt: 'first' };
@@ -34,8 +34,9 @@ test('persists an actual connection state transition immediately', () => {
   store.markPersisted([connected]);
   clock += 1_000;
   const failed = { ...connected, syncState: 'error', lastError: 'offline' };
-  assert.equal(store.stage(failed, { previousDevice: connected }).persist, true);
-  store.markPersisted([failed]);
+  assert.equal(store.stage(failed, { previousDevice: connected }).persist, false);
   clock += 1_000;
   assert.equal(store.stage({ ...failed, lastError: 'offline at a newer timestamp' }, { previousDevice: failed }).persist, false);
+  clock += 1_000;
+  assert.equal(store.stage({ ...failed, syncState: 'paused', syncPaused: true }, { previousDevice: failed }).persist, true);
 });
