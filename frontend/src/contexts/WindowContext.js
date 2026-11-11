@@ -199,7 +199,7 @@ export const WindowProvider = ({ children }) => {
 
     window.addEventListener('storage', synchronizeWorkspaceIdentity);
     window.addEventListener('nas:user-updated', synchronizeWorkspaceIdentity);
-    const identityTimer = window.setInterval(synchronizeWorkspaceIdentity, 500);
+    const identityTimer = window.setInterval(synchronizeWorkspaceIdentity, 30000);
     return () => {
       window.removeEventListener('storage', synchronizeWorkspaceIdentity);
       window.removeEventListener('nas:user-updated', synchronizeWorkspaceIdentity);

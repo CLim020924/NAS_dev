@@ -69,8 +69,12 @@ const logoutRestartAt = logoutSource.indexOf('restartBackground();', logoutExplo
 const logoutRemoteAt = logoutSource.indexOf("'/api/devices/agent/logout'");
 assert(logoutConfigAt >= 0 && logoutConfigAt < logoutExplorerAt && logoutExplorerAt < logoutRestartAt && logoutRestartAt < logoutRemoteAt,
   'A removed account must leave Explorer before remote logout can time out');
-assert.match(windowsAgentSource, /restartBackground\(\);[\s\S]{0,180}await sendHeartbeat\(profile, 'connecting'\);[\s\S]{0,300}first heartbeat deferred to background/);
+assert.match(windowsAgentSource, /restartBackground\(\);[\s\S]{0,180}await sendHeartbeatIfDue\(profile, 'connecting',[\s\S]{0,100}force: true[\s\S]{0,300}first heartbeat deferred to background/);
 assert.match(windowsAgentSource, /post-registration provider setup deferred/);
+assert.match(windowsAgentSource, /IDLE_PULL_INTERVAL_MS = 15_000/);
+assert.match(windowsAgentSource, /LOCAL_AUDIT_INTERVAL_MS = 5 \* 60 \* 1000/);
+assert.match(windowsAgentSource, /HEARTBEAT_INTERVAL_MS = 15_000/);
+assert.match(nasRoutesSource, /stageLinkedDeviceHeartbeat/);
 assert.match(windowsAgentSource, /initialConnectionRetryDelayMs\(initialConnectionError\)/);
 assert.match(windowsAgentSource, /return isAgentAuthError\(error\) \? AUTH_RETRY_DELAY_MS : 0/);
 assert.match(windowsAgentSource, /unprotectAgentToken\(profile\.accountKey\) !== profile\.agentToken/);

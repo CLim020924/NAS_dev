@@ -20,6 +20,7 @@ const {
   hasConcurrentFileChange,
   buildConflictFileName
 } = require('./deviceSyncSecurity');
+const { createDeviceHeartbeatPersistence } = require('./deviceHeartbeatPersistence');
 const {
   normalizeOfficePath,
   createOfficeAccessToken,
@@ -153,9 +154,10 @@ const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.11.5';
+const WINDOWS_AGENT_VERSION = '1.11.6';
 const DEVICE_OFFLINE_AFTER_MS = 30 * 1000;
 const DEVICE_CONNECT_GRACE_MS = 90 * 1000;
+const linkedDeviceHeartbeats = createDeviceHeartbeatPersistence();
 let windowsAgentBuildCache = null;
 const agentMutationWindows = new Map();
 const agentLoginAttempts = new Map();
@@ -330,6 +332,12 @@ const updateLinkedDeviceRecord = (device) => {
   writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
 };
 
+const stageLinkedDeviceHeartbeat = (device, previousDevice) => {
+  const staged = linkedDeviceHeartbeats.stage(device, { previousDevice });
+  if (staged.persist) updateLinkedDeviceRecord(device);
+  return device;
+};
+
 const removeLinkedDeviceRecord = (deviceId) => {
   if (!deviceId) return;
   const devices = readJsonArrayFile(LINKED_DEVICES_FILE).filter(d => d.deviceId !== deviceId);
@@ -422,6 +430,7 @@ const readJsonArrayFile = (filePath) => {
     ensureDeviceDataFiles();
     const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     if (!Array.isArray(data)) return [];
+    if (filePath === LINKED_DEVICES_FILE) return linkedDeviceHeartbeats.overlay(data);
     if (filePath !== DEVICE_PAIRINGS_FILE) return data;
 
     let changed = false;
@@ -449,6 +458,7 @@ const readJsonArrayFile = (filePath) => {
 const writeJsonArrayFile = (filePath, rows) => {
   ensureDeviceDataFiles();
   fs.writeFileSync(filePath, JSON.stringify(rows || [], null, 2));
+  if (filePath === LINKED_DEVICES_FILE) linkedDeviceHeartbeats.markPersisted(rows || []);
 };
 
 const getDeviceOwnerKey = (user = {}) => {
@@ -514,7 +524,7 @@ const advanceDeviceState = (device = {}, patch = {}, now = new Date().toISOStrin
   ]);
   return {
     ...updated,
-    stateRevision: Math.max(0, Number(device.stateRevision || 0)) + 1,
+    stateRevision: Math.max(0, Number(device.stateRevision || 0)) + (previousSignature === nextSignature ? 0 : 1),
     stateChangedAt: previousSignature === nextSignature ? (device.stateChangedAt || now) : now
   };
 };
@@ -5028,7 +5038,7 @@ router.post('/devices/agent/heartbeat', express.json(), (req, res) => {
       syncState: device.syncPaused ? 'paused' : allowedState,
       lastError: String(req.body?.lastError || '').slice(0, 500)
     }, now);
-    updateLinkedDeviceRecord(updated);
+    stageLinkedDeviceHeartbeat(updated, device);
     emitDeviceStatus(req, updated);
     return res.json({ success: true, commands: { paused: !!updated.syncPaused }, device: sanitizeDeviceForResponse(updated) });
   } catch (err) {
@@ -5039,11 +5049,7 @@ router.post('/devices/agent/heartbeat', express.json(), (req, res) => {
 const touchLinkedDevice = (device, linkedRoot) => {
   const now = new Date().toISOString();
   const updated = { ...device, lastSeenAt: now, status: 'connected' };
-  updateLinkedDeviceRecord(updated);
-
-  try {
-    writeLinkedDeviceMeta(updated);
-  } catch (err) {}
+  stageLinkedDeviceHeartbeat(updated, device);
 
   return updated;
 };

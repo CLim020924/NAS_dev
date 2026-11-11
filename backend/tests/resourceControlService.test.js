@@ -135,6 +135,17 @@ test('records system and user history without credentials or file paths', () => 
   assert.equal(raw.includes('/users/'), false);
 }));
 
+test('keeps safety sampling live without writing every sample to SSD history', () => withService(async ({ service, dataDir }) => {
+  const first = await service.capture();
+  const file = path.join(dataDir, 'resource_usage_history', `${first.record.collectedAt.slice(0, 10)}.jsonl`);
+  const before = fs.readFileSync(file, 'utf8');
+  const sampled = await service.capture({ persistHistory: false, includeUsers: true });
+  assert.equal(sampled.historyPersisted, false);
+  assert.equal(Object.hasOwn(sampled.record, 'users'), false);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.ok((await service.dashboard()).measurement.historyIntervalSeconds >= 5);
+}));
+
 test('monitor-only mode records violations without blocking managed work', () => withService(async ({ service, users }) => {
   await service.dashboard(metrics());
   service.updatePolicy({

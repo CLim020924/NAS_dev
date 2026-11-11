@@ -206,13 +206,20 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    const checkUser = setInterval(() => {
+    const synchronizeUser = () => {
       const currentUser = localStorage.getItem('user');
       if (JSON.stringify(user) !== currentUser) {
-        setUser(JSON.parse(currentUser));
+        setUser(currentUser ? JSON.parse(currentUser) : null);
       }
-    }, 500);
-    return () => clearInterval(checkUser);
+    };
+    window.addEventListener('storage', synchronizeUser);
+    window.addEventListener('nas:user-updated', synchronizeUser);
+    const checkUser = setInterval(synchronizeUser, 30000);
+    return () => {
+      window.removeEventListener('storage', synchronizeUser);
+      window.removeEventListener('nas:user-updated', synchronizeUser);
+      clearInterval(checkUser);
+    };
   }, [user]);
 
   const clearPreviewTimer = useCallback(() => {

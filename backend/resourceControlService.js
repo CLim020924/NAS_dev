@@ -7,6 +7,7 @@ const GIB = 1024 * 1024 * 1024;
 const MIB = 1024 * 1024;
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_SAMPLE_INTERVAL_MS = 30 * 1000;
+const DEFAULT_HISTORY_INTERVAL_MS = 5 * 60 * 1000;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value)));
 const nowIso = () => new Date().toISOString();
@@ -146,7 +147,15 @@ const evaluateSystemPressure = (metrics = {}, effective = {}) => {
   return { state: hard.length ? 'blocked' : soft.length ? 'queued' : 'available', hardReasons: hard, softReasons: soft, swapUsedPercent: swap, maxTemperatureC: maxTemperature };
 };
 
-const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getStorageSummary, onSystemHealthTransition, sampleIntervalMs = DEFAULT_SAMPLE_INTERVAL_MS }) => {
+const createResourceControlService = ({
+  dataDir,
+  collectMetrics,
+  getUsers,
+  getStorageSummary,
+  onSystemHealthTransition,
+  sampleIntervalMs = DEFAULT_SAMPLE_INTERVAL_MS,
+  historyIntervalMs = DEFAULT_HISTORY_INTERVAL_MS,
+}) => {
   if (!dataDir || typeof collectMetrics !== 'function' || typeof getUsers !== 'function') throw new Error('resource control dependencies are required');
   const policyPath = path.join(dataDir, 'resource_policy.json');
   const historyRoot = path.join(dataDir, 'resource_usage_history');
@@ -157,6 +166,7 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
   let lastSampleAt = '';
   let sampling = false;
   let lastStorageHealthSignature = null;
+  let lastHistoryWriteAt = 0;
 
   const readPolicy = () => ({ ...defaultPolicy(), ...readJson(policyPath, {}) });
   const effectivePolicy = (metrics = lastMetrics || {}, users = getUsers()) => {
@@ -213,7 +223,7 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
     }
   };
 
-  const capture = async ({ includeUsers = false } = {}) => {
+  const capture = async ({ includeUsers = false, persistHistory = true } = {}) => {
     const metrics = await collectMetrics();
     lastMetrics = metrics;
     const effective = effectivePolicy(metrics);
@@ -221,7 +231,8 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
     const storageHealthReasons = [...pressure.hardReasons, ...pressure.softReasons]
       .filter((reason) => ['NAS_MOUNT_MISSING', 'SSD_HEALTH_CRITICAL', 'SSD_HEALTH_WARNING'].includes(reason));
     const storageHealthSignature = storageHealthReasons.slice().sort().join('|');
-    if (storageHealthSignature !== lastStorageHealthSignature) {
+    const storageHealthChanged = storageHealthSignature !== lastStorageHealthSignature;
+    if (storageHealthChanged) {
       const previous = lastStorageHealthSignature;
       lastStorageHealthSignature = storageHealthSignature;
       if (typeof onSystemHealthTransition === 'function' && (previous !== null || storageHealthReasons.length > 0)) {
@@ -243,21 +254,28 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
         reasons: [...pressure.hardReasons, ...pressure.softReasons]
       }
     };
-    if (includeUsers) record.users = usersSnapshot(metrics, { refreshStorage: true });
-    fs.mkdirSync(historyRoot, { recursive: true, mode: 0o700 });
-    fs.appendFileSync(historyFile(), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
-    cleanupHistory(effective.retentionDays);
+    const shouldPersistHistory = persistHistory || storageHealthChanged;
+    if (includeUsers && shouldPersistHistory) record.users = usersSnapshot(metrics, { refreshStorage: true });
+    if (shouldPersistHistory) {
+      fs.mkdirSync(historyRoot, { recursive: true, mode: 0o700 });
+      fs.appendFileSync(historyFile(), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+      cleanupHistory(effective.retentionDays);
+      lastHistoryWriteAt = Date.now();
+    }
     lastSampleAt = record.collectedAt;
-    return { metrics, effective, pressure, record };
+    return { metrics, effective, pressure, record, historyPersisted: shouldPersistHistory };
   };
 
   const start = () => {
     if (timer) return;
-    let sequence = 0;
+    let historySequence = 0;
     const tick = async () => {
       if (sampling) return;
       sampling = true;
-      try { await capture({ includeUsers: sequence++ % 4 === 0 }); }
+      try {
+        const persistHistory = lastHistoryWriteAt === 0 || Date.now() - lastHistoryWriteAt >= Math.max(sampleIntervalMs, historyIntervalMs);
+        await capture({ includeUsers: persistHistory && historySequence++ % 4 === 0, persistHistory });
+      }
       catch (error) { console.error('[resource-control] sample failed', error.message); }
       finally { sampling = false; }
     };
@@ -402,11 +420,22 @@ const createResourceControlService = ({ dataDir, collectMetrics, getUsers, getSt
       effective,
       pressure: evaluateSystemPressure(lastMetrics, effective),
       users: usersSnapshot(lastMetrics),
-      measurement: { cpuMemoryScope: 'managed-jobs-only', storageScope: 'personal-root', sampleIntervalSeconds: Math.max(5, sampleIntervalMs / 1000), lastSampleAt }
+      measurement: {
+        cpuMemoryScope: 'managed-jobs-only',
+        storageScope: 'personal-root',
+        sampleIntervalSeconds: Math.max(5, sampleIntervalMs / 1000),
+        historyIntervalSeconds: Math.max(5, historyIntervalMs / 1000),
+        lastSampleAt,
+      }
     };
   };
 
   return { start, stop, capture, dashboard, updatePolicy, readHistory, evaluateAdmission, reserve, release, getEffectivePolicy: effectivePolicy };
 };
 
-module.exports = { createResourceControlService, calculateAutomaticPolicy, evaluateSystemPressure, _test: { normalizeManual, assertThresholdOrder, getSwapPercent } };
+module.exports = {
+  createResourceControlService,
+  calculateAutomaticPolicy,
+  evaluateSystemPressure,
+  _test: { normalizeManual, assertThresholdOrder, getSwapPercent, DEFAULT_HISTORY_INTERVAL_MS },
+};

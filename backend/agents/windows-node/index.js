@@ -24,13 +24,19 @@ const {
 } = require('./project-path-portability');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.11.5';
+const AGENT_VERSION = '1.11.6';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
 const DIRECT_UPLOAD_MAX_BYTES = 32 * 1024 * 1024;
 const AGENT_CHUNK_SIZE = 8 * 1024 * 1024;
 const PULL_INTERVAL_MS = 3_000;
+const IDLE_PULL_INTERVAL_MS = 15_000;
+const ACTIVE_PULL_WINDOW_MS = 60_000;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+const LOCAL_AUDIT_INTERVAL_MS = 5 * 60 * 1000;
+const PROVIDER_HEALTH_INTERVAL_MS = 30_000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 5_000;
 const AUTH_RETRY_DELAY_MS = 5 * 60 * 1000;
 const STATE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'NAS-Sync-Agent');
@@ -70,6 +76,7 @@ const explorerStatusCache = new Map();
 const explorerViewRefreshAt = new Map();
 const rootSyncQueues = new Map();
 const rootLocalAuditAt = new Map();
+const heartbeatState = new Map();
 const BRANDED_INSTALL_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'Programs', 'NAS Drive');
 let INSTALLED_EXE = path.join(DEFAULT_INSTALL_DIR, 'NAS-Sync-Agent.exe');
 let INSTALLED_PROVIDER_EXE = path.join(DEFAULT_INSTALL_DIR, 'NAS-Drive-Provider.exe');
@@ -2063,6 +2070,22 @@ function sendHeartbeat(profile, syncState = 'idle', lastError = '') {
   });
 }
 
+function heartbeatKey(profile = {}) {
+  return String(profile.deviceId || profile.accountKey || profile.loginId || 'default');
+}
+
+async function sendHeartbeatIfDue(profile, syncState = 'idle', lastError = '', { force = false } = {}) {
+  const key = heartbeatKey(profile);
+  const previous = heartbeatState.get(key) || {};
+  const signature = JSON.stringify([syncState, lastError]);
+  if (!force && previous.signature === signature && Date.now() - Number(previous.sentAt || 0) < HEARTBEAT_INTERVAL_MS) {
+    return previous.response || { commands: { paused: !!profile._paused } };
+  }
+  const response = await sendHeartbeat(profile, syncState, lastError);
+  heartbeatState.set(key, { signature, sentAt: Date.now(), response });
+  return response;
+}
+
 function downloadFile(urlPath, outPath, agentToken) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlPath, SERVER_BASE);
@@ -3381,7 +3404,7 @@ function watchRoot(root, config) {
           await pullNasChanges(root, config);
           rootLocalAuditAt.set(String(root.syncRootId), Date.now());
           setProfileHealth(config, 'up-to-date');
-          await sendHeartbeat(config, 'up-to-date').catch(() => {});
+          await sendHeartbeatIfDue(config, 'up-to-date').catch(() => {});
         });
       } catch (err) {
         const state = classifyAgentError(err);
@@ -3444,7 +3467,7 @@ async function runBackground() {
       await Promise.all(profiles.map(async profile => {
         try {
           const state = profile._runtimeState || 'connecting';
-          await sendHeartbeat(profile, state);
+          await sendHeartbeatIfDue(profile, state);
           setProfileHealth(profile, state);
         } catch {}
       }));
@@ -3461,7 +3484,7 @@ async function runBackground() {
     let initialConnectionError = null;
     try {
       setProfileHealth(profile, 'connecting');
-      heartbeat = await sendHeartbeat(profile, 'connecting');
+      heartbeat = await sendHeartbeatIfDue(profile, 'connecting', '', { force: true });
       if (await checkForAgentUpdate(profile)) {
         try { fs.unlinkSync(PID_FILE); } catch {}
         process.exit(0);
@@ -3483,7 +3506,7 @@ async function runBackground() {
             await reconcileOfflineLocalChanges(root, profile);
             await pullNasChanges(root, profile, async () => {
               setProfileHealth(profile, 'syncing', 'NAS의 변경 사항을 반영하는 중입니다.');
-              await sendHeartbeat(profile, 'syncing').catch(() => {});
+              await sendHeartbeatIfDue(profile, 'syncing').catch(() => {});
             });
             rootLocalAuditAt.set(String(root.syncRootId), Date.now());
           });
@@ -3498,16 +3521,23 @@ async function runBackground() {
       if (profile._paused) {
         setProfileHealth(profile, 'paused');
       } else if (watchersStarted) {
-        await sendHeartbeat(profile, 'up-to-date').catch(() => {});
+        await sendHeartbeatIfDue(profile, 'up-to-date', '', { force: true }).catch(() => {});
         setProfileHealth(profile, 'up-to-date');
       }
+    }
+    const activeSince = Date.now();
+    for (const root of roots) {
+      root._lastRemoteChangeAt = activeSince;
+      root._nextRemotePollAt = 0;
     }
     profileJobs.push({
       profile,
       roots,
       authenticated,
       watchersStarted,
-      nextAuthRetryAt: authenticated ? 0 : Date.now() + initialConnectionRetryDelayMs(initialConnectionError)
+      nextAuthRetryAt: authenticated ? 0 : Date.now() + initialConnectionRetryDelayMs(initialConnectionError),
+      nextProviderHealthAt: 0,
+      nextUpdateCheckAt: Date.now() + UPDATE_CHECK_INTERVAL_MS,
     });
   }
   clearInterval(startupHeartbeatTimer);
@@ -3524,19 +3554,25 @@ async function runBackground() {
     for (const job of profileJobs) {
       if (!job.authenticated && Date.now() < Number(job.nextAuthRetryAt || 0)) continue;
       try {
-        const heartbeat = await sendHeartbeat(job.profile, job.profile._runtimeState || 'connecting');
+        const heartbeat = await sendHeartbeatIfDue(job.profile, job.profile._runtimeState || 'connecting');
         job.authenticated = true;
         job.nextAuthRetryAt = 0;
-        if (await checkForAgentUpdate(job.profile)) {
-          try { fs.unlinkSync(PID_FILE); } catch {}
-          process.exit(0);
+        if (Date.now() >= Number(job.nextUpdateCheckAt || 0)) {
+          job.nextUpdateCheckAt = Date.now() + UPDATE_CHECK_INTERVAL_MS;
+          if (await checkForAgentUpdate(job.profile)) {
+            try { fs.unlinkSync(PID_FILE); } catch {}
+            process.exit(0);
+          }
         }
         job.profile._paused = !!heartbeat.commands?.paused;
-        for (const root of job.roots.filter(item => item.kind === 'personal-drive')) {
-          ensurePersonalDriveWebShortcut(root.localPath, job.profile);
-          if (!isPersonalDriveProviderAlive(job.profile, root)) {
-            setProfileHealth(job.profile, 'connecting', '파일 탐색기 연결을 복구하는 중입니다.');
-            await ensurePersonalDriveProvider(job.profile, root);
+        if (Date.now() >= Number(job.nextProviderHealthAt || 0)) {
+          job.nextProviderHealthAt = Date.now() + PROVIDER_HEALTH_INTERVAL_MS;
+          for (const root of job.roots.filter(item => item.kind === 'personal-drive')) {
+            ensurePersonalDriveWebShortcut(root.localPath, job.profile);
+            if (!isPersonalDriveProviderAlive(job.profile, root)) {
+              setProfileHealth(job.profile, 'connecting', '파일 탐색기 연결을 복구하는 중입니다.');
+              await ensurePersonalDriveProvider(job.profile, root);
+            }
           }
         }
         if (!job.watchersStarted) {
@@ -3551,18 +3587,25 @@ async function runBackground() {
           setProfileHealth(job.profile, 'paused');
           continue;
         }
-        for (const root of job.roots) await enqueueRootSync(root, async () => {
+        for (const root of job.roots) {
+          if (Date.now() < Number(root._nextRemotePollAt || 0)) continue;
+          await enqueueRootSync(root, async () => {
           const auditKey = String(root.syncRootId);
-          if (Date.now() - Number(rootLocalAuditAt.get(auditKey) || 0) >= 15_000) {
+          if (Date.now() - Number(rootLocalAuditAt.get(auditKey) || 0) >= LOCAL_AUDIT_INTERVAL_MS) {
             await reconcileOfflineLocalChanges(root, job.profile);
             rootLocalAuditAt.set(auditKey, Date.now());
           }
-          await pullNasChanges(root, job.profile, async () => {
+          const remoteChanged = await pullNasChanges(root, job.profile, async () => {
             setProfileHealth(job.profile, 'syncing', 'NAS의 변경 사항을 반영하는 중입니다.');
-            await sendHeartbeat(job.profile, 'syncing').catch(() => {});
+            await sendHeartbeatIfDue(job.profile, 'syncing').catch(() => {});
           });
+          const checkedAt = Date.now();
+          if (remoteChanged) root._lastRemoteChangeAt = checkedAt;
+          const active = checkedAt - Number(root._lastRemoteChangeAt || 0) < ACTIVE_PULL_WINDOW_MS;
+          root._nextRemotePollAt = checkedAt + (active ? PULL_INTERVAL_MS : IDLE_PULL_INTERVAL_MS);
         });
-        await sendHeartbeat(job.profile, 'up-to-date');
+        }
+        await sendHeartbeatIfDue(job.profile, 'up-to-date');
         setProfileHealth(job.profile, 'up-to-date');
       } catch (err) {
         log('[pull failed]', job.profile.accountKey, err.agentStage || 'unknown-stage', err.agentRelPath || '', err.code || '', err.message);
@@ -3572,7 +3615,7 @@ async function runBackground() {
         }
         const state = classifyAgentError(err);
         setProfileHealth(job.profile, state, state === 'offline' ? 'NAS 서버가 꺼져 있거나 인터넷에 연결할 수 없습니다.' : err.message);
-        if (!isAgentAuthError(err)) await sendHeartbeat(job.profile, 'error', err.message).catch(() => {});
+        if (!isAgentAuthError(err)) await sendHeartbeatIfDue(job.profile, 'error', err.message).catch(() => {});
       }
     }
     } finally {
@@ -4028,7 +4071,7 @@ async function runForeground() {
   // failure cannot strand a registered device without an automatic retry.
   restartBackground();
   try {
-    await sendHeartbeat(profile, 'connecting');
+    await sendHeartbeatIfDue(profile, 'connecting', '', { force: true });
   } catch (error) {
     const state = classifyAgentError(error);
     log('[first heartbeat deferred to background]', profile.accountKey, error.message);

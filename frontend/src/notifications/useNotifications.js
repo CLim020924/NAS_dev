@@ -60,7 +60,7 @@ const useNotifications = ({
 
     const interval = setInterval(() => {
       refreshNotifications({ silent: true });
-    }, 10000);
+    }, 5 * 60 * 1000);
 
     return () => clearInterval(interval);
   }, [user, refreshNotifications]);
@@ -74,14 +74,18 @@ const useNotifications = ({
   useEffect(() => {
     if (!socket || !user) return undefined;
 
-    const handleIncomingChatMessage = () => {
+    const refreshFromSocket = () => {
       refreshNotifications({ silent: true });
     };
 
-    socket.on('chat:message', handleIncomingChatMessage);
+    socket.on('chat:message', refreshFromSocket);
+    socket.on('notification:new', refreshFromSocket);
+    socket.on('connect', refreshFromSocket);
 
     return () => {
-      socket.off('chat:message', handleIncomingChatMessage);
+      socket.off('chat:message', refreshFromSocket);
+      socket.off('notification:new', refreshFromSocket);
+      socket.off('connect', refreshFromSocket);
     };
   }, [socket, user, refreshNotifications]);
 

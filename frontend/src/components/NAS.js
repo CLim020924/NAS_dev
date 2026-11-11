@@ -497,7 +497,7 @@ const NAS = ({ showWorkspace = true }) => {
     };
     socket.on('files:changed', onFilesChanged);
     socket.on('connect', onFilesChanged);
-    const syncInterval = setInterval(syncFiles, 30000);
+    const syncInterval = setInterval(syncFiles, 5 * 60 * 1000);
     return () => {
       clearInterval(syncInterval);
       clearTimeout(syncTimer);

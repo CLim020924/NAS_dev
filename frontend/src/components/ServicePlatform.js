@@ -156,7 +156,7 @@ function ServicePlatform() {
 
   useEffect(() => {
     refreshPcDevices();
-    const timer = window.setInterval(refreshPcDevices, 15000);
+    const timer = window.setInterval(refreshPcDevices, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [refreshPcDevices]);
 
