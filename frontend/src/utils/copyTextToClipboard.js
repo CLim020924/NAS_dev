@@ -1,7 +1,9 @@
 export const copyTextToClipboard = async (value, options = {}) => {
   const text = String(value ?? '');
-  const clipboard = options.clipboard ?? globalThis.navigator?.clipboard;
-  const documentRef = options.document ?? globalThis.document;
+  const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator;
+  const browserDocument = typeof document === 'undefined' ? undefined : document;
+  const clipboard = options.clipboard ?? browserNavigator?.clipboard;
+  const documentRef = options.document ?? browserDocument;
 
   if (clipboard?.writeText) {
     try {
