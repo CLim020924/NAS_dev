@@ -2360,3 +2360,17 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 마스터 UI 보완: 왼쪽 저장공간 영역의 MASTER 전용 동작을 `마스터 전용 · NAS 루트 (/)`와 `루트 경로 보기`로 명확히 표시했다. 기존 중앙 파일 작업공간 전환을 재사용하며 USER/MANAGER 권한, 개인 quota와 Windows NAS Drive 동기화 root는 확대하지 않았다.
 - 검증: NAS backend 전체 193 tests 중 187 pass·0 fail·6 skip, SSD·mount·resource 집중 20 tests, frontend 정책 5 tests, UI contract 124, production/PDF.js build를 통과했다. 운영 bundle `main.f31d54b2.js` 배포, PM2 save, nginx 설정 검사, 필수 6개 서비스 enabled+active, `msp-backend` online, localhost/public HTTP 200을 확인했다. `/`와 `/mnt/nas`는 `rw,noatime`, journald 사용량은 적용 직후 약 48.8MiB였다.
 - Git/기록: 기능 커밋 `3d9c08d`, 빌드 복구 `b019a75`, 제조사 접두어 모델 매칭 수정 `4cd5f2b`를 `cleanup/git-tracking-2026-06-08`에 push하고 NAS를 fast-forward했다. 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Feature_Index, Relation_Map, Code_Map, Do_Not_Break, Generated_Check를 갱신했다.
+
+## 2026-11-11 NAS 상시 I/O·네트워크 수명 최적화
+
+- 사용자 요청: SSD 수명 관리의 후속으로 NAS·웹·Windows 연동에서 불필요하게 계속 데이터를 주고받거나 디스크에 기록하는 동작을 실제 측정하고 모두 안전하게 줄이도록 요청했다.
+- 변경 전 실측: 30초 `/proc/<pid>/io` 표본에서 불필요한 GNOME Tracker가 `8,896,512B`, backend가 `897,024B`를 기록했다. Tracker는 손상된 SQLite 색인을 반복 복구했고, Windows Agent의 짧은 heartbeat·변경 조회는 `backend/data/linked_devices.json` 전체를 약 30초 단위로 계속 다시 썼다. resource history는 30초마다 JSONL을 추가하고 2분마다 사용자 저장공간 스캔을 수행했다.
+- backend 합쳐 쓰기: `backend/deviceHeartbeatPersistence.js`를 추가해 장치 최신 상태는 메모리에 overlay하고 API·`device:status` 소켓에는 즉시 제공한다. 일반 heartbeat와 transient syncing/error는 최대 5분 단위로 durable flush하고, pause/revoke·관계 변화처럼 재시작 뒤에도 즉시 보존해야 하는 상태만 바로 저장한다. 매 agent 조회마다 `.msp-linked-device.json`을 다시 쓰던 동작도 제거했다.
+- 자원 이력: 시스템 안전 판정은 기존 30초 표본을 유지한다. 디스크 history는 5분, 사용자 저장공간 snapshot은 4개 history마다 약 20분으로 줄였다. NAS mount/SMART 위험 전이는 history 주기를 기다리지 않고 즉시 알림·보존한다.
+- Windows Agent `1.11.7`: 변경 또는 시작 직후 60초는 3초 조회를 유지하고 유휴 상태는 15초로 완화한다. heartbeat 15초, provider health 30초, 로컬 전체 감사 5분, 업데이트 확인 6시간을 사용한다. 원격에서 삭제된 로컬 항목을 Windows가 잠금 등으로 휴지통 이동하지 못하면 강제 삭제하지 않고 상태 파일에 남겨 5분 backoff로 재시도한다. 새 Agent와 설치 EXE를 다시 빌드하고 self-test를 통과시켰다.
+- 웹 이벤트 우선: 파일 목록·알림·PC 장치 상태는 기존 Socket.IO 이벤트와 reconnect refresh를 즉시성의 기준으로 사용한다. 장애 복구용 polling만 파일·알림·PC 상태 5분으로 완화했다. 계정 localStorage는 `storage`/`nas:user-updated` 이벤트 우선, 30초 fallback이다. 실제 실행 중인 회의·문서 작업의 조건부 polling은 변경하지 않았다.
+- OS 서비스: NAS에 필요 없는 `tracker-miner-fs-3.service`와 `tracker-extract-3.service`를 사용자 unit에서 mask하고 중지했다. Docker JSON 로그는 daily/10MiB/3회, root PM2 로그는 daily/5MiB/3회 `copytruncate` 회전 정책을 추가했다. `logrotate -d`와 timer enabled+active를 확인했다. 로그를 끄거나 OnlyOffice 컨테이너, nginx, Cloudflare/DNS를 재구성하지 않았다.
+- 검증: backend 전체 205 tests는 197 pass·0 fail·8 환경성 skip이고 최종 heartbeat/device 집중 3개도 통과했다. UI contract 124 source, production/PDF.js build와 Agent self-test가 통과했다. 운영 NAS를 fast-forward하고 frontend를 백업 후 배포했으며 PM2 save, 필수 6서비스 active, localhost/public HTTP 200을 확인했다.
+- 변경 후 실측: 30초 표본에서 상시 프로세스 `write_bytes`는 0이었고 `linked_devices.json`과 당일 resource history의 mtime·size가 변하지 않았다. Crucial 데이터 SSD는 20초 표본에서 쓰기 0이었다. GIGABYTE OS SSD는 커널·ext4 housekeeping을 포함해 20초 1,672 sectors(약 856KiB)를 기록했으므로 “완전 무쓰기”로 과장하지 않는다.
+- 유지 경계: 실시간성을 되살린다는 이유로 짧은 polling과 전체 JSON 저장을 함께 복구하지 않는다. 이벤트가 즉시성, 긴 polling이 복구 안전망이다. 삭제 실패는 데이터 보호 때문에 강제 삭제하지 않는다. Tracker는 NAS 기능에 필요하지 않으므로 다시 활성화하지 않는다. 구형 Windows Agent는 배포된 `1.11.7` 자동 업데이트 경로를 사용한다.
+- Git/기록: 코드·바이너리 커밋 `25e0060`, `5ed7cd3`, `52138dc`, `3c2d228`, `d237cc6`을 원격과 운영 NAS에 반영했다. 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, Data_Files, Generated_Check를 갱신하고 수식 오류·의심 인코딩 0건과 변경 행 렌더를 확인했다.
