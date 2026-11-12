@@ -253,6 +253,7 @@ const PERSISTENT_AUTH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSION_DISCONNECT_LOGOUT_MS = config.SESSION_DISCONNECT_LOGOUT_MS;
 const { DAY_MS, classifySessions } = require('./authSessionPolicy');
 const { verifySignedLogoutToken } = require('./authLogoutToken');
+const { buildPublicAdminApprovalSignup } = require('./signupRequestPolicy');
 const SHARED_COOKIE_DOMAIN = config.COOKIE_DOMAIN;
 
 const isHttpsRequest = (req) =>
@@ -1128,32 +1129,26 @@ app.post('/api/login', (req, res) => {
 
 // [회원가입 요청]
 app.post('/api/signup-request', (req, res) => {
-  const { id, password, passwordConfirm, displayName, nickname, realName, accountType, email, inviteToken, organizationName } = req.body;
+  const { id, password, passwordConfirm, inviteToken } = req.body;
   const loginId = (id || '').trim().toLowerCase();
-  const safeNickname = normalizeNickname(nickname);
+  const safeNickname = normalizeNickname(loginId);
 
   if (!loginId) return res.status(400).json({ error: '아이디가 필요합니다.' });
   if (!password) return res.status(400).json({ error: '비밀번호가 필요합니다.' });
   if (password.length < 10) return res.status(400).json({ error: '비밀번호는 최소 10자 이상이어야 합니다.' });
   if (passwordConfirm !== undefined && password !== passwordConfirm) return res.status(400).json({ error: '비밀번호 확인이 일치하지 않습니다.' });
-  if (safeNickname.length < 2) return res.status(400).json({ error: '닉네임은 2자 이상 입력해주세요.' });
 
   if (approvedUsers.find(u => getUserLoginId(u) === loginId) || signupRequests.find(r => getUserLoginId(r) === loginId)) {
     return res.status(409).json({ error: '이미 사용 중인 아이디입니다.', field: 'id' });
   }
   if (isNicknameTaken(safeNickname)) {
-    return res.status(409).json({ error: '이미 사용 중인 닉네임입니다.', field: 'nickname' });
+    return res.status(409).json({ error: '이 아이디는 표시 이름으로 이미 사용 중입니다.', field: 'id' });
   }
 
   try {
     organizationDirectory.assertSignupAddressAvailable(loginId);
   } catch (err) {
     return res.status(err.status || 400).json({ error: err.message, code: err.code, field: err.field || 'id' });
-  }
-
-  const normalizedContactEmail = String(email || '').trim().toLowerCase();
-  if (normalizedContactEmail && [...approvedUsers, ...signupRequests].some((user) => String(user.contactEmail || '').trim().toLowerCase() === normalizedContactEmail)) {
-    return res.status(409).json({ error: '이미 가입 또는 승인 대기 중인 이메일입니다.', field: 'email' });
   }
 
   const capacity = getStorageCapacitySummary(approvedUsers, signupRequests);
@@ -1166,29 +1161,21 @@ app.post('/api/signup-request', (req, res) => {
     });
   }
 
-  let organizationSignup;
-  try {
-    organizationSignup = organizationDirectory.validateSignup({ accountType, email, inviteToken });
-  } catch (err) {
-    return res.status(err.status || 400).json({ error: err.message, code: err.code, field: err.field });
+  let organizationSignup = {};
+  if (inviteToken) {
+    try {
+      organizationSignup = organizationDirectory.validateSignupInvitation(inviteToken);
+    } catch (err) {
+      return res.status(err.status || 400).json({ error: err.message, code: err.code, field: err.field || 'inviteToken' });
+    }
   }
 
-  const signupRequest = normalizeSignupRequest({
-    id: loginId,
+  const signupRequest = normalizeSignupRequest(buildPublicAdminApprovalSignup({
     loginId,
     password,
-    displayName: safeNickname,
-    nickname: safeNickname,
-    profile: realName ? { realName } : {},
-    accountType: organizationSignup.accountType,
-    contactEmail: organizationSignup.contactEmail,
-    emailVerified: organizationSignup.emailVerified,
-    invitationId: organizationSignup.invitationId,
-    organizationName: String(organizationName || '').trim().slice(0, 120),
-    organizationProfile: organizationSignup.organizationProfile,
-    date: new Date().toISOString().split('T')[0],
-    requestedAt: nowIso()
-  });
+    requestedAt: nowIso(),
+    organizationSignup
+  }));
   try {
     organizationDirectory.reserveSignupAddress(loginId, signupRequest.userUid);
     signupRequests.push(signupRequest);

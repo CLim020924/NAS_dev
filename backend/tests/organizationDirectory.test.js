@@ -43,6 +43,14 @@ try {
     inviteToken: internalInvite.token
   }), /초대 코드/);
 
+  const simpleFormInvite = directory.createInvitation({
+    accountType: 'EXTERNAL',
+    email: 'simple-form@example.net'
+  }, 'manager-user', { isMaster: false });
+  const simpleFormSignup = directory.validateSignupInvitation(simpleFormInvite.token);
+  assert.strictEqual(simpleFormSignup.accountType, 'EXTERNAL');
+  assert.strictEqual(simpleFormSignup.contactEmail, 'simple-form@example.net');
+
   assert.throws(() => directory.createInvitation({
     accountType: 'INTERNAL',
     email: 'other@example.com'

@@ -70,6 +70,11 @@ requireText('src/authSessionInterceptor.js', "fetch('/api/logout'", 'automatic b
 requireText('src/authSessionInterceptor.js', 'keepalive: true', 'automatic logout revocation must survive navigation to the login page');
 requireText('src/components/TopBar.js', "axios.post('/api/logout'", 'explicit top-bar logout must revoke the matching server session');
 requireText('src/components/Header.js', "axios.post('/api/logout'", 'legacy header logout must not clear only local state');
+requireText('src/components/Signup.js', 'label="아이디"', 'public signup must keep the simple login-id field');
+requireText('src/components/Signup.js', 'label="비밀번호"', 'public signup must keep the password field');
+requireText('src/components/Signup.js', 'label="비밀번호 확인"', 'public signup must confirm the password before requesting approval');
+requireText('src/components/Signup.js', '관리자에게 가입 요청', 'public signup must remain an approval request rather than immediate account creation');
+requireText('src/components/Signup.js', "await axios.post('/api/signup-request'", 'public signup must submit to the pending approval endpoint');
 requireText('src/components/ServerSettingsPanel.js', 'SSD 수명·건강 관리', 'manager settings must expose SSD health without confusing power-on time with lifetime wear');
 requireText('src/components/ServerSettingsPanel.js', '파일 작업이 안전하게 차단되었습니다', 'missing NAS mounts must be explained as a fail-closed storage state');
 const topBar = read('src/components/TopBar.js');

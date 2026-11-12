@@ -239,6 +239,15 @@ const createOrganizationDirectory = ({ dataDir }) => {
       }
     };
   };
+  const validateSignupInvitation = (inviteToken) => {
+    const invite = findInvitation(inviteToken);
+    if (!invite) throw Object.assign(new Error('초대 코드가 없거나 만료되었습니다.'), { status: 403, field: 'inviteToken' });
+    return validateSignup({
+      accountType: invite.accountType,
+      email: invite.email,
+      inviteToken
+    });
+  };
   const createInvitation = (input, actor, { isMaster = false } = {}) => {
     const accountType = normalizeAccountType(input.accountType);
     if (!['INTERNAL', 'EXTERNAL'].includes(accountType)) throw Object.assign(new Error('지원하지 않는 초대 유형입니다.'), { status: 400 });
@@ -578,6 +587,7 @@ const createOrganizationDirectory = ({ dataDir }) => {
     getPublicPolicy: publicPolicy,
     getAdminState: adminState,
     validateSignup,
+    validateSignupInvitation,
     createInvitation,
     revokeInvitation,
     updatePolicy,
