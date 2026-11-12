@@ -2431,3 +2431,19 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 운영 배포: 기능 commit `e84f955`를 원격과 NAS에 반영했다. backend dependency를 `npm ci --omit=dev`로 설치하고 PM2를 재시작·저장했다. 정적 파일은 `/home/limchanyoung/deploy-backups/frontend-pre-e84f955-20261112T133509`에 백업 후 `main.572a734e.js`를 배포했다. 필수 6서비스 active, `msp-backend` online, localhost/public HTTP 200과 build/live main 일치를 확인했다.
 - 유지 경계: 기존 항목 자동 덮어쓰기를 추가하지 않는다. 압축 해제 staging을 개인 NAS/PC 동기화 경로로 옮기지 않는다. quota·경로·symlink·압축률 방어를 UI 편의를 이유로 완화하지 않는다. 현재 지원 형식은 ZIP이며 암호 ZIP, RAR, 7z를 지원한다고 표시하지 않는다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
 - 메모리 기록: 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Generated_Check를 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다.
+
+## 2026-11-12 NAS 일반 폴더의 서버 내부 ZIP 생성 운영 적용
+
+- 사용자 요청: 일반 폴더도 NAS 파일 관리자 안에서 ZIP 파일로 만들 수 있게 한다. 기존 `폴더 다운로드`와 달리 결과 ZIP을 사용자의 NAS 저장공간에 영구 파일로 남긴다.
+- 사용자 흐름: 일반 폴더 우클릭 메뉴에 `ZIP 파일로 압축…`을 추가했다. 기본 ZIP 이름은 `폴더명.zip`, 기본 저장 위치는 원본 폴더의 부모다. 사용자는 이름을 바꾸고 기존 `NasItemPickerDialog`로 다른 NAS 폴더를 선택할 수 있다. `.zip`을 생략하면 서버가 붙이며 원본 보존과 무덮어쓰기 원칙을 다이얼로그에 명시한다. linked-device 특수 항목은 일반 폴더와 구분해 이 메뉴를 노출하지 않는다.
+- API: 인증된 `POST /api/file/create-zip`을 추가했다. body는 `sourcePath`, `destinationPath`(생략 시 원본 부모), `fileName`이다. 성공 응답은 source/destination, 최종 파일명, 항목·파일·폴더 수, 원본 byte와 ZIP byte를 반환한다. 같은 이름이 있으면 `409 ZIP_DESTINATION_EXISTS`로 중단하고 덮어쓰지 않는다.
+- 스트리밍·형식: `backend/zipCreationService.js`가 디렉터리를 순회하고 archiver zlib level 4로 파일을 stream 압축한다. ZIP 내부 root는 원본 폴더 자체가 아니라 그 내용이다. 따라서 기본 `폴더명.zip`을 기존 ZIP 해제의 기본 `폴더명` 새 폴더에 풀어도 `폴더명/폴더명/...` 이중 중첩이 생기지 않는다. 한글 경로와 빈 폴더를 보존하며 완전히 빈 폴더도 empty ZIP으로 생성·해제할 수 있게 했다.
+- 보안·계정 경계: source와 destination은 `getValidatedPath`와 `assertRealPathInside`로 현재 계정 access base에 고정한다. 심볼릭 링크는 따라가지 않고 전체 작업을 거절해 계정 밖 데이터 유출을 막는다. 일반 파일·폴더가 아닌 항목과 50,000개 초과 항목도 거절한다. 원본 폴더는 읽기만 하며 이동·수정·삭제하지 않는다.
+- quota·동기화 경계: 완성 전 ZIP은 개인 NAS/PC 동기화 경로가 아닌 `/mnt/nas/.agent_incoming/web/zip-create-*`에 둔다. 실제 생성된 ZIP 크기로 quota를 확인한 뒤 `linkSync`의 원자적 `EEXIST` 경계로 최종 이름을 만들고 staging link를 제거한다. 이 방식은 마지막 순간의 동일 이름 경쟁에서도 기존 파일을 덮어쓰지 않으며 PC 동기화는 완성된 ZIP만 본다. 실패하면 staging만 정리한다.
+- 활동·실시간 반영: 성공 시 `archive-created` mutation 활동을 기록하고 기존 `files:changed` 경로를 통해 웹과 PC 동기화 갱신을 유도한다. quota cache에는 실제 ZIP byte만 성공 뒤 더하고 cache 갱신 실패 시 정확 재계산으로 전환한다.
+- 자동 검증: 로컬 backend 전체 206 tests는 197 pass·0 fail·9 환경성 skip, NAS Linux는 200 pass·0 fail·6 환경성 skip이다. 한글 파일/중첩/빈 폴더 생성→검사→해제 왕복, empty ZIP, symlink 거부 테스트를 추가했다. 로컬·NAS production/PDF.js build와 UI contract 132 source가 통과했다.
+- 실제 API E2E: 공개 사이트에서 합성 한글 폴더와 하위 폴더를 만들고 ZIP 생성→기존 해제 API로 다시 풀어 이름 보존을 확인했다. `.zip` 자동 부착, 동일 이름 재생성 409, 영문·한글 경로 왕복을 검증했다. 모든 시험 폴더는 휴지통 이동 후 영구 삭제했다.
+- 실브라우저: 운영 Chrome NAS 탭에서 실제 일반 폴더 `pcc`를 우클릭해 `ZIP 파일로 압축…` 메뉴를 확인했다. 설정창의 원본 `pcc`, 기본 이름 `pcc.zip`, 기본 위치 `/`, 위치 선택 버튼, 원본 보존·무덮어쓰기 안내와 취소 동작을 확인했다. 실제 사용자 폴더는 압축하지 않았다.
+- 운영 배포: 기능 commit `5e4ac1f`를 원격과 NAS에 반영했다. 서버 전체 테스트와 frontend build 뒤 기존 정적 배포본을 `/home/limchanyoung/deploy-backups/frontend-pre-5e4ac1f-*`에 백업하고 `/var/www/html`을 교체했다. PM2 재시작·save, 필수 6서비스 enabled+active, `msp-backend` online, localhost/public HTTP 200을 확인했다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+- 유지 경계: 미완성 ZIP을 개인 동기화 경로에 만들지 않는다. 최종 파일 생성은 기존 항목을 원자적으로 덮어쓰지 않는 경계를 유지한다. symlink 방어, 계정 경로 확인, 실제 ZIP 크기 quota 검사와 실패 staging 정리를 제거하지 않는다. 원본 폴더 내용 root 형식을 이중 폴더가 생기는 형식으로 바꾸지 않는다.
+- 메모리 기록: 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Generated_Check를 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다.
