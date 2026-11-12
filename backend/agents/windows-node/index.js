@@ -24,7 +24,7 @@ const {
 } = require('./project-path-portability');
 
 const SERVER_BASE = 'https://filemanager-nas.com';
-const AGENT_VERSION = '1.11.7';
+const AGENT_VERSION = '1.11.8';
 const PC_CONNECT_NEXT_PATH = '/platform?pcConnect=1';
 const MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024;
@@ -36,6 +36,7 @@ const ACTIVE_PULL_WINDOW_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const LOCAL_AUDIT_INTERVAL_MS = 5 * 60 * 1000;
 const PROVIDER_HEALTH_INTERVAL_MS = 30_000;
+const EXPLORER_VIEW_REFRESH_INTERVAL_MS = 60_000;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const LOCAL_DELETE_RETRY_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -45,7 +46,7 @@ const CONFIG_FILE = path.join(STATE_DIR, 'agent-config.json');
 const LEGACY_TOKEN_FILE = path.join(STATE_DIR, 'agent-token.dpapi');
 const PROVIDER_ASSET = path.join(__dirname, 'assets', 'NAS-Drive-Provider.exe');
 const ICON_ASSET = path.join(__dirname, 'assets', 'nas-drive.ico');
-const PROVIDER_VERSION = '1.4.3';
+const PROVIDER_VERSION = '1.4.4';
 const PERSONAL_DRIVE_DESKTOP_INI_MARKER = '; NAS Drive managed icon v1';
 const PERSONAL_DRIVE_WEB_SHORTCUT_MARKER = '; NAS Drive managed web shortcut v1';
 const PERSONAL_DRIVE_WEB_SHORTCUT_NAME = 'NAS Drive 웹 파일관리.lnk';
@@ -78,6 +79,7 @@ const explorerViewRefreshAt = new Map();
 const rootSyncQueues = new Map();
 const rootLocalAuditAt = new Map();
 const heartbeatState = new Map();
+let agentHealthSignature = '';
 const BRANDED_INSTALL_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'Programs', 'NAS Drive');
 let INSTALLED_EXE = path.join(DEFAULT_INSTALL_DIR, 'NAS-Sync-Agent.exe');
 let INSTALLED_PROVIDER_EXE = path.join(DEFAULT_INSTALL_DIR, 'NAS-Drive-Provider.exe');
@@ -539,27 +541,6 @@ public static class NasDriveShellRefresh {
 [NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, $root, $null)
 [NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, (Join-Path $root 'desktop.ini'), $null)
 [NasDriveShellRefresh]::SHChangeNotify(0x00001000, 0x0005, $parent, $null)
-[NasDriveShellRefresh]::SHChangeNotify(0x08000000, 0x0000, $null, $null)
-$iconRefresh = Join-Path $env:WINDIR 'System32\\ie4uinit.exe'
-if (Test-Path -LiteralPath $iconRefresh) {
-  Start-Process -FilePath $iconRefresh -ArgumentList '-show' -WindowStyle Hidden -Wait
-}
-# Explorer updates its namespace-icon cache asynchronously. Refreshing the
-# open window immediately can therefore display the previous state for one
-# whole transition. Give the cache a short settling period, then notify again.
-Start-Sleep -Milliseconds 1400
-[NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, $root, $null)
-[NasDriveShellRefresh]::SHChangeNotify(0x00002000, 0x0005, (Join-Path $root 'desktop.ini'), $null)
-[NasDriveShellRefresh]::SHChangeNotify(0x00001000, 0x0005, $parent, $null)
-[NasDriveShellRefresh]::SHChangeNotify(0x08000000, 0x0000, $null, $null)
-$shell = New-Object -ComObject Shell.Application
-foreach ($window in @($shell.Windows())) {
-  try {
-    if ([IO.Path]::GetFullPath($window.Document.Folder.Self.Path) -eq [IO.Path]::GetFullPath($root)) {
-      $window.Refresh()
-    }
-  } catch {}
-}
 `;
   const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-NonInteractive', '-Command', script], {
     windowsHide: true,
@@ -1094,13 +1075,24 @@ function isLogoutAlreadyRevokedError(error) {
 }
 
 function setAgentHealth(state, message = '', extra = {}) {
-  writeJson(HEALTH_FILE, {
+  const next = {
     state,
     message: String(message || '').slice(0, 500),
     needsRelink: state === 'needs-relink',
-    updatedAt: new Date().toISOString(),
     ...extra
-  });
+  };
+  const signature = JSON.stringify(next);
+  if (!agentHealthSignature) {
+    const existing = readJson(HEALTH_FILE, null);
+    if (existing) {
+      const { updatedAt, ...comparable } = existing;
+      if (JSON.stringify(comparable) === signature) agentHealthSignature = signature;
+    }
+  }
+  if (agentHealthSignature === signature) return false;
+  writeJson(HEALTH_FILE, { ...next, updatedAt: new Date().toISOString() });
+  agentHealthSignature = signature;
+  return true;
 }
 
 function setExplorerStatus(profile, state, message = '') {
@@ -1111,12 +1103,13 @@ function setExplorerStatus(profile, state, message = '') {
   for (const root of getRoots(profile).filter(item => item.kind === 'personal-drive' && item.localPath)) {
     const cacheKey = `${profile.accountKey}:${root.syncRootId}`;
     const now = Date.now();
-    const shouldRefreshView = now - Number(explorerViewRefreshAt.get(cacheKey) || 0) >= 15_000;
+    const shouldRefreshView = now - Number(explorerViewRefreshAt.get(cacheKey) || 0) >= EXPLORER_VIEW_REFRESH_INTERVAL_MS;
     const stateChanged = explorerStatusCache.get(cacheKey) !== state;
     // Write desktop.ini before the provider emits the Shell refresh. Otherwise
     // an already-open Explorer window can refresh the registry icon first and
     // keep the previous folder icon cached until the window is reopened.
     const iconChanged = setPersonalDriveFolderIcon(root.localPath, true, state, message);
+    let providerUpdated = false;
     if (stateChanged) {
       const result = spawnSync(INSTALLED_PROVIDER_EXE, [
         'set-status',
@@ -1126,10 +1119,13 @@ function setExplorerStatus(profile, state, message = '') {
         '--state', state,
         '--message', String(message || '').replace(/[\r\n]+/g, ' ').slice(0, 180)
       ], { encoding: 'utf8', windowsHide: true });
-      if (result.status === 0) explorerStatusCache.set(cacheKey, state);
+      if (result.status === 0) {
+        explorerStatusCache.set(cacheKey, state);
+        providerUpdated = true;
+      }
       else log('[explorer status failed]', state, result.stderr || result.stdout || result.status);
     }
-    if (stateChanged || iconChanged) refreshPersonalDriveShell(root.localPath);
+    if (iconChanged && !providerUpdated) refreshPersonalDriveShell(root.localPath);
     if (shouldRefreshView) {
       explorerViewRefreshAt.set(cacheKey, now);
       ensurePersonalDriveProvider(profile, root)
@@ -2058,17 +2054,35 @@ function requestJson(method, urlPath, payload, agentToken, timeoutMs = REQUEST_T
   return request(method, urlPath, { headers, body, timeoutMs });
 }
 
-function sendHeartbeat(profile, syncState = 'idle', lastError = '') {
-  return requestJson('POST', '/api/devices/agent/heartbeat', {
+async function sendHeartbeat(profile, syncState = 'idle', lastError = '') {
+  const result = await requestJson('POST', '/api/devices/agent/heartbeat', {
     deviceId: profile.deviceId,
     syncState,
     lastError,
+    agentVersion: AGENT_VERSION,
+    credentialProtocol: 'rotating-v1',
     clientStateRevision: Number(profile._serverStateRevision || 0)
-  }, profile.agentToken).then((result) => {
-    const revision = Number(result?.device?.stateRevision || 0);
-    if (Number.isFinite(revision) && revision > 0) profile._serverStateRevision = revision;
-    return result;
-  });
+  }, profile.agentToken);
+  const revision = Number(result?.device?.stateRevision || 0);
+  if (Number.isFinite(revision) && revision > 0) profile._serverStateRevision = revision;
+  const rotatedToken = String(result?.credential?.agentToken || '');
+  if (rotatedToken) {
+    if (!/^agt_[a-f0-9]{64}$/.test(rotatedToken)) throw new Error('서버가 잘못된 장치 인증 교체 값을 반환했습니다.');
+    protectAgentToken(rotatedToken, profile.accountKey);
+    profile.agentToken = rotatedToken;
+    profile._credentialExpiresAt = String(result?.credential?.expiresAt || '');
+    for (const root of getRoots(profile).filter(item => item.kind === 'personal-drive' && item.localPath)) {
+      try {
+        stopPersonalDriveProvider(profile, root);
+        await ensurePersonalDriveProvider(profile, root);
+      } catch (error) {
+        log('[provider credential reload deferred]', safeAccountKey(profile.accountKey), error.message);
+      }
+    }
+  } else if (result?.credentialExpiresAt) {
+    profile._credentialExpiresAt = String(result.credentialExpiresAt);
+  }
+  return { ...result, credential: null };
 }
 
 function heartbeatKey(profile = {}) {
@@ -2083,7 +2097,7 @@ async function sendHeartbeatIfDue(profile, syncState = 'idle', lastError = '', {
     return previous.response || { commands: { paused: !!profile._paused } };
   }
   const response = await sendHeartbeat(profile, syncState, lastError);
-  heartbeatState.set(key, { signature, sentAt: Date.now(), response });
+  heartbeatState.set(key, { signature, sentAt: Date.now(), response: { ...response, credential: null } });
   return response;
 }
 
@@ -3067,6 +3081,8 @@ async function register(pairingToken, clientDeviceKey, deviceName, selectedFolde
     clientDeviceKey,
     deviceName,
     osType: 'windows',
+    agentVersion: AGENT_VERSION,
+    credentialProtocol: 'rotating-v1',
     desktopPath: selectedFolder,
     syncRootPath: selectedFolder,
     syncRootSizeBytes: summary.totalBytes,

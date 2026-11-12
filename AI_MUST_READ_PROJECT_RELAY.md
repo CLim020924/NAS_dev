@@ -1,5 +1,17 @@
 # AI 필독 — NAS 프로젝트 작업 인계 및 시작 규칙
 
+## 2026-11-13 NAS Drive 바탕화면 깜빡임·기기 토큰 수명 보완
+
+- 사용자 요청: Windows NAS Drive 실시간 연동 중 바탕화면이 계속 깜빡이는 문제를 바로잡고, 장치 토큰을 무기한 방치하지 않도록 정확한 수명·회전·로그아웃 경계를 구현한다.
+- 직접 원인: Agent와 CFAPI Provider가 상태 변경마다 `SHCNE_ASSOCCHANGED` 전역 브로드캐스트, `ie4uinit.exe -show`, 중복 디렉터리 알림, 열린 Explorer의 `Refresh()`를 실행했다. `configure-view`도 15초마다 창을 강제 새로고침했다. 이는 파일 상태 표시보다 넓은 Windows 셸·Desktop을 반복 재로딩해 깜빡임을 만들 수 있다. `agent-health.json`도 동일 상태를 3초마다 다시 썼다.
+- 셸·쓰기 수정: Agent 1.11.8과 Provider 1.4.4에서 전역 `SHCNE_ASSOCCHANGED`, `ie4uinit`, 중복 지연 refresh와 Explorer `window.Refresh()`를 제거했다. SyncRoot·`desktop.ini`·부모 폴더만 표적 갱신하고 JS와 Provider의 중복 알림을 피한다. Explorer view 재설정 주기는 60초로 낮추고 health 파일은 상태·메시지·계정이 실제 달라질 때만 쓴다. namespace icon registry도 값이 달라질 때만 기록한다.
+- 토큰 경계: 기존 서버 SHA-256 hash-only 저장과 Windows CurrentUser DPAPI는 유지한다. 새 `rotating-v1` Agent가 capability를 알리면 현재 토큰은 90일 만료, 발급 30일 뒤 자동 회전, 이전 토큰은 7일 grace를 적용한다. 서버 `linked_devices.json`에는 current/previous hash와 발급·만료 시각만 저장한다. 새 raw token은 HTTPS heartbeat의 `private, no-store` 응답으로 한 번 전달하고, Agent가 DPAPI 파일에 원자 저장한 뒤에만 메모리 값을 바꾸고 Provider를 재시작한다. 로그아웃·기기 해제는 current/previous token 필드를 모두 제거한다.
+- 호환성: 구형 Agent는 capability를 보고하기 전까지 갑자기 만료시키지 않는다. 1.11.8로 업데이트된 뒤 수명 메타데이터를 초기화하고 이후 회전한다. 새 토큰 저장 실패 때 기존 토큰과 서버의 7일 grace가 남아 연결 단절을 피한다. raw token을 로그·프로필·workbook에 기록하지 않는다.
+- 검증: Agent/Provider/Setup self-test와 재빌드, Node 구문·diff 검사가 통과했다. 로컬 backend test 파일 61/61이 통과했고 환경 의존 항목만 skip됐다. 최종 `deviceAgentTokenLifecycle`, `windowsAgentShellRefresh`, `deviceSyncSecurity` 집중 회귀검사도 통과했다. 생성 버전은 Agent/Setup 1.11.8, Provider 1.4.4다.
+- 현재 PC 경계: 현재 Windows `user` 프로필에는 NAS Drive 프로세스, SyncRoot, 설정, DPAPI token, HKCU Run 항목이 없어 사용자가 본 기존 설치의 깜빡임을 이 프로필에서 실재현할 수 없었다. 소스의 전역 refresh 결함은 독립적으로 확인·수정했다.
+- 운영 대기: NAS `100.80.39.112`는 Tailscale offline, `ssh nas` timeout, 공개 `filemanager-nas.com` HTTP 530 상태여서 운영 checkout·PM2·다운로드 설치파일과 실제 PC E2E에는 아직 반영하지 않았다. `PENDING-NAS-DRIVE-1118-DEPLOY-20261113`을 보류 원장에 남겼다. NAS가 켜지면 fast-forward, backend restart/save, 기존·신규 설치 업데이트, 재부팅·tray·Explorer 상태열·양방향 동기화·회전 모의·logout/revoke를 확인하고 같은 보류 행을 완료로 갱신한다.
+- 프로젝트 메모리: `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Data_Files, Generated_Check, 보류 작업을 갱신했다. artifact-tool 재열기에서 수식 오류 0건, 새 한국어 깨짐 없음, 변경 범위 렌더를 확인했다. 기존 모지바케 검색 8건은 과거 인코딩 장애 설명에 이미 존재하던 문자열이다.
+
 ## 2026-09-07 PDF 주석·영역 텍스트 복사 운영 배포
 
 - 사용자 요청: 창 전환 버튼이 한 번 나타난 뒤 닫히는 문제를 고친 상태로 유지하면서, PDF 리더에 형광펜·자유 펜·텍스트 상자·영역 드래그 텍스트 복사와 필요한 저장·확대 기능을 함께 구현한다.

@@ -170,7 +170,7 @@ internal static class Program
                            StorageProviderInSyncPolicy.FileLastWriteTime |
                            StorageProviderInSyncPolicy.DirectoryCreationTime |
                            StorageProviderInSyncPolicy.DirectoryLastWriteTime,
-            Version = "1.4.3",
+            Version = "1.4.4",
             ShowSiblingsAsGroup = false,
             HardlinkPolicy = StorageProviderHardlinkPolicy.None,
             AllowPinning = true,
@@ -305,7 +305,6 @@ internal static class Program
                     {
                         Marshal.Release(unknownPointer);
                     }
-                    windowType.InvokeMember("Refresh", BindingFlags.InvokeMethod, null, window, null);
                     configured++;
                 }
                 catch (COMException ex)
@@ -814,7 +813,6 @@ internal static class Program
         UpdateSyncRootNamespaceIcon(account, state);
 
         SHChangeNotify(ShcneUpdateDir, ShcnfPathW, root, IntPtr.Zero);
-        SHChangeNotify(ShcneAssocChanged, ShcnfIdList, null, IntPtr.Zero);
         try { ConfigureExplorerViewCore(root); } catch { }
         return 0;
     }
@@ -840,7 +838,12 @@ internal static class Program
             if (string.IsNullOrWhiteSpace(namespaceClsid)) return;
             using var iconKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(
                 $@"Software\Classes\CLSID\{namespaceClsid}\DefaultIcon");
-            iconKey.SetValue(null, $"{StatusIconPath(state)},0", Microsoft.Win32.RegistryValueKind.ExpandString);
+            var nextIcon = $"{StatusIconPath(state)},0";
+            var currentIcon = Convert.ToString(iconKey.GetValue(null, string.Empty, Microsoft.Win32.RegistryValueOptions.DoNotExpandEnvironmentNames));
+            if (!string.Equals(currentIcon, nextIcon, StringComparison.OrdinalIgnoreCase))
+            {
+                iconKey.SetValue(null, nextIcon, Microsoft.Win32.RegistryValueKind.ExpandString);
+            }
         }
         catch (Exception ex)
         {

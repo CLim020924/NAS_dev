@@ -20,6 +20,14 @@ const {
   hasConcurrentFileChange,
   buildConflictFileName
 } = require('./deviceSyncSecurity');
+const {
+  authenticateAgentTokenHash,
+  shouldRotateAgentToken,
+  initializeLegacyAgentTokenMetadata,
+  rotateAgentTokenRecord,
+  clearAgentTokenRecord,
+  tokenMetadataPatch
+} = require('./deviceAgentTokenLifecycle');
 const { createDeviceHeartbeatPersistence } = require('./deviceHeartbeatPersistence');
 const {
   normalizeOfficePath,
@@ -157,7 +165,7 @@ const AGENT_CHUNK_ROOT = path.join(AGENT_INCOMING_ROOT, 'chunks');
 const WEB_INCOMING_ROOT = path.join(AGENT_INCOMING_ROOT, 'web');
 const AGENT_MAX_FILE_BYTES = 250 * 1024 * 1024 * 1024;
 const AGENT_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-const WINDOWS_AGENT_VERSION = '1.11.7';
+const WINDOWS_AGENT_VERSION = '1.11.8';
 const DEVICE_OFFLINE_AFTER_MS = 30 * 1000;
 const DEVICE_CONNECT_GRACE_MS = 90 * 1000;
 const linkedDeviceHeartbeats = createDeviceHeartbeatPersistence();
@@ -362,15 +370,17 @@ const removeLinkedDeviceRecord = (deviceId) => {
   writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
 };
 
-const getAgentDeviceByToken = (deviceId, agentToken) => {
+const getAgentDeviceAuth = (deviceId, agentToken, now = Date.now()) => {
   const devices = readJsonArrayFile(LINKED_DEVICES_FILE);
   const device = devices.find(d => d.deviceId === deviceId);
 
   if (!device || device.status === 'revoked' || device.revokedAt || !device.agentTokenHash) return null;
-  if (!secureHashEquals(device.agentTokenHash, hashAgentToken(agentToken))) return null;
-
-  return device;
+  const presentedHash = hashAgentToken(agentToken);
+  const auth = authenticateAgentTokenHash({ device, presentedHash, secureEquals: secureHashEquals, now });
+  return auth ? { device, auth, presentedHash } : null;
 };
+
+const getAgentDeviceByToken = (deviceId, agentToken) => getAgentDeviceAuth(deviceId, agentToken)?.device || null;
 
 router.post('/devices/agent/web-session', express.json(), (req, res) => {
   try {
@@ -3901,11 +3911,10 @@ router.delete('/devices/:deviceId', verifyToken, (req, res) => {
     if (idx < 0) return res.status(404).json({ error: '등록 장치를 찾을 수 없습니다.' });
 
     const revokedAt = new Date().toISOString();
-    devices[idx] = advanceDeviceState(devices[idx], {
+    devices[idx] = clearAgentTokenRecord(advanceDeviceState(devices[idx], {
       status: 'revoked',
-      revokedAt,
-      agentTokenHash: null
-    }, revokedAt);
+      revokedAt
+    }, revokedAt));
     writeJsonArrayFile(LINKED_DEVICES_FILE, devices);
     try { writeLinkedDeviceMeta(devices[idx]); } catch (err) {}
     emitDeviceStatus(req, devices[idx]);
@@ -4882,13 +4891,12 @@ router.post('/devices/agent/logout', express.json({ limit: '8kb' }), (req, res) 
     if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
 
     const revokedAt = new Date().toISOString();
-    const revoked = advanceDeviceState(device, {
+    const revoked = clearAgentTokenRecord(advanceDeviceState(device, {
       status: 'revoked',
       revokedAt,
-      agentTokenHash: null,
       syncState: 'signed-out',
       lastError: ''
-    }, revokedAt);
+    }, revokedAt));
     updateLinkedDeviceRecord(revoked);
     try { writeLinkedDeviceMeta(revoked); } catch {}
     emitDeviceStatus(req, revoked);
@@ -5130,6 +5138,7 @@ router.post('/devices/agent/register', (req, res) => {
 
     const agentToken = createAgentToken();
     const now = new Date().toISOString();
+    const supportsTokenRotation = req.body?.credentialProtocol === 'rotating-v1';
 
     device = {
       ...device,
@@ -5144,6 +5153,12 @@ router.post('/devices/agent/register', (req, res) => {
       syncRootFolderCount: Number(req.body?.syncRootFolderCount || device.syncRootFolderCount || 0),
       clientDeviceKey: clientDeviceKey || device.clientDeviceKey || '',
       agentTokenHash: hashAgentToken(agentToken),
+      ...(supportsTokenRotation ? tokenMetadataPatch(Date.now()) : {
+        agentTokenIssuedAt: null,
+        agentTokenExpiresAt: null
+      }),
+      previousAgentTokenHash: null,
+      previousAgentTokenExpiresAt: null,
       status: 'connected',
       revokedAt: null,
       syncState: 'connecting',
@@ -5340,21 +5355,53 @@ router.get('/devices/agent/update/windows', (req, res) => {
 
 router.post('/devices/agent/heartbeat', express.json(), (req, res) => {
   try {
+    // A supported Agent can receive a one-time replacement credential here.
+    // Prevent browsers, proxies, and diagnostics from caching the response body.
+    res.setHeader('Cache-Control', 'private, no-store');
     const deviceId = String(req.body?.deviceId || '');
     const agentToken = String(req.headers['x-agent-token'] || '');
-    const device = getAgentDeviceByToken(deviceId, agentToken);
-    if (!device) return res.status(403).json({ error: 'Agent 인증 실패' });
+    const authenticated = getAgentDeviceAuth(deviceId, agentToken);
+    if (!authenticated) return res.status(403).json({ error: 'Agent 인증 실패' });
+    const device = authenticated.device;
     const requestedState = String(req.body?.syncState || 'idle');
     const allowedState = ['idle', 'connecting', 'syncing', 'up-to-date', 'paused', 'offline', 'updating', 'error'].includes(requestedState) ? requestedState : 'idle';
     const now = new Date().toISOString();
-    const updated = advanceDeviceState(device, {
+    let updated = advanceDeviceState(device, {
       lastSeenAt: now,
       syncState: device.syncPaused ? 'paused' : allowedState,
       lastError: String(req.body?.lastError || '').slice(0, 500)
     }, now);
-    stageLinkedDeviceHeartbeat(updated, device);
+    const supportsRotation = req.body?.credentialProtocol === 'rotating-v1';
+    let credential = null;
+    let credentialChanged = false;
+    if (supportsRotation && authenticated.auth.legacy) {
+      updated = initializeLegacyAgentTokenMetadata(updated);
+      credentialChanged = true;
+    } else if (supportsRotation && shouldRotateAgentToken(updated, authenticated.auth)) {
+      const nextToken = createAgentToken();
+      updated = rotateAgentTokenRecord({
+        device: updated,
+        nextTokenHash: hashAgentToken(nextToken),
+        authenticatedHash: authenticated.presentedHash
+      });
+      credential = {
+        protocol: 'rotating-v1',
+        agentToken: nextToken,
+        expiresAt: updated.agentTokenExpiresAt,
+        previousValidUntil: updated.previousAgentTokenExpiresAt
+      };
+      credentialChanged = true;
+    }
+    if (credentialChanged) updateLinkedDeviceRecord(updated);
+    else stageLinkedDeviceHeartbeat(updated, device);
     emitDeviceStatus(req, updated);
-    return res.json({ success: true, commands: { paused: !!updated.syncPaused }, device: sanitizeDeviceForResponse(updated) });
+    return res.json({
+      success: true,
+      commands: { paused: !!updated.syncPaused },
+      device: sanitizeDeviceForResponse(updated),
+      credential,
+      credentialExpiresAt: updated.agentTokenExpiresAt || null
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Agent 상태 갱신 실패' });
   }
