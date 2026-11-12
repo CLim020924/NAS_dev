@@ -17,12 +17,13 @@ import LinkIcon from '@mui/icons-material/Link';
 import HistoryIcon from '@mui/icons-material/History';
 import StarIcon from '@mui/icons-material/Star';
 import UnarchiveIcon from '@mui/icons-material/Unarchive';
+import ArchiveIcon from '@mui/icons-material/Archive';
 
 const NASContextMenu = ({ 
   contextMenu, handleContextMenuClose, refreshPath, handleCreateFolderStart, 
   handleUploadClick, openFolderWindow, openFileWindow, handleRenameStart, 
   handleDelete, handleDownload, handleShowProperties, handleOpenVersionHistory, handleToggleFavorite, favoritePaths, getItemsToProcess,
-  handleCopy, handlePaste, clipboard, handleCreateLinkedDeviceFolder, handleOpenShareDialog, handleExtractZip
+  handleCopy, handlePaste, clipboard, handleCreateLinkedDeviceFolder, handleOpenShareDialog, handleExtractZip, handleCreateZip
 }) => {
   if (!contextMenu) return null;
 
@@ -106,6 +107,11 @@ const NASContextMenu = ({
         <MenuItem key="downloadFolder" onClick={() => { handleContextMenuClose(); setTimeout(() => { const items = getItemsToProcess(contextMenu.item); items.forEach((it, i) => setTimeout(() => handleDownload(it), i * 500)); }, 10); }}>
           <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon><ListItemText>다운로드</ListItemText>
         </MenuItem>,
+        contextMenu.type === 'folder' && (
+          <MenuItem key="createZip" onClick={() => { handleContextMenuClose(); setTimeout(() => handleCreateZip(contextMenu.item), 10); }}>
+            <ListItemIcon><ArchiveIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>ZIP 파일로 압축…</ListItemText>
+          </MenuItem>
+        ),
         <MenuItem key="shareFolder" onClick={() => { handleContextMenuClose(); setTimeout(() => handleOpenShareDialog(getItemsToProcess(contextMenu.item), contextMenu.path || '/'), 10); }}>
           <ListItemIcon><LinkIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>공유 링크 생성</ListItemText>
         </MenuItem>,

@@ -7,7 +7,7 @@ const MUTATION_TYPES = new Set([
   'file-created', 'file-updated', 'folder-created', 'moved-to-trash',
   'trash-restored', 'trash-permanently-deleted', 'item-copied', 'item-moved',
   'pdf-annotations-updated', 'version-restored', 'moved-to-agent-trash',
-  'conflict-copy-created', 'archive-extracted'
+  'conflict-copy-created', 'archive-extracted', 'archive-created'
 ]);
 
 const sameOrChild = (parent, child) => {

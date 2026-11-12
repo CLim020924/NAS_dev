@@ -49,3 +49,18 @@ test('inspects and streams a ZIP into a new directory', async (t) => {
   assert.equal(fs.readFileSync(path.join(output, '문서', 'readme.txt'), 'utf8'), '안녕하세요');
   assert.equal(fs.readFileSync(path.join(output, 'empty.txt')).length, 0);
 });
+
+test('accepts an empty ZIP so an empty folder can round-trip', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nas-empty-zip-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const zipPath = path.join(root, 'empty.zip');
+  const output = path.join(root, 'output');
+  const zip = new JSZip();
+  fs.writeFileSync(zipPath, await zip.generateAsync({ type: 'nodebuffer' }));
+
+  const inspection = await inspectZip(zipPath);
+  assert.equal(inspection.entryCount, 0);
+  const result = await extractZipToDirectory(zipPath, output, inspection);
+  assert.equal(result.writtenBytes, 0);
+  assert.equal(fs.statSync(output).isDirectory(), true);
+});

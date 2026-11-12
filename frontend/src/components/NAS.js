@@ -44,6 +44,7 @@ import StarIcon from '@mui/icons-material/Star';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import UnarchiveIcon from '@mui/icons-material/Unarchive';
+import ArchiveIcon from '@mui/icons-material/Archive';
 
 import { useWindows } from '../contexts/WindowContext';
 import { useTransfer } from '../contexts/TransferContext';
@@ -169,6 +170,8 @@ const NAS = ({ showWorkspace = true }) => {
   const [folderDownload, setFolderDownload] = useState(null);
   const [zipExtract, setZipExtract] = useState({ open: false, item: null, mode: 'folder', folderName: '', destinationPath: '/', busy: false, error: '', conflicts: [] });
   const [zipDestinationPickerOpen, setZipDestinationPickerOpen] = useState(false);
+  const [folderZip, setFolderZip] = useState({ open: false, item: null, fileName: '', destinationPath: '/', busy: false, error: '', conflicts: [] });
+  const [folderZipDestinationPickerOpen, setFolderZipDestinationPickerOpen] = useState(false);
   const [fileInfo, setFileInfo] = useState({ open: false, loading: false, item: null, data: null, error: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [transferTasks, setTransferTasks] = useState([]);
@@ -2026,6 +2029,50 @@ const NAS = ({ showWorkspace = true }) => {
     }
   };
 
+  const openFolderZipCreation = (item) => {
+    if (!item || item.type !== 'folder') return;
+    const sourcePath = ensureSlash(item.fullPath || item.path || '/');
+    const slashIndex = sourcePath.lastIndexOf('/');
+    const sourceFolder = slashIndex <= 0 ? '/' : sourcePath.slice(0, slashIndex);
+    setFolderZip({
+      open: true,
+      item,
+      fileName: `${String(item.name || 'archive').replace(/\.zip$/i, '')}.zip`,
+      destinationPath: sourceFolder,
+      busy: false,
+      error: '',
+      conflicts: []
+    });
+  };
+
+  const executeFolderZipCreation = async () => {
+    if (!folderZip.item || folderZip.busy) return;
+    const destinationPath = ensureSlash(folderZip.destinationPath || '/');
+    setFolderZip((current) => ({ ...current, busy: true, error: '', conflicts: [] }));
+    try {
+      const { data } = await axios.post('/api/file/create-zip', {
+        sourcePath: ensureSlash(folderZip.item.fullPath || folderZip.item.path),
+        destinationPath,
+        fileName: folderZip.fileName.trim()
+      }, { withCredentials: true });
+      setFolderZip((current) => ({ ...current, open: false, busy: false }));
+      refreshPath(destinationPath);
+      refreshStorageUsage(destinationPath);
+      setSnackbar({
+        open: true,
+        message: `ZIP 파일을 만들었습니다. 파일 ${Number(data.fileCount || 0).toLocaleString()}개 · ${formatFileSize(data.zipBytes || 0)}`,
+        severity: 'success'
+      });
+    } catch (error) {
+      setFolderZip((current) => ({
+        ...current,
+        busy: false,
+        error: error.response?.data?.error || error.message || '폴더를 ZIP으로 압축하지 못했습니다.',
+        conflicts: Array.isArray(error.response?.data?.conflicts) ? error.response.data.conflicts : []
+      }));
+    }
+  };
+
   const formatFileSize = (bytes, isDirectory = false) => {
     if (isDirectory) return '폴더';
     const size = Number(bytes || 0);
@@ -2911,7 +2958,7 @@ const NAS = ({ showWorkspace = true }) => {
         open={shareManagerOpen}
         onClose={() => setShareManagerOpen(false)}
       />
-      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleExtractZip={openZipExtraction} handleShowProperties={handleShowProperties} handleOpenVersionHistory={loadVersionHistory} handleToggleFavorite={toggleFavorite} favoritePaths={favoritePaths} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} handleOpenShareDialog={openShareDialog} />
+      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleExtractZip={openZipExtraction} handleCreateZip={openFolderZipCreation} handleShowProperties={handleShowProperties} handleOpenVersionHistory={loadVersionHistory} handleToggleFavorite={toggleFavorite} favoritePaths={favoritePaths} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} handleOpenShareDialog={openShareDialog} />
       <Snackbar open={snackbar.open} autoHideDuration={snackbar.severity === 'info' ? null : 3000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}><Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', display: 'flex', alignItems: 'center' }}>{snackbar.severity === 'info' && <CircularProgress size={20} sx={{ mr: 2, color: 'inherit' }} />}{snackbar.message}</Alert></Snackbar>
       {/* 파일/폴더 정보 다이얼로그 */}
       <Dialog
@@ -3136,6 +3183,90 @@ const NAS = ({ showWorkspace = true }) => {
           if (item?.type !== 'folder' && item?.type !== 'linked-device' && !item?.isCurrentFolder) return;
           setZipExtract((current) => ({ ...current, destinationPath: ensureSlash(item.fullPath || '/'), error: '', conflicts: [] }));
           setZipDestinationPickerOpen(false);
+        }}
+      />
+
+      <Dialog
+        open={folderZip.open}
+        onClose={() => !folderZip.busy && setFolderZip((current) => ({ ...current, open: false }))}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 900, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ArchiveIcon color="primary" /> 폴더를 ZIP 파일로 압축
+        </DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: 'grid', gap: 2 }}>
+            <Box>
+              <Typography variant="caption" color="text.secondary">원본 폴더</Typography>
+              <Typography sx={{ fontWeight: 800, wordBreak: 'break-all' }}>{folderZip.item?.name}</Typography>
+            </Box>
+            <TextField
+              label="ZIP 파일 이름"
+              value={folderZip.fileName}
+              onChange={(event) => setFolderZip((current) => ({ ...current, fileName: event.target.value, error: '', conflicts: [] }))}
+              fullWidth
+              autoFocus
+              helperText=".zip을 생략하면 자동으로 붙습니다."
+              disabled={folderZip.busy}
+            />
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+              <TextField
+                label="ZIP 파일을 저장할 위치"
+                value={folderZip.destinationPath}
+                fullWidth
+                InputProps={{ readOnly: true }}
+              />
+              <Button
+                variant="outlined"
+                startIcon={<FolderOpenIcon />}
+                onClick={() => setFolderZipDestinationPickerOpen(true)}
+                disabled={folderZip.busy}
+                sx={{ whiteSpace: 'nowrap', minHeight: 56 }}
+              >
+                위치 선택
+              </Button>
+            </Box>
+            <Alert severity="info">
+              기본 위치는 원본 폴더가 있는 곳입니다. 원본은 변경하지 않으며 같은 이름의 기존 파일은 덮어쓰지 않습니다.
+            </Alert>
+            {folderZip.error && (
+              <Alert severity="error">
+                {folderZip.error}
+                {folderZip.conflicts.length > 0 && (
+                  <Typography variant="caption" component="div" sx={{ mt: 0.5, wordBreak: 'break-all' }}>
+                    충돌 항목: {folderZip.conflicts.join(', ')}
+                  </Typography>
+                )}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button color="inherit" onClick={() => setFolderZip((current) => ({ ...current, open: false }))} disabled={folderZip.busy}>취소</Button>
+          <Button
+            variant="contained"
+            onClick={executeFolderZipCreation}
+            disabled={folderZip.busy || !folderZip.fileName.trim()}
+            startIcon={folderZip.busy ? <CircularProgress size={16} color="inherit" /> : <ArchiveIcon />}
+          >
+            {folderZip.busy ? '안전하게 압축하는 중…' : 'ZIP 만들기'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <NasItemPickerDialog
+        open={folderZipDestinationPickerOpen}
+        onClose={() => setFolderZipDestinationPickerOpen(false)}
+        initialPath={folderZip.destinationPath}
+        title="ZIP 파일을 저장할 NAS 폴더 선택"
+        confirmLabel="이 위치 선택"
+        folderOnly
+        allowCurrentFolder
+        onSelect={(item) => {
+          if (item?.type !== 'folder' && item?.type !== 'linked-device' && !item?.isCurrentFolder) return;
+          setFolderZip((current) => ({ ...current, destinationPath: ensureSlash(item.fullPath || '/'), error: '', conflicts: [] }));
+          setFolderZipDestinationPickerOpen(false);
         }}
       />
 

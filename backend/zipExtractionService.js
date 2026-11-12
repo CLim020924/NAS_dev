@@ -108,7 +108,6 @@ const inspectZip = async (zipPath) => {
       throw zipError('압축을 푼 크기가 안전 한도를 초과합니다.', 413, 'ZIP_TOO_LARGE');
     }
   });
-  if (!entries.length) throw zipError('ZIP 파일이 비어 있습니다.', 400, 'EMPTY_ZIP');
   if (totalUncompressedBytes >= RATIO_CHECK_MIN_BYTES
     && totalUncompressedBytes / Math.max(1, totalCompressedBytes) > MAX_COMPRESSION_RATIO) {
     throw zipError('비정상적으로 높은 전체 압축률이 감지되었습니다.', 413, 'ZIP_BOMB');

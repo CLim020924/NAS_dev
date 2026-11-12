@@ -80,6 +80,7 @@ const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore
 const { createPdfOcrService } = require('./pdfOcrService');
 const { normalizeKind: normalizeViewStateKind, normalizeDeviceId, loadWorkspaceViewState, saveWorkspaceViewState } = require('./workspaceViewStateStore');
 const { inspectZip, extractZipToDirectory, defaultFolderName } = require('./zipExtractionService');
+const { createZipFromDirectory } = require('./zipCreationService');
 const {
   SHARED_ROOT_NAME,
   normalizeRelativePath: normalizeAccountShareRelPath,
@@ -3088,6 +3089,105 @@ router.post('/file/extract-zip', verifyToken, async (req, res) => {
     });
   } finally {
     safeRmSync(stagingDirectory);
+  }
+});
+
+// NAS 폴더를 서버 안의 ZIP 파일로 생성한다.
+// 완성 전 파일은 사용자 동기화 경로 밖에 두고 quota 확인 뒤 한 번에 승격한다.
+router.post('/file/create-zip', verifyToken, async (req, res) => {
+  let stagingPath = '';
+  let committed = false;
+  try {
+    const sourceRequestPath = String(req.body?.sourcePath || '').trim();
+    if (!sourceRequestPath) return res.status(400).json({ error: '압축할 폴더 경로가 필요합니다.' });
+
+    const { basePath, targetPath: sourceDirectory } = getValidatedPath(req.user, sourceRequestPath);
+    assertRealPathInside(basePath, sourceDirectory);
+    if (!fs.existsSync(sourceDirectory) || !fs.statSync(sourceDirectory).isDirectory()) {
+      return res.status(404).json({ error: '압축할 폴더를 찾을 수 없습니다.' });
+    }
+
+    const sourceRelativePath = toNasRelativePath(basePath, sourceDirectory);
+    const sourceParentPath = path.posix.dirname(sourceRelativePath) === '.' ? '/' : path.posix.dirname(sourceRelativePath);
+    const destinationRequestPath = String(req.body?.destinationPath || sourceParentPath || '/').trim() || '/';
+    const { targetPath: destinationDirectory } = getValidatedPath(req.user, destinationRequestPath);
+    assertRealPathInside(basePath, destinationDirectory);
+    if (!fs.existsSync(destinationDirectory) || !fs.statSync(destinationDirectory).isDirectory()) {
+      return res.status(400).json({ error: 'ZIP 파일을 저장할 폴더를 찾을 수 없습니다.' });
+    }
+
+    let fileName = String(req.body?.fileName || `${path.basename(sourceDirectory) || 'archive'}.zip`).trim();
+    if (!/\.zip$/i.test(fileName)) fileName += '.zip';
+    if (
+      !fileName
+      || fileName === '.'
+      || fileName === '..'
+      || fileName !== path.basename(fileName)
+      || /[<>:"/\\|?*\x00-\x1F]/.test(fileName)
+    ) {
+      return res.status(400).json({ error: 'ZIP 파일 이름이 올바르지 않습니다.' });
+    }
+
+    const finalPath = resolveInside(destinationDirectory, fileName);
+    if (fs.existsSync(finalPath)) {
+      return res.status(409).json({
+        error: '같은 이름의 파일 또는 폴더가 이미 있습니다. ZIP 파일 이름을 바꿔 주세요.',
+        code: 'ZIP_DESTINATION_EXISTS',
+        conflicts: [fileName]
+      });
+    }
+
+    ensureDirSync(WEB_INCOMING_ROOT);
+    stagingPath = path.join(WEB_INCOMING_ROOT, `zip-create-${crypto.randomBytes(12).toString('hex')}.zip`);
+    const result = await createZipFromDirectory(sourceDirectory, stagingPath);
+    await assertQuotaAvailable(req.user, result.zipBytes, finalPath);
+
+    try {
+      fs.linkSync(stagingPath, finalPath);
+    } catch (linkError) {
+      if (linkError.code === 'EEXIST') {
+        const conflict = new Error('압축 중 같은 이름의 파일이 새로 생성되었습니다. 기존 파일은 덮어쓰지 않았습니다.');
+        conflict.status = 409;
+        conflict.code = 'ZIP_DESTINATION_EXISTS';
+        throw conflict;
+      }
+      throw linkError;
+    }
+    fs.unlinkSync(stagingPath);
+    stagingPath = '';
+    committed = true;
+
+    try {
+      addUsageCacheBytes(finalPath, result.zipBytes);
+    } catch (cacheError) {
+      invalidateUsageCache(finalPath);
+    }
+    try {
+      appendActivity(basePath, {
+        type: 'archive-created',
+        path: toNasRelativePath(basePath, finalPath),
+        sourcePath: sourceRelativePath,
+        actor: getActivityActor(req.user),
+        source: 'web'
+      });
+    } catch (activityError) {
+      console.error('[zip-create] activity log failed:', activityError.message);
+    }
+
+    return res.json({
+      success: true,
+      sourcePath: sourceRelativePath,
+      destinationPath: toNasRelativePath(basePath, finalPath),
+      fileName,
+      ...result
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      error: error.message || '폴더를 ZIP으로 압축하지 못했습니다.',
+      code: error.code || 'ZIP_CREATION_FAILED'
+    });
+  } finally {
+    if (!committed) safeRmSync(stagingPath);
   }
 });
 
