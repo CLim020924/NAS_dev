@@ -2460,3 +2460,15 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 운영 배포: 기능 commit `5e4ac1f`를 원격과 NAS에 반영했다. 서버 전체 테스트와 frontend build 뒤 기존 정적 배포본을 `/home/limchanyoung/deploy-backups/frontend-pre-5e4ac1f-*`에 백업하고 `/var/www/html`을 교체했다. PM2 재시작·save, 필수 6서비스 enabled+active, `msp-backend` online, localhost/public HTTP 200을 확인했다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
 - 유지 경계: 미완성 ZIP을 개인 동기화 경로에 만들지 않는다. 최종 파일 생성은 기존 항목을 원자적으로 덮어쓰지 않는 경계를 유지한다. symlink 방어, 계정 경로 확인, 실제 ZIP 크기 quota 검사와 실패 staging 정리를 제거하지 않는다. 원본 폴더 내용 root 형식을 이중 폴더가 생기는 형식으로 바꾸지 않는다.
 - 메모리 기록: 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Generated_Check를 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다.
+
+## 2026-11-12 회원가입을 단순 관리자 승인 방식으로 복원
+
+- 사용자 요청: 공개 회원가입을 이전처럼 `아이디`, `비밀번호`, `비밀번호 확인`만 입력하고 관리자에게 승인 요청이 가는 구조로 되돌린다. 요청 즉시 계정을 만들거나 로그인시키지 않는다.
+- 사용자 화면: `/signup`은 세 입력칸, `관리자에게 가입 요청` 버튼, `가입 요청은 관리자 승인 후 사용할 수 있습니다.` 안내와 로그인 링크만 표시한다. 일반 공개 요청에서는 계정 유형·이메일·조직·초대 코드·닉네임을 입력받지 않는다.
+- 서버 처리: 일반 요청의 nickname/displayName은 ID에서 파생하고 account type은 `UNCLASSIFIED`로 둔다. 기존과 같이 비밀번호 최소 10자와 확인 일치, bcrypt hash, ID 및 `id@cresero.com` 예약 충돌, pending 요청당 기본 20GB quota와 전체 저장공간 507 경계를 검사한 뒤 `requests.json`에 pending request만 저장한다. 관리자의 기존 승인/거절 흐름이 실제 계정·저장공간 생성 경계이며 승인 전에는 로그인할 수 없다.
+- 기존 초대 링크 호환: 관리자가 이미 발급한 `?invite=` 링크는 깨지지 않는다. 프런트는 토큰을 메모리에 읽고 주소창 query를 즉시 지운 뒤 숨은 값으로 요청에만 보낸다. 서버의 `validateSignupInvitation`이 토큰을 검증·소비하고 초대 유형과 메일을 파생한다. 공개 화면에는 조직 필드가 다시 나타나지 않는다.
+- 백업과 복구점: 확장형 회원가입 화면은 별도 중복 파일을 만들지 않고 Git commit `d8fd8fa`에 그대로 보존했다. 이번 기능 commit은 `13d406a`다. 배포 전 정적 파일은 `/home/limchanyoung/deploy-backups/20261112-simple-signup-13d406a/frontend`에 백업했다.
+- 자동 검증: NAS backend 전체 210 tests는 204 pass·0 fail·6 환경성 skip이다. 공개 일반 요청과 초대 메타데이터 보존 회귀검사를 추가했다. frontend UI contract 132 source와 production/PDF.js build를 통과했다.
+- 운영 검증: Chrome에서 실제 `/signup`의 입력칸이 정확히 세 개이고 관리자 승인 안내·버튼이 보이는 것을 확인했다. 데이터를 남기지 않는 공개 API 실패 경계로 누락·짧은 비밀번호·불일치 400과 사용 중 ID 409를 확인했다. 내부·공개 HTTP 200, 필수 6서비스 enabled+active, `msp-backend` online, PM2 save를 확인했다.
+- 유지 경계: 공개 UI를 다시 복잡한 조직 양식으로 만들지 않는다. 단순화를 이유로 해시 저장, 비밀번호 확인, ID/메일 예약, pending quota, 관리자 승인 전 로그인 차단을 제거하지 않는다. 초대 메타데이터는 사용자가 입력한 공개 필드가 아니라 검증된 invite 토큰에서만 파생한다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+- 메모리 기록: 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Generated_Check를 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다. 기존 `??` 검색 8건은 모두 인코딩 파손 사례를 설명하는 과거 기록과 실제 사용자 문장으로, 이번에 새로 생긴 깨짐은 없다.
