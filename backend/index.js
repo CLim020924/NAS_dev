@@ -252,6 +252,7 @@ const CLEAR_AUTH_COOKIE_OPTIONS = {
 const PERSISTENT_AUTH_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSION_DISCONNECT_LOGOUT_MS = config.SESSION_DISCONNECT_LOGOUT_MS;
 const { DAY_MS, classifySessions } = require('./authSessionPolicy');
+const { verifySignedLogoutToken } = require('./authLogoutToken');
 const SHARED_COOKIE_DOMAIN = config.COOKIE_DOMAIN;
 
 const isHttpsRequest = (req) =>
@@ -361,6 +362,18 @@ const updateUserSessionPersistence = (user, sessionId, persistent) => {
       : session
   );
   return setUserActiveSessions(user, sessions);
+};
+
+const pruneExpiredActiveSessions = (now = Date.now()) => {
+  let removedCount = 0;
+  approvedUsers.forEach((user) => {
+    const sessions = getUserActiveSessions(user);
+    const classified = classifySessions(sessions, [], now);
+    if (!classified.removedCount) return;
+    removedCount += classified.removedCount;
+    setUserActiveSessions(user, classified.valid);
+  });
+  return removedCount;
 };
 
 
@@ -510,6 +523,18 @@ function loadData() {
   });
 }
 loadData();
+const initialExpiredSessionCount = pruneExpiredActiveSessions();
+if (initialExpiredSessionCount > 0) {
+  saveMembers();
+  console.log(`[auth-session] 시작 시 만료 세션 ${initialExpiredSessionCount}개를 정리했습니다.`);
+}
+const authSessionCleanupTimer = setInterval(() => {
+  const removedCount = pruneExpiredActiveSessions();
+  if (!removedCount) return;
+  saveMembers();
+  console.log(`[auth-session] 만료 세션 ${removedCount}개를 정리했습니다.`);
+}, 60 * 60 * 1000);
+authSessionCleanupTimer.unref?.();
 
 const organizationDirectory = createOrganizationDirectory({ dataDir: path.join(__dirname, 'data') });
 organizationDirectory.ensureExistingUsers(approvedUsers);
@@ -775,24 +800,26 @@ app.get('/api/auth/session', (req, res) => {
 app.post('/api/logout', (req, res) => {
   const token = getTokenFromRequest(req);
   if (token) {
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      const user = findApprovedUserByAnyId(decoded.userUid || decoded.loginId || decoded.id || decoded.username);
-      const timerKey = `${getUserLoginId(user || {})}:${decoded.sessionId || ''}`;
-      const logoutTimer = sessionLogoutTimers.get(timerKey);
-      if (logoutTimer) clearTimeout(logoutTimer);
-      sessionLogoutTimers.delete(timerKey);
-      if (user) {
-        removeUserActiveSession(user, decoded.sessionId || '');
-        saveMembers();
-        [...io.sockets.sockets.values()].forEach((connectedSocket) => {
-          if ((connectedSocket.userUid === user.userUid || connectedSocket.userId === getUserLoginId(user)) && connectedSocket.authSessionId === decoded.sessionId) {
-            connectedSocket.disconnect(true);
-          }
-        });
+    const decoded = verifySignedLogoutToken(token, JWT_SECRET);
+    if (decoded) {
+      try {
+        const user = findApprovedUserByAnyId(decoded.userUid || decoded.loginId || decoded.id || decoded.username);
+        const timerKey = `${getUserLoginId(user || {})}:${decoded.sessionId || ''}`;
+        const logoutTimer = sessionLogoutTimers.get(timerKey);
+        if (logoutTimer) clearTimeout(logoutTimer);
+        sessionLogoutTimers.delete(timerKey);
+        if (user) {
+          removeUserActiveSession(user, decoded.sessionId || '');
+          saveMembers();
+          [...io.sockets.sockets.values()].forEach((connectedSocket) => {
+            if ((connectedSocket.userUid === user.userUid || connectedSocket.userId === getUserLoginId(user)) && connectedSocket.authSessionId === decoded.sessionId) {
+              connectedSocket.disconnect(true);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('[auth-session] logout cleanup failed:', err.message);
       }
-    } catch (err) {
-      // An invalid or expired token still needs its browser cookie cleared.
     }
   }
 

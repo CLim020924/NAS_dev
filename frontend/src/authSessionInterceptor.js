@@ -12,6 +12,18 @@ const getErrorText = (data) => {
   ].filter(Boolean).join(' ');
 };
 
+const revokeCurrentServerSession = () => {
+  try {
+    fetch('/api/logout', {
+      method: 'POST',
+      credentials: 'include',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    }).catch(() => {});
+  } catch (e) {}
+};
+
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -25,6 +37,7 @@ axios.interceptors.response.use(
 
     if (status === 401 && !isAuthRequest && !isHandlingForcedLogout) {
       isHandlingForcedLogout = true;
+      revokeCurrentServerSession();
 
       const errorText = getErrorText(data);
       const isSessionReplaced =

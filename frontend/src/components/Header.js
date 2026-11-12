@@ -4,6 +4,7 @@ import { AppBar, Toolbar, Typography, Button, Box, IconButton } from '@mui/mater
 import { useNavigate } from 'react-router-dom';
 // [추가] MenuIcon 불러오기
 import MenuIcon from '@mui/icons-material/Menu';
+import axios from 'axios';
 
 function Header({ onMenuClick }) {
   const navigate = useNavigate();
@@ -18,9 +19,17 @@ function Header({ onMenuClick }) {
     }
   }
 
-  const handleLogout = () => {
-    localStorage.removeItem('user');
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      await axios.post('/api/logout', {}, { withCredentials: true });
+    } catch (error) {
+      // The local login state still needs clearing if the session already expired.
+    } finally {
+      localStorage.removeItem('user');
+      localStorage.removeItem('nas_session_left_at');
+      window.dispatchEvent(new Event('nas:user-updated'));
+      navigate('/login', { replace: true });
+    }
   };
 
   return (

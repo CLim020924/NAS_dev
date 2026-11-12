@@ -66,6 +66,10 @@ requireText('src/components/NAS.js', "axios.post('/api/file/create-zip'", 'folde
 requireText('src/components/NAS.js', '원본은 변경하지 않으며 같은 이름의 기존 파일은 덮어쓰지 않습니다.', 'folder ZIP creation must explain source preservation and no-overwrite behavior');
 requireText('src/components/NAS.js', 'title="ZIP 파일을 저장할 NAS 폴더 선택"', 'folder ZIP creation must retain the NAS destination picker');
 requireText('src/components/NAS.js', '.zip을 생략하면 자동으로 붙습니다.', 'folder ZIP creation must explain automatic extension handling');
+requireText('src/authSessionInterceptor.js', "fetch('/api/logout'", 'automatic browser logout must revoke the matching server session');
+requireText('src/authSessionInterceptor.js', 'keepalive: true', 'automatic logout revocation must survive navigation to the login page');
+requireText('src/components/TopBar.js', "axios.post('/api/logout'", 'explicit top-bar logout must revoke the matching server session');
+requireText('src/components/Header.js', "axios.post('/api/logout'", 'legacy header logout must not clear only local state');
 requireText('src/components/ServerSettingsPanel.js', 'SSD 수명·건강 관리', 'manager settings must expose SSD health without confusing power-on time with lifetime wear');
 requireText('src/components/ServerSettingsPanel.js', '파일 작업이 안전하게 차단되었습니다', 'missing NAS mounts must be explained as a fail-closed storage state');
 const topBar = read('src/components/TopBar.js');
