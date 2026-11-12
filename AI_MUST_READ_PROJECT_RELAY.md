@@ -2432,6 +2432,19 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 유지 경계: 기존 항목 자동 덮어쓰기를 추가하지 않는다. 압축 해제 staging을 개인 NAS/PC 동기화 경로로 옮기지 않는다. quota·경로·symlink·압축률 방어를 UI 편의를 이유로 완화하지 않는다. 현재 지원 형식은 ZIP이며 암호 ZIP, RAR, 7z를 지원한다고 표시하지 않는다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
 - 메모리 기록: 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Generated_Check를 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다.
 
+## 2026-11-12 로그인 장부 정합성과 유휴 SSD 쓰기 보완
+
+- 사용자 문제: 장시간 동작이 없을 때 로그인 유지가 SSD 읽기·쓰기를 계속 발생시키는지 확인하고, 화면에서는 로그아웃됐는데 다음 로그인 때 기존 로그인 충돌이 뜨는 서버 장부 불일치를 해결하도록 요청했다.
+- 실제 원인: `cmoe`의 `activeSessions`에 5개가 남아 있었고, 그중 4개는 같은 날 ZIP 공개 API E2E에서 생성한 Codex 시험 세션이었다. 시험 로그인 뒤 `/api/logout`을 호출하지 않아 서버 장부에 남은 것이며 사용자 UI만의 착시가 아니었다. 현재 실제 브라우저 세션 1개는 보존하고 발급 시각이 정확히 일치한 시험 세션 4개만 백업 후 제거했다.
+- 로그아웃 경계: `/api/logout`은 이제 JWT의 서명은 반드시 검증하되 로그아웃 용도에 한해 만료 시각을 무시한다. 따라서 만료된 브라우저 토큰도 해당 `sessionId`의 서버 장부를 정리할 수 있고, 다른 secret으로 서명됐거나 변조된 토큰은 신뢰하지 않는다. 명시적 상단 로그아웃뿐 아니라 legacy Header도 서버 logout을 먼저 호출한다.
+- 자동 로그아웃 경계: 일반 API의 401로 프런트가 로그인 화면으로 이동할 때 로컬 상태만 지우지 않고 `fetch('/api/logout', { credentials: 'include', keepalive: true })`로 서버 세션 해지를 요청한다. 페이지 이동 중에도 요청이 살아 있도록 keepalive를 사용한다.
+- 만료 장부 정리: backend 시작 시 모든 계정의 만료 `activeSessions`를 정리하고, 이후 1시간마다 메모리에서 검사한다. 실제로 제거할 만료 세션이 있을 때만 `members.json`을 저장하므로 매시간 불필요한 SSD 쓰기는 만들지 않는다. 첫 운영 재시작에서 기존 만료 세션 13개를 추가 정리했다.
+- 유휴 I/O 결론: 사용자 입력이 없다는 이유만으로 세션 장부를 주기적으로 다시 저장하지 않는다. Socket.IO ping은 네트워크·메모리 활동이고 로그인, 인증 소켓 연결, 명시적 로그아웃, 비영구 세션 disconnect 확정, 실제 만료 세션 제거 같은 상태 변화 때만 약 27~32KiB의 `members.json` 전체 저장이 발생한다. 20초 유휴 실측에서 파일 mtime `2026-11-12 17:04:20.345097847 +0900`, size 27,255B, blocks 56이 전후 동일했다. `noatime` 마운트이므로 읽기 자체가 access-time 쓰기를 만들지 않는다.
+- 로그인 유지 정책: `loginPersistenceEnabled=false` 계정은 브라우저 session cookie와 1일 JWT를 사용하고, 인증 소켓이 끊긴 뒤 60초가 지나면 서버 세션을 정리한다. 단순히 화면을 보고 있지 않는 것만으로 로그아웃하지 않으며, 네트워크·브라우저 종료로 연결이 끊기면 비영구 정책에 따라 정리된다. 장기 유지가 필요한 사용자는 별도의 로그인 유지 설정을 사용해야 한다.
+- 검증: 로컬 backend 208 tests는 199 pass·0 fail·9 skip, NAS Linux는 202 pass·0 fail·6 skip이다. 만료됐지만 정상 서명된 logout token 허용과 잘못된 secret 거부 테스트를 추가했다. UI contract 132 source와 production/PDF.js build를 통과했다. 운영 `cmoe` 세션은 정리 후 정확히 1개이며, 필수 6서비스 enabled+active, `msp-backend` online, PM2 save, localhost/public HTTP 200과 무토큰 logout 성공을 확인했다.
+- 배포·복구: 코드 commit `53236f3`을 `cleanup/git-tracking-2026-06-08`에 push하고 운영 NAS를 fast-forward했다. 배포 전 정적 파일과 `members.json`은 `/home/limchanyoung/deploy-backups/20261112-auth-session-53236f3`에 백업했다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+- 유지 경계: 프런트 상태만 지우는 logout 경로를 다시 만들지 않는다. logout에서 JWT 서명 검증을 생략하지 않는다. 유휴 heartbeat마다 `members.json`을 쓰지 않는다. E2E 로그인은 성공·실패와 무관하게 `finally`에서 `/api/logout`을 호출해 시험 세션을 남기지 않는다.
+
 ## 2026-11-12 NAS 일반 폴더의 서버 내부 ZIP 생성 운영 적용
 
 - 사용자 요청: 일반 폴더도 NAS 파일 관리자 안에서 ZIP 파일로 만들 수 있게 한다. 기존 `폴더 다운로드`와 달리 결과 ZIP을 사용자의 NAS 저장공간에 영구 파일로 남긴다.
