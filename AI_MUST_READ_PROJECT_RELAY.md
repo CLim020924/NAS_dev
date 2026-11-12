@@ -2416,3 +2416,18 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 유지 경계: NAS를 매번 unmount해 상태를 잃지 않는다. 숨김 pause가 업로드를 취소하지 않게 한다. Socket.IO 생성점을 다시 늘리거나 guest meeting·로그인/로그아웃 auth 재협상을 깨지 않는다. 1년 immutable은 해시 정적 자산에만 적용한다. Cloudflare/DNS/nginx routing/OnlyOffice/HWP proxy는 변경하지 않았다.
 - 남은 규모 임계형 과제: 파일 수·JSON 크기·p95 event-loop/API 지연을 관측하다 임계 초과 시 unbounded recursive scan만 bounded worker/증분 index로 옮긴다. JSON이 약 5~10MiB 또는 10,000행, p95 write 50ms를 넘는 성장 구간에서 채팅·알림·공유 메타데이터를 SQLite WAL로 검토한다. Windows Agent 단일 preallocated temp 파일 방식은 격리 VM에서 강제 종료·재부팅·부분쓰기 resume E2E를 먼저 통과해야 한다.
 - 메모리 기록: `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, Generated_Check, 보류 작업을 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다.
+
+## 2026-11-12 NAS 내부 ZIP 압축 해제 운영 적용
+
+- 사용자 요청: NAS 파일 관리자 안에서 ZIP을 풀고, `새 폴더를 만들어 풀기`와 `내부 항목을 선택 위치에 바로 풀기`를 선택하게 한다. 새 폴더 이름을 입력할 수 있고 대상 폴더도 선택하며 기본 대상은 ZIP 파일이 있는 경로다.
+- 사용자 흐름: ZIP 파일 우클릭 메뉴에 `압축 풀기…`를 추가했다. 기본값은 `새 폴더를 만들어 그 안에 풀기 (권장)`이며 폴더 이름은 ZIP 확장자를 뺀 파일명이다. `선택한 위치에 내부 파일·폴더를 바로 풀기`도 제공한다. 재사용 가능한 `NasItemPickerDialog`로 다른 NAS 폴더를 고를 수 있고, 동일 이름 충돌은 목록과 함께 안내한다.
+- API: 인증된 `POST /api/file/extract-zip`을 추가했다. body는 `sourcePath`, `destinationPath`(생략 시 ZIP 부모), `mode: folder|here`, folder 모드의 `folderName`이다. 결과는 실제 대상 경로, 항목/파일/폴더 수와 해제 byte를 반환한다. 기존 항목이 있으면 `409 EXTRACT_DESTINATION_EXISTS`로 중단하며 자동 덮어쓰거나 부분 병합하지 않는다.
+- 스트리밍: 기존 문서 생성용 JSZip을 압축 해제에 재사용해 전체 ZIP을 메모리에 올리지 않았다. `yauzl@3.2.0` lazy entry로 중앙 directory를 먼저 검사하고 각 파일을 stream pipeline으로 해제한다. 임시 데이터는 사용자 동기화 경로가 아니라 `/mnt/nas/.agent_incoming/web/zip-extract-*`에 두고 완료 뒤 같은 filesystem rename으로 최종 위치에 반영한다.
+- 보안 경계: `../`, 절대 경로, Windows drive 경로, NUL, 중복 경로와 심볼릭 링크를 거절한다. 암호 ZIP은 명시적으로 미지원 응답을 준다. 최대 50,000항목, 총 해제 250GiB, 100MiB 이상 항목/전체의 1,000배 초과 압축률을 차단하고 실제 stream byte가 중앙 directory 예상치를 넘으면 중단한다. 사용자 계정 access base와 realpath 경계, 예상 총량 quota 검사를 모두 통과해야 한다.
+- 실패 안전: 해제 중 오류는 staging을 제거한다. 직접 풀기에서 승격 도중 문제가 생기면 이번 작업이 새로 옮긴 항목만 되돌린다. 완료된 실제 파일을 활동 기록 실패 때문에 삭제하지 않으며 quota cache 갱신 실패 시 정확 재계산 경계로 전환한다. 성공은 `archive-extracted` 활동과 기존 `files:changed` 이벤트를 남겨 웹·PC 동기화가 완료된 결과만 보게 한다.
+- 자동 검증: 로컬 backend 전체 202 tests는 194 pass·0 fail·8 환경성 skip, NAS Linux는 196 pass·0 fail·6 환경성 skip이다. frontend production/PDF.js build, UI contract 132 source, performance contract가 통과했다. ZIP 경로 정규화·traversal 차단·Unix symlink 감지·한글 파일 stream 추출 테스트와 UI 계약 검사를 추가했다.
+- 실제 API E2E: 공개 사이트에 합성 한글 ZIP을 업로드해 `새 폴더 결과`와 `직접 풀기` 두 방식으로 각각 파일 2개·폴더 1개·34B를 풀었다. 다운로드한 한글 파일 byte가 원본과 일치했다. 같은 위치에 직접 풀기를 반복하면 409와 충돌 코드가 반환됐고 기존 파일은 보존됐다. 시험 폴더를 휴지통 이동 후 영구 삭제해 quota cache를 정상 무효화했고 ZIP staging 잔여 0을 확인했다.
+- 실브라우저: 운영 Chrome NAS 탭에서 실제 ZIP 우클릭 메뉴, 방식 radio, 기본 폴더 이름, ZIP이 있는 `/진단리포트 참고` 기본 위치, 위치 선택기와 현재 위치 선택, 무덮어쓰기 설명, 취소 동작을 확인했다. 해당 흐름의 console warning/error는 0이었고 실제 사용자 ZIP은 풀지 않았다.
+- 운영 배포: 기능 commit `e84f955`를 원격과 NAS에 반영했다. backend dependency를 `npm ci --omit=dev`로 설치하고 PM2를 재시작·저장했다. 정적 파일은 `/home/limchanyoung/deploy-backups/frontend-pre-e84f955-20261112T133509`에 백업 후 `main.572a734e.js`를 배포했다. 필수 6서비스 active, `msp-backend` online, localhost/public HTTP 200과 build/live main 일치를 확인했다.
+- 유지 경계: 기존 항목 자동 덮어쓰기를 추가하지 않는다. 압축 해제 staging을 개인 NAS/PC 동기화 경로로 옮기지 않는다. quota·경로·symlink·압축률 방어를 UI 편의를 이유로 완화하지 않는다. 현재 지원 형식은 ZIP이며 암호 ZIP, RAR, 7z를 지원한다고 표시하지 않는다. Cloudflare/DNS/nginx/OnlyOffice/HWP 설정은 변경하지 않았다.
+- 메모리 기록: 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Generated_Check를 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다.
