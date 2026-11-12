@@ -2399,3 +2399,20 @@ Windows 노트북에 실제 설치·업데이트하고 종료/재실행/시작 �
 - 하지 않을 것: 현재 0.5% CPU에서 PM2 cluster, Redis, Elasticsearch, object storage를 도입하지 않는다. cluster는 Socket.IO sticky session·공유 adapter와 watcher 단일화가 선행되지 않으면 이벤트 중복과 상태 분리를 만든다. 짧은 polling을 되살리거나 streaming 업로드/다운로드를 전체 메모리 버퍼로 바꾸지 않는다. 열린 NAS 창을 단순 unmount해 상태를 잃지 않는다.
 - 권장 구현 순서: A) NAS lazy first-mount·숨김 네트워크 pause, viewer type별 code split, hashed static immutable cache를 한 독립 단계에서 전후 bundle·request 수·창 상태로 검증한다. B) Socket.IO 단일화를 별도 단계에서 guest meeting·auth/chat/files/device 이벤트 E2E로 검증한다. C) 파일 수와 event-loop 지연을 계측한 뒤 unbounded scan worker/metadata index를 도입한다. D) 성장 임계치에서만 SQLite WAL을 적용한다. E) Agent 단일 임시파일은 Windows 장애 E2E 뒤 결정한다.
 - 기록: 정본 `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, 보류 작업, Generated_Check를 갱신했다. 추가 행 재수입 검증, 수식 오류 0건, 보류 작업 렌더를 확인했다.
+
+## 2026-11-12 프런트 지연 로딩·단일 소켓·정적 캐시 운영 적용
+
+- 사용자 승인: 앞선 구조 감사의 저위험 1차 권장안을 실제 구현·검증·운영 배포하고, 변경점과 전후 효율 및 남은 과제를 정본 메모리에 상세히 기록하도록 요청했다.
+- 초기 로드 분리: `frontend/src/App.js`의 플랫폼·설정·NAS·로그인·가입·회의 초대·공유 링크 라우트와 GlobalAppWindowLayer/AI 패널을 lazy chunk로 바꿨다. NAS는 첫 `/nas` 진입 또는 NAS 파일/폴더 창 호출 때만 mount하고, 한 번 연 뒤에는 경로·선택·창 상태를 잃지 않도록 유지한다.
+- 숨김 작업 정지: `showWorkspace=false` 동안 favorites·검색·파일 목록·저장공간 조회, 키/마우스 선택 listener, Socket.IO 파일 변경 listener, 5분 fallback polling과 폴더 창 조회를 정지한다. 다시 보일 때 목록·favorites·저장공간을 즉시 갱신한다. 전송 컨텍스트와 진행 중 업로드를 의도적으로 취소하지 않는다.
+- 파일 형식별 viewer: Monaco, Markdown, PDF, OnlyOffice, HWP와 Document/Note/Meeting Studio를 실제 파일·앱을 열 때만 로드하도록 분리했다. NAS 파일 viewer와 공유 링크 미리보기 양쪽에 동일 원칙을 적용했다.
+- Socket.IO 통합: 로그인 후 `App.js`가 별도 생성하던 연결을 제거하고 `frontend/src/socket.js` 하나를 인증·채팅·알림·파일·장치·회의 이벤트가 공유한다. 게스트와 로그인 계정 정체성이 바뀔 때만 reconnect해 cookie/auth handshake를 갱신한다. 미사용 localhost 전용 `frontend/src/components/socket.js`는 제거했다.
+- 정적 캐시: 콘텐츠 해시가 붙은 `/static/js`, `/static/css`, `/static/media`만 `public, max-age=31536000, immutable`로 제공한다. `index.html`은 `no-store`, 해시 없는 JS/CSS는 revalidate를 유지한다. `backend/staticAssetPolicy.js`와 테스트를 추가해 SPA/업데이트 경계를 고정했다.
+- 전후 수치: main raw는 2,277,271B에서 1,003,376B로 1,273,895B(-55.94%) 줄었고, 로컬 gzip은 641,296B에서 295,758B로 345,538B(-53.88%) 줄었다. 운영 Linux build의 main gzip은 284.44KiB다. 로그인 세션의 Socket.IO 생성점은 2개에서 1개가 됐고, 플랫폼/설정처럼 NAS가 숨은 동안 NAS 주기·이벤트 기반 조회는 0이다. NAS 재표시 시 즉시 갱신하므로 최신성은 유지한다.
+- 회귀 가드: `frontend/scripts/verify-performance-contract.mjs`가 NAS lazy mount, 숨김 작업 pause, Socket.IO 단일 생성점, heavy viewer eager import 금지를 검사한다. `backend/tests/staticAssetPolicy.test.js`는 해시/비해시/HTML 캐시 경계를 검사한다.
+- 검증: NAS Linux backend 전체 198 tests는 192 pass·0 fail·6 환경성 skip이다. frontend production/PDF.js build, UI contract, performance contract를 통과했다. 로컬 Windows frontend Jest 전체는 Node 26 환경의 선택적 `canvas` native binary 누락으로 완주하지 못했으나 실행된 실제 테스트는 통과했고, 배포 기준은 NAS Linux 검증으로 삼았다.
+- 운영 배포: 코드 commit `bfd746a`를 `cleanup/git-tracking-2026-06-08`에 push하고 NAS를 fast-forward했다. 기존 정적 배포본은 `/home/limchanyoung/deploy-backups/frontend-pre-bfd746a-20261112T1015`에 보관했다. build와 `/var/www/html` main SHA-256 일치, 해시 main의 1년 immutable header, nginx 설정, 필수 6서비스 enabled+active, `msp-backend` online, PM2 save, OnlyOffice health true, localhost/public HTTP 200을 확인했다.
+- 실브라우저: 운영 계정으로 로그인해 `/platform` 표시, 파일 관리자 진입, `/nas` 목록·quota·빠른 접근 표시와 재진입을 확인했다. 해당 흐름의 browser console warning/error는 0이었다.
+- 유지 경계: NAS를 매번 unmount해 상태를 잃지 않는다. 숨김 pause가 업로드를 취소하지 않게 한다. Socket.IO 생성점을 다시 늘리거나 guest meeting·로그인/로그아웃 auth 재협상을 깨지 않는다. 1년 immutable은 해시 정적 자산에만 적용한다. Cloudflare/DNS/nginx routing/OnlyOffice/HWP proxy는 변경하지 않았다.
+- 남은 규모 임계형 과제: 파일 수·JSON 크기·p95 event-loop/API 지연을 관측하다 임계 초과 시 unbounded recursive scan만 bounded worker/증분 index로 옮긴다. JSON이 약 5~10MiB 또는 10,000행, p95 write 50ms를 넘는 성장 구간에서 채팅·알림·공유 메타데이터를 SQLite WAL로 검토한다. Windows Agent 단일 preallocated temp 파일 방식은 격리 VM에서 강제 종료·재부팅·부분쓰기 resume E2E를 먼저 통과해야 한다.
+- 메모리 기록: `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, Generated_Check, 보류 작업을 갱신했다. 변경 행 재수입·렌더와 수식 오류 0건을 확인했다.
