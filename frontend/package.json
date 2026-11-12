@@ -45,6 +45,7 @@
     "verify:pdfjs": "node scripts/verify-pdfjs-compat.mjs",
     "verify:pdf-editor": "node scripts/verify-pdf-editor.mjs",
     "verify:window-manager": "node scripts/verify-window-manager.mjs",
+    "verify:performance-contract": "node scripts/verify-performance-contract.mjs",
     "verify:ui-contract": "node scripts/verify-ui-contract.mjs",
     "verify:notebook-scope": "node scripts/verify-note-studio-notebook-scope.mjs",
     "test": "react-scripts test",

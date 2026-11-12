@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config/env');
+const { isImmutableFrontendAsset } = require('./staticAssetPolicy');
 const http = require('http');           
 const net = require('net');
 const { Server } = require('socket.io');
@@ -203,6 +204,10 @@ app.use(express.static(FRONTEND_BUILD_PATH, {
     const normalizedPath = String(filePath || '').replace(/\\/g, '/');
     if (normalizedPath.endsWith('/index.html')) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      return;
+    }
+    if (isImmutableFrontendAsset(normalizedPath)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       return;
     }
     if (normalizedPath.includes('/static/js/') || normalizedPath.includes('/static/css/')) {

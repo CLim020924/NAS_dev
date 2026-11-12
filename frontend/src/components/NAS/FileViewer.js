@@ -1,28 +1,26 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Box, Typography, Button, useTheme, useMediaQuery } from '@mui/material';
+import React, { lazy, Suspense, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Box, Typography, Button, CircularProgress, useTheme, useMediaQuery } from '@mui/material';
 import axios from 'axios';
 import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
 import PrintIcon from '@mui/icons-material/Print';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import Editor from '@monaco-editor/react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { pdfjs } from 'react-pdf';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
-import { DocumentEditor } from "@onlyoffice/document-editor-react";
 import { useWindows } from '../../contexts/WindowContext';
 import { getOnlyOfficeDocumentType, isOnlyOfficeFormat } from '../../utils/officeFormats';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
-import RhwpDocumentViewer from '../shared/RhwpDocumentViewer';
-import PdfWorkspace from './PdfWorkspace';
 import { transferUrl } from '../../transferBaseUrl';
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString();
+const MonacoFileEditor = lazy(() => import('./viewers/MonacoFileEditor'));
+const MarkdownFileView = lazy(() => import('./viewers/MarkdownFileView'));
+const OnlyOfficeFileEditor = lazy(() => import('./viewers/OnlyOfficeFileEditor'));
+const HwpFileViewer = lazy(() => import('./viewers/HwpFileViewer'));
+const PdfFileWorkspace = lazy(() => import('./viewers/PdfFileWorkspace'));
+
+const ViewerLoading = () => (
+  <Box sx={{ width: '100%', height: '100%', minHeight: 180, display: 'grid', placeItems: 'center' }}>
+    <CircularProgress size={28} />
+  </Box>
+);
 
 const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirtyChange }) => {
   const theme = useTheme(); // 오타 수정 완료
@@ -410,7 +408,7 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     if (isHwp) {
       const fullPath = String(win.fullPath || '');
       const currentFolderPath = fullPath.includes('/') ? (fullPath.substring(0, fullPath.lastIndexOf('/')) || '/') : '/';
-      return <RhwpDocumentViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} nasPath={fullPath} onSave={handleRhwpSave} onDirtyChange={handleRhwpDirtyChange} initialFolderPath={currentFolderPath} initialMode={win.preferEditMode ? 'editor' : 'viewer'} isActive={focusedContext === win.id} viewStateDescriptor={{ kind: 'hwp', path: fullPath }} />;
+      return <Suspense fallback={<ViewerLoading />}><HwpFileViewer name={name} previewUrl={url.includes('?') ? `${url}&inline=true` : `${url}?inline=true`} downloadUrl={url} nasPath={fullPath} onSave={handleRhwpSave} onDirtyChange={handleRhwpDirtyChange} initialFolderPath={currentFolderPath} initialMode={win.preferEditMode ? 'editor' : 'viewer'} isActive={focusedContext === win.id} viewStateDescriptor={{ kind: 'hwp', path: fullPath }} /></Suspense>;
     }
     if (isOffice && !officeConfig) {
       return <Box sx={{ p: 3 }}><Typography color={officeAccessError ? 'error' : 'text.secondary'}>{officeAccessError || '문서 접근 권한을 확인하는 중입니다...'}</Typography></Box>;
@@ -418,16 +416,18 @@ const FileViewer = ({ win, toggleEditMode, handleContentChange, saveFile, onDirt
     if (isOffice && officeConfig) {
       return (
         <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-          <DocumentEditor key={officeEditorId} id={officeEditorId} documentServerUrl={documentServerUrl} config={officeConfig} onLoadComponent={(editor) => { editorRef.current = editor; }} />
+          <Suspense fallback={<ViewerLoading />}>
+            <OnlyOfficeFileEditor key={officeEditorId} id={officeEditorId} documentServerUrl={documentServerUrl} config={officeConfig} onLoadComponent={(editor) => { editorRef.current = editor; }} />
+          </Suspense>
         </Box>
       );
     }
     if (isPDF) {
-      return <PdfWorkspace win={win} isActive={focusedContext === win.id} onDirtyChange={onDirtyChange} onRegisterSave={registerPdfSave} />;
+      return <Suspense fallback={<ViewerLoading />}><PdfFileWorkspace win={win} isActive={focusedContext === win.id} onDirtyChange={onDirtyChange} onRegisterSave={registerPdfSave} /></Suspense>;
     }
     if (isBinary) return <Box sx={{ textAlign: 'center', p: 4 }}><Typography>문서 ({ext.toUpperCase()})</Typography><Button onClick={() => window.open(url)}>다운로드</Button></Box>;
-    if (isMarkdown && mode === 'view') return <Box ref={markdownRef} onScroll={(event) => viewStateDescriptor && viewStateHydratedRef.current && viewStateQueueRef.current.schedule(viewStateDescriptor, { scrollTop: event.currentTarget.scrollTop })} sx={{ p: 3, overflow: 'auto', height: '100%' }}><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ''}</ReactMarkdown></Box>;
-    return <Editor height="100%" language={ext} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} value={content || ''} onMount={handleMonacoMount} onChange={(val) => handleContentChange(win.id, val)} options={{ readOnly: mode === 'view' }} />;
+    if (isMarkdown && mode === 'view') return <Suspense fallback={<ViewerLoading />}><MarkdownFileView containerRef={markdownRef} onScroll={(event) => viewStateDescriptor && viewStateHydratedRef.current && viewStateQueueRef.current.schedule(viewStateDescriptor, { scrollTop: event.currentTarget.scrollTop })} content={content || ''} /></Suspense>;
+    return <Suspense fallback={<ViewerLoading />}><MonacoFileEditor height="100%" language={ext} theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'light'} value={content || ''} onMount={handleMonacoMount} onChange={(val) => handleContentChange(win.id, val)} options={{ readOnly: mode === 'view' }} /></Suspense>;
   };
 
   return (

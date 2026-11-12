@@ -8,11 +8,11 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Rnd } from 'react-rnd';
 import { useWindows } from '../contexts/WindowContext';
-import MeetingApp from './MeetingApp';
-import DocumentStudio from './DocumentStudio/DocumentStudio';
-import DocumentWorkspace from './DocumentWorkspace/DocumentWorkspace';
 import { getAppWindowLayerZIndex } from './windowLayerPolicy';
 
+const MeetingApp = React.lazy(() => import('./MeetingApp'));
+const DocumentStudio = React.lazy(() => import('./DocumentStudio/DocumentStudio'));
+const DocumentWorkspace = React.lazy(() => import('./DocumentWorkspace/DocumentWorkspace'));
 const NoteStudio = React.lazy(() => import('./NoteStudio/NoteStudio'));
 
 class AppWindowErrorBoundary extends React.Component {
@@ -70,19 +70,21 @@ const GlobalAppWindowLayer = () => {
   const appWindows = openWindows.filter((win) => win.winType === 'app');
 
   const renderAppContent = (win) => {
+    let content = null;
     if (win.appId === 'meeting') {
-      return <MeetingApp inWindow initialRoomCode={win.payload?.roomCode} autoJoin={!!win.payload?.autoJoin} conversationId={win.payload?.conversationId || null} />;
+      content = <MeetingApp inWindow initialRoomCode={win.payload?.roomCode} autoJoin={!!win.payload?.autoJoin} conversationId={win.payload?.conversationId || null} />;
     }
     if (win.appId === 'document-studio') {
-      return <DocumentStudio />;
+      content = <DocumentStudio />;
     }
     if (win.appId === 'document-workspace') {
-      return <DocumentWorkspace />;
+      content = <DocumentWorkspace />;
     }
     if (win.appId === 'note-studio') {
-      return <React.Suspense fallback={<Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress size={30} /></Box>}><NoteStudio /></React.Suspense>;
+      content = <NoteStudio />;
     }
-    return null;
+    if (!content) return null;
+    return <React.Suspense fallback={<Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress size={30} /></Box>}>{content}</React.Suspense>;
   };
 
   const handleClose = (win) => {

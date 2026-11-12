@@ -14,11 +14,18 @@ import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import PrintOutlinedIcon from '@mui/icons-material/PrintOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { Document, Page } from 'react-pdf';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
 import axios from 'axios';
 import { collectPdfTextItems, getPdfHighlightRects, normalizeDragRect, reconstructPdfPlainText, reconstructPdfRegionText } from './pdfSelection';
 import { getPdfZoomKeyDirection, stepPdfZoom } from './pdfZoom';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString();
 
 const TOOL_DEFINITIONS = [
   ['select', '선택', PanToolAltOutlinedIcon],

@@ -1,27 +1,18 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Box, Toolbar } from '@mui/material';
+import React, { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Box, CircularProgress, Toolbar } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import socketIOClient from 'socket.io-client';
 import axios from 'axios';
 import './App.css';
 
-import ServicePlatform from './components/ServicePlatform';
 import TopBar from './components/TopBar';
-import Settings from './components/Settings';
-import NAS from './components/NAS';
-import Login from './components/Login';
-import Signup from './components/Signup';
 import MessageSidebar from './components/MessageSidebar';
 import ChatRoomSidebar from './components/ChatRoomSidebar';
 import NotificationSidebar from './components/NotificationSidebar';
 import DedicatedChatWindowLayer from './components/DedicatedChatWindowLayer';
 import ChatWorkspaceWindowLayer from './components/ChatWorkspaceWindowLayer';
-import GlobalAppWindowLayer from './components/GlobalAppWindowLayer';
 import { getNasWorkspaceLayerSx } from './components/NAS/fullscreenLayout';
 import { getNasWindowLayerZIndex } from './components/windowLayerPolicy';
-import MeetingInvitePage from './components/MeetingInvitePage';
-import PublicSharePage from './components/PublicSharePage';
-import AiAgentPanel from './components/AiAgentPanel';
+import socket from './socket';
 
 import { WindowProvider } from './contexts/WindowContext';
 import { useWindows } from './contexts/WindowContext';
@@ -30,6 +21,23 @@ import { ChatProvider } from './contexts/ChatContext';
 import { MeetingProvider } from './contexts/MeetingContext';
 import { CustomThemeProvider } from './contexts/ThemeContext';
 import useNotifications from './notifications/useNotifications';
+
+const loadNasWorkspace = () => import('./components/NAS');
+const ServicePlatform = lazy(() => import('./components/ServicePlatform'));
+const Settings = lazy(() => import('./components/Settings'));
+const NAS = lazy(loadNasWorkspace);
+const Login = lazy(() => import('./components/Login'));
+const Signup = lazy(() => import('./components/Signup'));
+const MeetingInvitePage = lazy(() => import('./components/MeetingInvitePage'));
+const PublicSharePage = lazy(() => import('./components/PublicSharePage'));
+const AiAgentPanel = lazy(() => import('./components/AiAgentPanel'));
+const GlobalAppWindowLayer = lazy(() => import('./components/GlobalAppWindowLayer'));
+
+const AppLoading = () => (
+  <Box sx={{ width: '100%', height: '100%', minHeight: 160, display: 'grid', placeItems: 'center' }}>
+    <CircularProgress size={30} />
+  </Box>
+);
 
 const PrivateRoute = ({ children }) => {
   const user = localStorage.getItem('user');
@@ -132,9 +140,15 @@ const PersistentMainRoutes = ({ aiPanelOpen = false }) => {
   const location = useLocation();
   const { openWindows, focusedContext } = useWindows();
   const isNasRoute = location.pathname.startsWith('/nas');
+  const hasNasWindow = openWindows.some((win) => win.winType === 'folder' || win.winType === 'file');
+  const [nasMounted, setNasMounted] = useState(() => isNasRoute || hasNasWindow);
   const hasImmersiveNasWindow = openWindows.some((win) =>
     (win.winType === 'folder' || win.winType === 'file') && win.isImmersive && !win.isMinimized
   );
+
+  useEffect(() => {
+    if (isNasRoute || hasNasWindow) setNasMounted(true);
+  }, [hasNasWindow, isNasRoute]);
 
   return (
     <Box sx={{ position: 'relative', width: '100%', height: '100%', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -147,16 +161,24 @@ const PersistentMainRoutes = ({ aiPanelOpen = false }) => {
         </Routes>
       )}
 
-      <Box
-        sx={getNasWorkspaceLayerSx({
-          isNasRoute,
-          hasImmersiveNasWindow: hasImmersiveNasWindow && !aiPanelOpen,
-          layerZIndex: getNasWindowLayerZIndex(openWindows, focusedContext, isNasRoute),
-        })}
-      >
-        <NAS showWorkspace={isNasRoute} />
-      </Box>
-      <GlobalAppWindowLayer />
+      {nasMounted && (
+        <Box
+          sx={getNasWorkspaceLayerSx({
+            isNasRoute,
+            hasImmersiveNasWindow: hasImmersiveNasWindow && !aiPanelOpen,
+            layerZIndex: getNasWindowLayerZIndex(openWindows, focusedContext, isNasRoute),
+          })}
+        >
+          <Suspense fallback={<AppLoading />}>
+            <NAS showWorkspace={isNasRoute} />
+          </Suspense>
+        </Box>
+      )}
+      {openWindows.some((win) => win.winType === 'app') && (
+        <Suspense fallback={null}>
+          <GlobalAppWindowLayer />
+        </Suspense>
+      )}
     </Box>
   );
 };
@@ -172,9 +194,10 @@ function AppContent() {
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelRequest, setAiPanelRequest] = useState(null);
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')));
-  const [appSocket, setAppSocket] = useState(null);
   const [chatPreview, setChatPreview] = useState(null);
   const previewTimerRef = useRef(null);
+  const socketIdentityRef = useRef(user ? String(user.userUid || user.loginId || user.id || user.username || 'signed-in') : 'guest');
+  const appSocket = user ? socket : null;
   const aiUiContext = useMemo(() => {
     const activeWindow = openWindows.find((win) => win.id === focusedContext && !win.isMinimized) || null;
     const activePath = activeWindow?.currentPath || activeWindow?.fullPath || activeWindow?.basePath || fileManagerPath || '/';
@@ -260,16 +283,16 @@ function AppContent() {
 
 
   useEffect(() => {
-    if (!user) {
-      setAppSocket(null);
-      return undefined;
+    const nextSocketIdentity = user
+      ? String(user.userUid || user.loginId || user.id || user.username || 'signed-in')
+      : 'guest';
+    if (socketIdentityRef.current !== nextSocketIdentity) {
+      socketIdentityRef.current = nextSocketIdentity;
+      socket.disconnect();
+      socket.connect();
     }
 
-    const socket = socketIOClient('https://filemanager-nas.com', {
-      withCredentials: true,
-    });
-
-    setAppSocket(socket);
+    if (!user) return undefined;
 
     const handleForceLogoutTarget = (data) => {
       const currentUser = JSON.parse(localStorage.getItem('user'));
@@ -302,8 +325,6 @@ function AppContent() {
     return () => {
       socket.off('force_logout_target', handleForceLogoutTarget);
       socket.off('duplicate_login', handleDuplicateLogin);
-      socket.disconnect();
-      setAppSocket((current) => (current === socket ? null : current));
     };
   }, [user]);
 
@@ -463,12 +484,16 @@ function AppContent() {
                     <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, display: { xs: aiPanelOpen ? 'none' : 'flex', sm: 'flex' }, flexDirection: 'column', overflow: 'hidden' }}>
                       <PersistentMainRoutes aiPanelOpen={aiPanelOpen} />
                     </Box>
-                    <AiAgentPanel
-                      open={aiPanelOpen}
-                      onClose={() => { setAiPanelOpen(false); setAiPanelRequest(null); }}
-                      context={{ ...aiUiContext, ...(aiPanelRequest?.context || {}) }}
-                      draftRequest={aiPanelRequest}
-                    />
+                    {aiPanelOpen && (
+                      <Suspense fallback={<Box sx={{ width: { xs: '100%', sm: 360 }, display: 'grid', placeItems: 'center' }}><CircularProgress size={28} /></Box>}>
+                        <AiAgentPanel
+                          open
+                          onClose={() => { setAiPanelOpen(false); setAiPanelRequest(null); }}
+                          context={{ ...aiUiContext, ...(aiPanelRequest?.context || {}) }}
+                          draftRequest={aiPanelRequest}
+                        />
+                      </Suspense>
+                    )}
                   </Box>
                 </Box>
                 </Box>
@@ -486,7 +511,9 @@ export default function App() {
     <CustomThemeProvider>
       <BrowserRouter>
         <WindowProvider>
-          <AppContent />
+          <Suspense fallback={<AppLoading />}>
+            <AppContent />
+          </Suspense>
         </WindowProvider>
       </BrowserRouter>
     </CustomThemeProvider>

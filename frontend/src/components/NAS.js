@@ -121,12 +121,13 @@ const NAS = ({ showWorkspace = true }) => {
   }, [currentUserIdentity]);
 
   useEffect(() => {
+    if (!showWorkspace) return undefined;
     let active = true;
     axios.get('/api/favorites', { withCredentials: true }).then(({ data }) => {
       if (active) setFavoritePaths(new Set((Array.isArray(data?.items) ? data.items : []).map(item => ensureSlash(item.fullPath))));
     }).catch(() => {});
     return () => { active = false; };
-  }, []);
+  }, [showWorkspace, currentUserIdentity]);
 
   const [showExt, setShowExt] = useState(localStorage.getItem('nas_show_extensions') === 'true');
   useEffect(() => {
@@ -188,6 +189,7 @@ const NAS = ({ showWorkspace = true }) => {
   const contextMenuRef = useRef(contextMenu); contextMenuRef.current = contextMenu;
 
   useEffect(() => {
+    if (!showWorkspace) return undefined;
     const query = fileSearchQuery.trim();
     if (query.length < 2) {
       setFileSearchResults([]);
@@ -219,7 +221,7 @@ const NAS = ({ showWorkspace = true }) => {
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [fileSearchQuery]);
+  }, [fileSearchQuery, showWorkspace]);
 
   const touchTimer = useRef(null);
   const isLongPressTriggered = useRef(false);
@@ -244,6 +246,7 @@ const NAS = ({ showWorkspace = true }) => {
   const [clipboard, setClipboard] = useState({ paths: [] });
 
   useEffect(() => {
+    if (!showWorkspace) return undefined;
     const handleKeyDown = async (e) => {
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.closest('.monaco-editor') || e.target?.closest('.onlyoffice-wrapper')) return;
@@ -274,9 +277,10 @@ const NAS = ({ showWorkspace = true }) => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedItems, focusedContext, clipboard, fetchFiles]);
+  }, [selectedItems, focusedContext, clipboard, fetchFiles, showWorkspace]);
 
   useEffect(() => {
+    if (!showWorkspace) return undefined;
     let isSelecting = false;
     let startX = 0, startY = 0;
     let selectionBox = null;
@@ -431,10 +435,11 @@ const NAS = ({ showWorkspace = true }) => {
         selectionBox.parentNode.removeChild(selectionBox);
       }
     };
-  }, []);
+  }, [showWorkspace]);
 
 
   useEffect(() => {
+    if (!showWorkspace) return undefined;
     const handleEscAndHover = (e) => {
       if (e.type === 'keydown' && e.key === 'Escape') {
         setOpenWindows(prev => prev.map(w => w.isImmersive ? { ...w, isImmersive: false } : w));
@@ -442,7 +447,7 @@ const NAS = ({ showWorkspace = true }) => {
     };
     window.addEventListener('keydown', handleEscAndHover);
     return () => window.removeEventListener('keydown', handleEscAndHover);
-  }, [setOpenWindows, folderInlineMode, fileManagerPath]);
+  }, [setOpenWindows, folderInlineMode, fileManagerPath, showWorkspace]);
 
   const handleCloseSnackbar = () => setSnackbar(prev => ({ ...prev, open: false }));
 
@@ -479,9 +484,12 @@ const NAS = ({ showWorkspace = true }) => {
     if (navigation) pendingNavigationPathRef.current = null;
     try { const response = await axios.get(`/api/files?path=${encodeURIComponent(targetPath)}&t=${Date.now()}`, { withCredentials: true, headers: navigation ? { 'X-NAS-Navigation': '1' } : undefined }); setDesktopItems(response.data || []); } catch (err) { showError('파일관리자 로드', err); }
   }, [currentFileManagerPath]);
-  useEffect(() => { loadDesktopItems(); }, [loadDesktopItems]);
+  useEffect(() => {
+    if (showWorkspace) loadDesktopItems();
+  }, [loadDesktopItems, showWorkspace]);
 
   useEffect(() => {
+    if (!showWorkspace) return undefined;
     let syncTimer;
     const syncFiles = async () => {
       if (inlineEditRef.current || contextMenuRef.current) return;
@@ -504,7 +512,7 @@ const NAS = ({ showWorkspace = true }) => {
       socket.off('files:changed', onFilesChanged);
       socket.off('connect', onFilesChanged);
     };
-  }, [setOpenWindows, currentFileManagerPath]);
+  }, [setOpenWindows, currentFileManagerPath, showWorkspace]);
 
   useEffect(() => {
     if (desktopItems.length === 0) return; 
@@ -521,6 +529,7 @@ const NAS = ({ showWorkspace = true }) => {
   const refreshPath = (path) => { const safePath = ensureSlash(path); if (safePath === currentFileManagerPath || safePath === '/') loadDesktopItems(); openWindows.forEach(w => { if (w.winType === 'folder' && w.currentPath === safePath) setTimeout(() => fetchFiles(w.id, safePath), 50); }); window.dispatchEvent(new CustomEvent('nas_tree_refresh')); };
 
   useEffect(() => {
+    if (!showWorkspace) return undefined;
     const handleTransferCompleted = (event) => {
       const safePath = ensureSlash(event.detail?.path || '/');
       refreshPath(safePath);
@@ -528,7 +537,7 @@ const NAS = ({ showWorkspace = true }) => {
 
     window.addEventListener('nas_transfer_completed', handleTransferCompleted);
     return () => window.removeEventListener('nas_transfer_completed', handleTransferCompleted);
-  }, [openWindows]);
+  }, [openWindows, showWorkspace]);
 
   const getActiveTargetPath = () => {
     if (!focusedContext || focusedContext === 'desktop') return currentFileManagerPath;
@@ -623,7 +632,10 @@ const NAS = ({ showWorkspace = true }) => {
     } else focusWindow(winId); setSelectedItems([]); 
   };
 
-  useEffect(() => { openWindows.forEach(w => { if (w.winType === 'folder' && !w.isLoaded) fetchFiles(w.id, w.currentPath, { navigation: true }); }); }, [openWindows, fetchFiles]);
+  useEffect(() => {
+    if (!showWorkspace) return;
+    openWindows.forEach(w => { if (w.winType === 'folder' && !w.isLoaded) fetchFiles(w.id, w.currentPath, { navigation: true }); });
+  }, [openWindows, fetchFiles, showWorkspace]);
 
   const openFileWindow = async (fileItem, forceEditMode = false) => {
     const safePath = ensureSlash(fileItem.fullPath); const fileId = `file_${safePath}`;
@@ -2295,8 +2307,8 @@ const NAS = ({ showWorkspace = true }) => {
   }, [currentFileManagerPath, currentUserIdentity]);
 
   useEffect(() => {
-    refreshStorageUsage(currentFileManagerPath);
-  }, [currentFileManagerPath, desktopItems.length, refreshStorageUsage]);
+    if (showWorkspace) refreshStorageUsage(currentFileManagerPath);
+  }, [currentFileManagerPath, desktopItems.length, refreshStorageUsage, showWorkspace]);
 
   const desktopCardStyle = isMobile
     ? { textAlign: 'center', cursor: 'pointer', width: '100%', minWidth: 0, zIndex: 10 }
