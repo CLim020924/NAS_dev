@@ -56,6 +56,11 @@ requireText('src/components/NAS.js', '{isMaster && (', 'full-root workspace sele
 requireText('src/components/NAS.js', '마스터 전용 · NAS 루트 (/)', 'the storage panel must explain that NAS root navigation is master-only');
 requireText('src/components/NAS.js', 'aria-label="NAS 루트 경로 보기"', 'the master root action must be explicitly identified for assistive technology');
 requireText('src/components/NAS.js', '루트 경로 표시 중', 'the active master root workspace must have a clear selected state');
+requireText('src/components/NAS/NASContextMenu.js', '압축 풀기…', 'ZIP files must expose extraction from the file context menu');
+requireText('src/components/NAS.js', "axios.post('/api/file/extract-zip'", 'ZIP extraction must use the authenticated NAS endpoint');
+requireText('src/components/NAS.js', '새 폴더를 만들어 그 안에 풀기 (권장)', 'ZIP extraction must default to an isolated folder');
+requireText('src/components/NAS.js', '같은 이름의 기존 파일이나 폴더는 덮어쓰지 않고', 'ZIP extraction must explain the no-overwrite boundary');
+requireText('src/components/NAS.js', 'title="압축을 풀 NAS 폴더 선택"', 'ZIP extraction must retain the NAS destination picker');
 requireText('src/components/ServerSettingsPanel.js', 'SSD 수명·건강 관리', 'manager settings must expose SSD health without confusing power-on time with lifetime wear');
 requireText('src/components/ServerSettingsPanel.js', '파일 작업이 안전하게 차단되었습니다', 'missing NAS mounts must be explained as a fail-closed storage state');
 const topBar = read('src/components/TopBar.js');

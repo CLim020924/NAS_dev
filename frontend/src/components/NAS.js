@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Divider, Chip, TextField, InputAdornment, Menu, MenuItem} from '@mui/material';
+import { Box, Typography, Paper, IconButton, Table, TableBody, TableCell, TableContainer, TableRow, useMediaQuery, useTheme, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Button, Snackbar, Alert, CircularProgress, LinearProgress, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Divider, Chip, TextField, InputAdornment, Menu, MenuItem, Radio, RadioGroup, FormControlLabel} from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rnd } from 'react-rnd';
@@ -14,6 +14,7 @@ import NASContextMenu from './NAS/NASContextMenu';
 import SidebarTree from './NAS/Window/SidebarTree';
 import ShareLinkDialog from './ShareLinkDialog';
 import ShareManagerDialog from './ShareManagerDialog';
+import NasItemPickerDialog from './NasItemPickerDialog';
 
 import MenuIcon from '@mui/icons-material/Menu'; 
 import FolderIcon from '@mui/icons-material/Folder';
@@ -41,6 +42,8 @@ import HistoryIcon from '@mui/icons-material/History';
 import BackupIcon from '@mui/icons-material/Backup';
 import StarIcon from '@mui/icons-material/Star';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import UnarchiveIcon from '@mui/icons-material/Unarchive';
 
 import { useWindows } from '../contexts/WindowContext';
 import { useTransfer } from '../contexts/TransferContext';
@@ -164,6 +167,8 @@ const NAS = ({ showWorkspace = true }) => {
   const [closePrompt, setClosePrompt] = useState(null);
   const [hoveredHeader, setHoveredHeader] = useState(null);
   const [folderDownload, setFolderDownload] = useState(null);
+  const [zipExtract, setZipExtract] = useState({ open: false, item: null, mode: 'folder', folderName: '', destinationPath: '/', busy: false, error: '', conflicts: [] });
+  const [zipDestinationPickerOpen, setZipDestinationPickerOpen] = useState(false);
   const [fileInfo, setFileInfo] = useState({ open: false, loading: false, item: null, data: null, error: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [transferTasks, setTransferTasks] = useState([]);
@@ -1974,6 +1979,53 @@ const NAS = ({ showWorkspace = true }) => {
     }
   };
 
+  const openZipExtraction = (item) => {
+    if (!item || !String(item.name || '').toLowerCase().endsWith('.zip')) return;
+    const sourcePath = ensureSlash(item.fullPath || item.path || '/');
+    const slashIndex = sourcePath.lastIndexOf('/');
+    const sourceFolder = slashIndex <= 0 ? '/' : sourcePath.slice(0, slashIndex);
+    const suggestedName = String(item.name || '').replace(/\.zip$/i, '').trim() || '압축 해제';
+    setZipExtract({
+      open: true,
+      item,
+      mode: 'folder',
+      folderName: suggestedName,
+      destinationPath: sourceFolder,
+      busy: false,
+      error: '',
+      conflicts: []
+    });
+  };
+
+  const executeZipExtraction = async () => {
+    if (!zipExtract.item || zipExtract.busy) return;
+    const destinationPath = ensureSlash(zipExtract.destinationPath || '/');
+    setZipExtract((current) => ({ ...current, busy: true, error: '', conflicts: [] }));
+    try {
+      const { data } = await axios.post('/api/file/extract-zip', {
+        sourcePath: ensureSlash(zipExtract.item.fullPath || zipExtract.item.path),
+        destinationPath,
+        mode: zipExtract.mode,
+        folderName: zipExtract.mode === 'folder' ? zipExtract.folderName.trim() : undefined
+      }, { withCredentials: true });
+      setZipExtract((current) => ({ ...current, open: false, busy: false }));
+      refreshPath(destinationPath);
+      refreshStorageUsage(destinationPath);
+      setSnackbar({
+        open: true,
+        message: `압축을 풀었습니다. 파일 ${Number(data.fileCount || 0).toLocaleString()}개 · ${formatFileSize(data.extractedBytes || 0)}`,
+        severity: 'success'
+      });
+    } catch (error) {
+      setZipExtract((current) => ({
+        ...current,
+        busy: false,
+        error: error.response?.data?.error || error.message || 'ZIP 압축을 풀지 못했습니다.',
+        conflicts: Array.isArray(error.response?.data?.conflicts) ? error.response.data.conflicts : []
+      }));
+    }
+  };
+
   const formatFileSize = (bytes, isDirectory = false) => {
     if (isDirectory) return '폴더';
     const size = Number(bytes || 0);
@@ -2859,7 +2911,7 @@ const NAS = ({ showWorkspace = true }) => {
         open={shareManagerOpen}
         onClose={() => setShareManagerOpen(false)}
       />
-      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleShowProperties={handleShowProperties} handleOpenVersionHistory={loadVersionHistory} handleToggleFavorite={toggleFavorite} favoritePaths={favoritePaths} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} handleOpenShareDialog={openShareDialog} />
+      <NASContextMenu handleCopy={handleCopyContextMenu} handlePaste={handlePasteContextMenu} clipboard={clipboard} contextMenu={contextMenu} handleContextMenuClose={handleContextMenuClose} refreshPath={refreshPath} handleCreateFolderStart={handleCreateFolderStart} handleUploadClick={handleUploadClick} openFolderWindow={openFolderWindow} openFileWindow={openFileWindow} handleRenameStart={handleRenameStart} handleDelete={handleDelete} handleDownload={handleDownload} handleExtractZip={openZipExtraction} handleShowProperties={handleShowProperties} handleOpenVersionHistory={loadVersionHistory} handleToggleFavorite={toggleFavorite} favoritePaths={favoritePaths} getItemsToProcess={getItemsToProcess} handleCreateLinkedDeviceFolder={handleCreateLinkedDeviceFolder} handleOpenShareDialog={openShareDialog} />
       <Snackbar open={snackbar.open} autoHideDuration={snackbar.severity === 'info' ? null : 3000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}><Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', display: 'flex', alignItems: 'center' }}>{snackbar.severity === 'info' && <CircularProgress size={20} sx={{ mr: 2, color: 'inherit' }} />}{snackbar.message}</Alert></Snackbar>
       {/* 파일/폴더 정보 다이얼로그 */}
       <Dialog
@@ -2986,6 +3038,106 @@ const NAS = ({ showWorkspace = true }) => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog
+        open={zipExtract.open}
+        onClose={() => !zipExtract.busy && setZipExtract((current) => ({ ...current, open: false }))}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 900, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <UnarchiveIcon color="primary" /> ZIP 압축 풀기
+        </DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: 'grid', gap: 2 }}>
+            <Box>
+              <Typography variant="caption" color="text.secondary">압축 파일</Typography>
+              <Typography sx={{ fontWeight: 800, wordBreak: 'break-all' }}>{zipExtract.item?.name}</Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 0.5 }}>압축을 푸는 방식</Typography>
+              <RadioGroup
+                value={zipExtract.mode}
+                onChange={(event) => setZipExtract((current) => ({ ...current, mode: event.target.value, error: '', conflicts: [] }))}
+              >
+                <FormControlLabel value="folder" control={<Radio />} label="새 폴더를 만들어 그 안에 풀기 (권장)" />
+                <FormControlLabel value="here" control={<Radio />} label="선택한 위치에 내부 파일·폴더를 바로 풀기" />
+              </RadioGroup>
+            </Box>
+
+            {zipExtract.mode === 'folder' && (
+              <TextField
+                label="새 폴더 이름"
+                value={zipExtract.folderName}
+                onChange={(event) => setZipExtract((current) => ({ ...current, folderName: event.target.value, error: '', conflicts: [] }))}
+                fullWidth
+                autoFocus
+                helperText="기본값은 ZIP 파일 이름입니다."
+                disabled={zipExtract.busy}
+              />
+            )}
+
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+              <TextField
+                label="압축을 풀 위치"
+                value={zipExtract.destinationPath}
+                fullWidth
+                InputProps={{ readOnly: true }}
+              />
+              <Button
+                variant="outlined"
+                startIcon={<FolderOpenIcon />}
+                onClick={() => setZipDestinationPickerOpen(true)}
+                disabled={zipExtract.busy}
+                sx={{ whiteSpace: 'nowrap', minHeight: 56 }}
+              >
+                위치 선택
+              </Button>
+            </Box>
+
+            <Alert severity="info">
+              기본 위치는 ZIP 파일이 있는 폴더입니다. 같은 이름의 기존 파일이나 폴더는 덮어쓰지 않고 압축 해제를 중단합니다.
+            </Alert>
+            {zipExtract.error && (
+              <Alert severity="error">
+                {zipExtract.error}
+                {zipExtract.conflicts.length > 0 && (
+                  <Typography variant="caption" component="div" sx={{ mt: 0.5, wordBreak: 'break-all' }}>
+                    충돌 항목: {zipExtract.conflicts.join(', ')}
+                  </Typography>
+                )}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button color="inherit" onClick={() => setZipExtract((current) => ({ ...current, open: false }))} disabled={zipExtract.busy}>취소</Button>
+          <Button
+            variant="contained"
+            onClick={executeZipExtraction}
+            disabled={zipExtract.busy || (zipExtract.mode === 'folder' && !zipExtract.folderName.trim())}
+            startIcon={zipExtract.busy ? <CircularProgress size={16} color="inherit" /> : <UnarchiveIcon />}
+          >
+            {zipExtract.busy ? '안전하게 푸는 중…' : '압축 풀기'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <NasItemPickerDialog
+        open={zipDestinationPickerOpen}
+        onClose={() => setZipDestinationPickerOpen(false)}
+        initialPath={zipExtract.destinationPath}
+        title="압축을 풀 NAS 폴더 선택"
+        confirmLabel="이 위치 선택"
+        folderOnly
+        allowCurrentFolder
+        onSelect={(item) => {
+          if (item?.type !== 'folder' && item?.type !== 'linked-device' && !item?.isCurrentFolder) return;
+          setZipExtract((current) => ({ ...current, destinationPath: ensureSlash(item.fullPath || '/'), error: '', conflicts: [] }));
+          setZipDestinationPickerOpen(false);
+        }}
+      />
 
       {/* 🔥 폴더 다운로드 다이얼로그 */}
       <Dialog open={!!folderDownload} onClose={() => setFolderDownload(null)} PaperProps={{ elevation: 0, sx: { borderRadius: 2, p: 1, border: `1px solid ${theme.palette.divider}` } }}>

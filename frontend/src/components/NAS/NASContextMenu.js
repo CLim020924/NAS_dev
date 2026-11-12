@@ -16,12 +16,13 @@ import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import LinkIcon from '@mui/icons-material/Link';
 import HistoryIcon from '@mui/icons-material/History';
 import StarIcon from '@mui/icons-material/Star';
+import UnarchiveIcon from '@mui/icons-material/Unarchive';
 
 const NASContextMenu = ({ 
   contextMenu, handleContextMenuClose, refreshPath, handleCreateFolderStart, 
   handleUploadClick, openFolderWindow, openFileWindow, handleRenameStart, 
   handleDelete, handleDownload, handleShowProperties, handleOpenVersionHistory, handleToggleFavorite, favoritePaths, getItemsToProcess,
-  handleCopy, handlePaste, clipboard, handleCreateLinkedDeviceFolder, handleOpenShareDialog
+  handleCopy, handlePaste, clipboard, handleCreateLinkedDeviceFolder, handleOpenShareDialog, handleExtractZip
 }) => {
   if (!contextMenu) return null;
 
@@ -153,6 +154,11 @@ const NASContextMenu = ({
         }}>
           <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon><ListItemText>다운로드</ListItemText>
         </MenuItem>,
+        String(contextMenu.item?.name || '').toLowerCase().endsWith('.zip') && (
+          <MenuItem key="extractZip" onClick={() => { handleContextMenuClose(); setTimeout(() => handleExtractZip(contextMenu.item), 10); }}>
+            <ListItemIcon><UnarchiveIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>압축 풀기…</ListItemText>
+          </MenuItem>
+        ),
         <MenuItem key="shareFile" onClick={() => { handleContextMenuClose(); setTimeout(() => handleOpenShareDialog(getItemsToProcess(contextMenu.item), contextMenu.path || '/'), 10); }}>
           <ListItemIcon><LinkIcon fontSize="small" color="primary" /></ListItemIcon><ListItemText>공유 링크 생성</ListItemText>
         </MenuItem>,

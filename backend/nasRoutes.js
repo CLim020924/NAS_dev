@@ -79,6 +79,7 @@ const { classifyCodeExecutionError } = require('./codeExecutionErrors');
 const { loadPdfAnnotations, savePdfAnnotations } = require('./pdfAnnotationStore');
 const { createPdfOcrService } = require('./pdfOcrService');
 const { normalizeKind: normalizeViewStateKind, normalizeDeviceId, loadWorkspaceViewState, saveWorkspaceViewState } = require('./workspaceViewStateStore');
+const { inspectZip, extractZipToDirectory, defaultFolderName } = require('./zipExtractionService');
 const {
   SHARED_ROOT_NAME,
   normalizeRelativePath: normalizeAccountShareRelPath,
@@ -2964,6 +2965,130 @@ router.post('/file/copy', verifyToken, async (req, res) => {
     });
     res.json({ message: '복사 완료' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ZIP 압축 해제
+// - 기본: ZIP이 있는 위치에 같은 이름의 새 폴더를 만든다.
+// - here 모드: 선택한 기존 폴더에 바로 풀되 충돌 시 아무것도 덮어쓰지 않는다.
+router.post('/file/extract-zip', verifyToken, async (req, res) => {
+  let stagingDirectory = '';
+  const promotedPaths = [];
+  let committed = false;
+  try {
+    const sourceRequestPath = String(req.body?.sourcePath || '').trim();
+    if (!sourceRequestPath) return res.status(400).json({ error: 'ZIP 파일 경로가 필요합니다.' });
+
+    const { basePath, targetPath: sourcePath } = getValidatedPath(req.user, sourceRequestPath);
+    assertRealPathInside(basePath, sourcePath);
+    if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
+      return res.status(404).json({ error: 'ZIP 파일을 찾을 수 없습니다.' });
+    }
+    if (path.extname(sourcePath).toLowerCase() !== '.zip') {
+      return res.status(400).json({ error: '현재는 ZIP 파일만 압축 해제할 수 있습니다.' });
+    }
+
+    const sourceRelativePath = toNasRelativePath(basePath, sourcePath);
+    const sourceParentPath = path.posix.dirname(sourceRelativePath) === '.' ? '/' : path.posix.dirname(sourceRelativePath);
+    const destinationRequestPath = String(req.body?.destinationPath || sourceParentPath || '/').trim() || '/';
+    const { targetPath: destinationDirectory } = getValidatedPath(req.user, destinationRequestPath);
+    assertRealPathInside(basePath, destinationDirectory);
+    if (!fs.existsSync(destinationDirectory) || !fs.statSync(destinationDirectory).isDirectory()) {
+      return res.status(400).json({ error: '압축을 풀 대상 폴더를 찾을 수 없습니다.' });
+    }
+
+    const mode = req.body?.mode === 'here' ? 'here' : 'folder';
+    const requestedFolderName = String(req.body?.folderName || defaultFolderName(path.basename(sourcePath))).trim();
+    if (mode === 'folder' && (
+      !requestedFolderName
+      || requestedFolderName === '.'
+      || requestedFolderName === '..'
+      || requestedFolderName !== path.basename(requestedFolderName)
+      || /[<>:"/\\|?*\x00-\x1F]/.test(requestedFolderName)
+    )) {
+      return res.status(400).json({ error: '새 폴더 이름이 올바르지 않습니다.' });
+    }
+
+    const inspection = await inspectZip(sourcePath);
+    await assertQuotaAvailable(req.user, inspection.totalUncompressedBytes, destinationDirectory);
+
+    const finalDirectory = mode === 'folder'
+      ? resolveInside(destinationDirectory, requestedFolderName)
+      : destinationDirectory;
+    if (mode === 'folder' && fs.existsSync(finalDirectory)) {
+      return res.status(409).json({
+        error: '같은 이름의 파일 또는 폴더가 이미 있습니다. 새 폴더 이름을 바꿔 주세요.',
+        code: 'EXTRACT_DESTINATION_EXISTS',
+        conflicts: [requestedFolderName]
+      });
+    }
+    if (mode === 'here') {
+      const conflicts = inspection.topLevelNames.filter((name) => fs.existsSync(resolveInside(destinationDirectory, name)));
+      if (conflicts.length) {
+        return res.status(409).json({
+          error: `대상 위치에 같은 이름의 항목이 ${conflicts.length}개 있습니다. 기존 파일은 덮어쓰지 않았습니다.`,
+          code: 'EXTRACT_DESTINATION_EXISTS',
+          conflicts: conflicts.slice(0, 20)
+        });
+      }
+    }
+
+    ensureDirSync(WEB_INCOMING_ROOT);
+    stagingDirectory = path.join(WEB_INCOMING_ROOT, `zip-extract-${crypto.randomBytes(12).toString('hex')}`);
+    await extractZipToDirectory(sourcePath, stagingDirectory, inspection);
+
+    if (mode === 'folder') {
+      if (fs.existsSync(finalDirectory)) throw Object.assign(new Error('압축 해제 중 같은 이름의 폴더가 생성되었습니다.'), { status: 409 });
+      fs.renameSync(stagingDirectory, finalDirectory);
+      stagingDirectory = '';
+      promotedPaths.push(finalDirectory);
+    } else {
+      for (const name of inspection.topLevelNames) {
+        const stagedPath = resolveInside(stagingDirectory, name);
+        const finalPath = resolveInside(destinationDirectory, name);
+        if (fs.existsSync(finalPath)) throw Object.assign(new Error(`압축 해제 중 '${name}' 항목이 새로 생성되어 중단했습니다.`), { status: 409 });
+        fs.renameSync(stagedPath, finalPath);
+        promotedPaths.push(finalPath);
+      }
+    }
+    committed = true;
+
+    const resultPath = toNasRelativePath(basePath, finalDirectory);
+    try {
+      addUsageCacheBytes(mode === 'folder' ? finalDirectory : destinationDirectory, inspection.totalUncompressedBytes);
+    } catch (cacheError) {
+      invalidateUsageCache(mode === 'folder' ? finalDirectory : destinationDirectory);
+    }
+    try {
+      appendActivity(basePath, {
+        type: 'archive-extracted',
+        path: resultPath,
+        archivePath: sourceRelativePath,
+        actor: getActivityActor(req.user),
+        source: 'web'
+      });
+    } catch (activityError) {
+      console.error('[zip-extract] activity log failed:', activityError.message);
+    }
+    return res.json({
+      success: true,
+      mode,
+      destinationPath: resultPath,
+      entryCount: inspection.entryCount,
+      fileCount: inspection.fileCount,
+      directoryCount: inspection.directoryCount,
+      extractedBytes: inspection.totalUncompressedBytes
+    });
+  } catch (error) {
+    if (!committed) {
+      for (const promotedPath of promotedPaths.reverse()) safeRmSync(promotedPath);
+    }
+    return res.status(error.status || 500).json({
+      error: error.message || 'ZIP 압축을 풀지 못했습니다.',
+      code: error.code || 'ZIP_EXTRACTION_FAILED'
+    });
+  } finally {
+    safeRmSync(stagingDirectory);
+  }
 });
 
 // [6] 속성 조회
