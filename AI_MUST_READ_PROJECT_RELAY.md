@@ -1,5 +1,16 @@
 # AI 필독 — NAS 프로젝트 작업 인계 및 시작 규칙
 
+## 2026-11-13 RHWP 뷰어→에디터 전환 수정·운영 배포
+
+- 사용자 요청: NAS가 다시 켜진 상태에서 배포 전에 RHWP 파일 뷰어는 열리지만 `에디터`를 눌러도 편집 모드로 바뀌지 않는 문제를 확인하고 수정한다.
+- 직접 원인: `FileViewer`가 렌더마다 새 `viewStateDescriptor` 객체를 만들어 RHWP의 저장 상태 복원 effect가 반복됐다. 비동기로 늦게 도착한 persisted `viewer` 상태가 사용자의 `editor` 클릭을 다시 덮을 수 있었다. `initialMode`도 최초 mount에서만 읽어 이미 열린 창의 새 편집 요청을 반영하지 못했다. 서버 SVG 렌더가 성공해도 에디터에 필요한 원본 buffer fetch가 실패하면 편집할 수 있는데, 기존 코드는 그 이유를 숨겼다.
+- 수정: `RhwpDocumentViewer`의 descriptor를 `kind/path/noteId` primitive 기반으로 안정화했다. 사용자·외부 모드 선택 revision 이후 도착한 오래된 상태 복원 응답은 무시한다. 이미 열린 창에 새로 들어온 viewer→editor 요청은 상승 edge에서 한 번만 반영해 편집 모드로 승격하되 이후 사용자가 뷰어로 돌아가는 선택은 막지 않는다. 원본 buffer를 준비하는 동안 `에디터 준비 중`을 표시하고 HTTP 실패 이유를 노출한다. legacy `NAS.js` 파일 창도 `preferEditMode`을 보존·전달한다. 순수 정책 파일과 회귀 테스트를 추가했다.
+- 검증: NAS Linux에서 RHWP mode/focus/save 3개 suite, 10/10 tests가 통과했다. backend 61/61 test files, frontend production build와 react-pdf/PDF.js exact gate가 통과했다. 운영 번들 `main.f01806eb.js`를 `/var/www/html`에 배포했고 실제 live index와 일치한다.
+- 운영 상태: `msp-backend` online 및 `pm2 save`, `ssh`, `tailscaled`, `nginx`, `docker`, `pm2-root`, `cloudflared` active, 내부 `127.0.0.1:3030`과 공개 HTTPS 200을 확인했다. 배포 전 백업은 `/home/limchanyoung/deploy-backups/20261113-rhwp-agent-9fec552/frontend`다.
+- 검증 경계: 브라우저 자동 제어가 현재 NAS 탭의 URL을 안전하게 식별하지 못해 중단되었으므로 로그인된 실제 HWP/HWPX 문서에서 에디터 클릭→문자 입력→저장→뷰어 복귀 화면은 직접 관찰하지 못했다. 코드·자동 회귀·빌드·운영 번들 검증은 완료됐고 다음 실제 사용자 세션에서 이 4단계를 확인한다.
+- 기록: 코드 커밋은 `9fec552`다. `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, Generated_Check, Office_Viewers를 갱신했다. 수식 오류 0건, 새 한글 깨짐 없음, 변경 범위 렌더를 확인했다.
+- 동시 반영: 직전 Agent 1.11.8/Provider 1.4.4의 표적 Explorer 갱신과 회전형 기기 토큰 변경도 같은 NAS fast-forward에 포함돼 운영 배포됐다. 설치파일 SHA-256은 Setup `25bb9805012e98d6b89d80a542741afdb5bb872625ae58e5e9e12bd3046f5b4a`, Agent `6949436fbb67b62eb6ca2fa0498e65dcfe385633800ef44d5bc28c5a76729194`, Provider `3deb32e096fff3668ce890498d0317269e33d415fc4a2607bccb08ed6b010a7a`다. 현재 Windows `user` 프로필에는 설치된 Agent/SyncRoot/DPAPI token이 없어 재부팅·tray·Explorer 깜빡임·양방향 동기화·토큰 회전·로그아웃/revoke 실PC E2E는 `PENDING-NAS-DRIVE-1118-DEPLOY-20261113` 같은 행에 계속 남긴다.
+
 ## 2026-11-13 NAS Drive 바탕화면 깜빡임·기기 토큰 수명 보완
 
 - 사용자 요청: Windows NAS Drive 실시간 연동 중 바탕화면이 계속 깜빡이는 문제를 바로잡고, 장치 토큰을 무기한 방치하지 않도록 정확한 수명·회전·로그아웃 경계를 구현한다.
@@ -9,7 +20,7 @@
 - 호환성: 구형 Agent는 capability를 보고하기 전까지 갑자기 만료시키지 않는다. 1.11.8로 업데이트된 뒤 수명 메타데이터를 초기화하고 이후 회전한다. 새 토큰 저장 실패 때 기존 토큰과 서버의 7일 grace가 남아 연결 단절을 피한다. raw token을 로그·프로필·workbook에 기록하지 않는다.
 - 검증: Agent/Provider/Setup self-test와 재빌드, Node 구문·diff 검사가 통과했다. 로컬 backend test 파일 61/61이 통과했고 환경 의존 항목만 skip됐다. 최종 `deviceAgentTokenLifecycle`, `windowsAgentShellRefresh`, `deviceSyncSecurity` 집중 회귀검사도 통과했다. 생성 버전은 Agent/Setup 1.11.8, Provider 1.4.4다.
 - 현재 PC 경계: 현재 Windows `user` 프로필에는 NAS Drive 프로세스, SyncRoot, 설정, DPAPI token, HKCU Run 항목이 없어 사용자가 본 기존 설치의 깜빡임을 이 프로필에서 실재현할 수 없었다. 소스의 전역 refresh 결함은 독립적으로 확인·수정했다.
-- 운영 대기: NAS `100.80.39.112`는 Tailscale offline, `ssh nas` timeout, 공개 `filemanager-nas.com` HTTP 530 상태여서 운영 checkout·PM2·다운로드 설치파일과 실제 PC E2E에는 아직 반영하지 않았다. `PENDING-NAS-DRIVE-1118-DEPLOY-20261113`을 보류 원장에 남겼다. NAS가 켜지면 fast-forward, backend restart/save, 기존·신규 설치 업데이트, 재부팅·tray·Explorer 상태열·양방향 동기화·회전 모의·logout/revoke를 확인하고 같은 보류 행을 완료로 갱신한다.
+- 운영 후속: NAS가 복구되어 코드·설치파일 배포, backend restart/save, 서비스·HTTP 검증까지 완료했다. 다만 현재 Windows `user` 프로필에는 설치된 Agent/SyncRoot/DPAPI token이 없어 실제 PC 설치·업데이트, 재부팅·tray·Explorer 상태열·양방향 동기화·회전 모의·logout/revoke E2E가 남았다. `PENDING-NAS-DRIVE-1118-DEPLOY-20261113`의 같은 보류 행을 `운영 배포 완료 · 실PC E2E 대기`로 갱신했다.
 - 프로젝트 메모리: `docs/NAS_PROJECT_LOG.xlsx`의 Request_Archive, Patch_Log, Do_Not_Break, Feature_Index, Relation_Map, Code_Map, API_Routes, Data_Files, Generated_Check, 보류 작업을 갱신했다. artifact-tool 재열기에서 수식 오류 0건, 새 한국어 깨짐 없음, 변경 범위 렌더를 확인했다. 기존 모지바케 검색 8건은 과거 인코딩 장애 설명에 이미 존재하던 문자열이다.
 
 ## 2026-09-07 PDF 주석·영역 텍스트 복사 운영 배포
