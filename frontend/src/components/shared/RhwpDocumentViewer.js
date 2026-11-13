@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack, TextField, Typography } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import EditIcon from '@mui/icons-material/Edit';
@@ -15,6 +15,7 @@ import NasItemPickerDialog from '../NasItemPickerDialog';
 import { focusRhwpEditorInput, shouldRestoreRhwpEditorFocus } from './rhwpFocusPolicy';
 import { createWorkspaceViewStateQueue, loadWorkspaceViewState } from '../../utils/workspaceViewState';
 import { exportRhwpWithRecovery, getNasRhwpShortcutAction, replaceRhwpExtension } from './rhwpSavePolicy';
+import { normalizeRhwpMode, shouldApplyRequestedEditorMode, shouldRestorePersistedRhwpMode } from './rhwpModePolicy';
 
 let rhwpReadyPromise = null;
 
@@ -62,8 +63,10 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
   const containerRef = useRef(null);
   const editorHostRef = useRef(null);
   const editorRef = useRef(null);
-  const [mode, setMode] = useState(initialMode === 'editor' ? 'editor' : 'viewer');
+  const requestedMode = normalizeRhwpMode(initialMode);
+  const [mode, setMode] = useState(requestedMode);
   const [buffer, setBuffer] = useState(null);
+  const [editorBufferLoading, setEditorBufferLoading] = useState(true);
   const [pages, setPages] = useState([]);
   const [zoom, setZoom] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -80,6 +83,8 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
+  const requestedModeRef = useRef(requestedMode);
+  const modeSelectionRevisionRef = useRef(0);
   const focusTimersRef = useRef([]);
   const viewStateQueueRef = useRef(null);
   if (!viewStateQueueRef.current) viewStateQueueRef.current = createWorkspaceViewStateQueue();
@@ -87,30 +92,55 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
   const viewStateHydratedRef = useRef(false);
   const [viewStateReady, setViewStateReady] = useState(0);
   const pageWidth = Math.max(280, Math.min(1200, Math.floor((surfaceWidth - 32) * zoom)));
+  const viewStateKind = viewStateDescriptor?.kind;
+  const viewStatePath = viewStateDescriptor?.path;
+  const viewStateNoteId = viewStateDescriptor?.noteId;
+  const stableViewStateDescriptor = useMemo(() => {
+    if (!viewStateKind) return null;
+    return {
+      kind: viewStateKind,
+      ...(viewStatePath ? { path: viewStatePath } : {}),
+      ...(viewStateNoteId ? { noteId: viewStateNoteId } : {})
+    };
+  }, [viewStateKind, viewStateNoteId, viewStatePath]);
+
+  const selectMode = useCallback((nextMode) => {
+    modeSelectionRevisionRef.current += 1;
+    setMode(normalizeRhwpMode(nextMode));
+  }, []);
 
   useEffect(() => {
-    if (!viewStateDescriptor) return undefined;
+    const previousRequestedMode = requestedModeRef.current;
+    requestedModeRef.current = requestedMode;
+    if (shouldApplyRequestedEditorMode(previousRequestedMode, requestedMode)) selectMode('editor');
+  }, [requestedMode, selectMode]);
+
+  useEffect(() => {
+    if (!stableViewStateDescriptor) return undefined;
     const controller = new AbortController();
+    const selectionRevision = modeSelectionRevisionRef.current;
     viewStateHydratedRef.current = false;
-    loadWorkspaceViewState(viewStateDescriptor, controller.signal).then((record) => {
+    loadWorkspaceViewState(stableViewStateDescriptor, controller.signal).then((record) => {
       const state = record?.state;
       if (!state) return;
-      if (state.mode === 'viewer' || state.mode === 'editor') setMode(state.mode);
+      if (shouldRestorePersistedRhwpMode(selectionRevision, modeSelectionRevisionRef.current, state.mode)) {
+        setMode(normalizeRhwpMode(state.mode));
+      }
       if (Number.isFinite(state.zoom)) setZoom(Math.max(0.5, Math.min(3, state.zoom)));
       restoredScrollRef.current = Number.isFinite(state.scrollTop) ? state.scrollTop : null;
       setViewStateReady((value) => value + 1);
     }).catch(() => {}).finally(() => { if (!controller.signal.aborted) viewStateHydratedRef.current = true; });
     return () => controller.abort();
-  }, [viewStateDescriptor]);
+  }, [stableViewStateDescriptor]);
 
   const saveViewState = useCallback(() => {
-    if (!viewStateDescriptor || !viewStateHydratedRef.current) return;
+    if (!stableViewStateDescriptor || !viewStateHydratedRef.current) return;
     let scrollTop = containerRef.current?.scrollTop || 0;
     if (mode === 'editor') {
       try { scrollTop = editorRef.current?.element?.contentDocument?.scrollingElement?.scrollTop || 0; } catch {}
     }
-    viewStateQueueRef.current.schedule(viewStateDescriptor, { mode, zoom, scrollTop });
-  }, [mode, viewStateDescriptor, zoom]);
+    viewStateQueueRef.current.schedule(stableViewStateDescriptor, { mode, zoom, scrollTop });
+  }, [mode, stableViewStateDescriptor, zoom]);
 
   useEffect(() => {
     if (!viewStateReady || restoredScrollRef.current === null) return;
@@ -208,6 +238,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
     setError('');
     setPages([]);
     setBuffer(null);
+    setEditorBufferLoading(true);
     dirtyRef.current = false;
     setDirty(false);
 
@@ -231,12 +262,21 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
         setPages(Array.isArray(payload.pages) ? payload.pages : []);
         setStage(`완료: ${Number(payload.pageCount || 0)}페이지`);
 
-        fetch(previewUrl, { credentials: 'include' })
-          .then((res) => (res.ok ? res.arrayBuffer() : null))
+        fetch(previewUrl, { credentials: 'include', signal: abortController.signal })
+          .then(async (res) => {
+            if (!res.ok) throw new Error(`원본 파일을 받지 못했습니다. (${res.status})`);
+            return res.arrayBuffer();
+          })
           .then((arrayBuffer) => {
             if (!cancelled && arrayBuffer) setBuffer(arrayBuffer);
           })
-          .catch((err) => console.warn('[RHWP] background file buffer load failed', err));
+          .catch((err) => {
+            if (!cancelled && err.name !== 'AbortError') {
+              console.warn('[RHWP] background file buffer load failed', err);
+              setError(`뷰어는 열렸지만 에디터 원본을 준비하지 못했습니다. ${err.message || ''}`.trim());
+            }
+          })
+          .finally(() => { if (!cancelled) setEditorBufferLoading(false); });
         return;
       }
 
@@ -248,6 +288,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
       if (cancelled) return;
       setStage(`파일 수신 완료: ${arrayBuffer.byteLength.toLocaleString()} bytes`);
       setBuffer(arrayBuffer);
+      setEditorBufferLoading(false);
 
       const globalObject = getGlobalObject();
       globalObject.measureTextWidth = globalObject.measureTextWidth || ((font, text) => {
@@ -286,6 +327,7 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
         if (!cancelled && err.name !== 'AbortError') {
           console.error('[RHWP] load failed', err);
           setError(err.message || '한글 문서를 열 수 없습니다.');
+          setEditorBufferLoading(false);
         }
       })
       .finally(() => {
@@ -569,11 +611,11 @@ const RhwpDocumentViewer = ({ name, previewUrl, downloadUrl, nasPath: explicitNa
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#5f6368' }}>
       <Stack direction="row" spacing={0.75} alignItems="center" sx={{ p: 1, bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0, flexWrap: 'wrap' }}>
-        <Button size="small" variant={mode === 'viewer' ? 'contained' : 'outlined'} startIcon={<VisibilityIcon />} onClick={async () => { if (mode === 'editor' && dirtyRef.current) await saveToNas(); setMode('viewer'); }}>
+        <Button size="small" variant={mode === 'viewer' ? 'contained' : 'outlined'} startIcon={<VisibilityIcon />} onClick={async () => { if (mode === 'editor' && dirtyRef.current) await saveToNas(); selectMode('viewer'); }}>
           뷰어
         </Button>
-        <Button size="small" variant={mode === 'editor' ? 'contained' : 'outlined'} startIcon={<EditIcon />} onClick={() => setMode('editor')} disabled={!buffer}>
-          에디터
+        <Button size="small" variant={mode === 'editor' ? 'contained' : 'outlined'} startIcon={<EditIcon />} onClick={() => selectMode('editor')} disabled={!buffer || editorBufferLoading}>
+          {editorBufferLoading ? '에디터 준비 중' : '에디터'}
         </Button>
         {mode === 'viewer' && (
           <>
